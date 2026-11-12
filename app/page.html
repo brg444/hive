@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hive</title>
+<style>
+@font-face { font-family: "Bricolage Grotesque"; src: url("/fonts/bricolage-grotesque.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
+@font-face { font-family: "Figtree"; src: url("/fonts/figtree.woff2") format("woff2"); font-weight: 300 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/fonts/jetbrains-mono.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+:root {
+  --bg: #fff9ec; --surface: #ffffff; --ink: #17140d; --ink-2: #4a4234; --muted: #6b6250;
+  --line: #eadfc4; --line-soft: #f1e8d2; --honey: #ffc22e; --honey-2: #e9ae1c; --amber: #c9820a; --link: #8a5a00;
+  --on-honey: #17140d; --on-honey-2: #3a3020; --inverse: #17140d; --on-inverse: #fff9ec; --on-inverse-2: #cfc4aa;
+  --display: "Bricolage Grotesque", system-ui, sans-serif; --body: "Figtree", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --hex: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14110a; --surface: #1e1a12; --ink: #fff9ec; --ink-2: #e6dcc2; --muted: #b5aa90;
+    --line: #3a3427; --line-soft: #2a251b; --amber: #e0a030; --link: #ffc22e;
+    --inverse: #0b0905; --on-inverse: #fff9ec; --on-inverse-2: #cfc4aa;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--body); }
+a { color: var(--ink); }
+a:hover { color: var(--link); }
+button { font: inherit; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+.mono { font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; padding-top: 12px; padding-bottom: 12px; }
+.brandline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); }
+.brand b { font: 800 26px/1 var(--display); letter-spacing: -0.03em; }
+.switch { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px 0 10px; border-radius: 999px; background: var(--bg); border: 1.5px solid var(--line); text-decoration: none; font-size: 15px; font-weight: 700; }
+.switch::before { content: ""; width: 16px; height: 18px; clip-path: var(--hex); background: var(--honey); }
+nav.tabs { display: flex; flex-wrap: wrap; gap: 0 24px; font-weight: 600; }
+nav.tabs a { padding: 12px 0; text-decoration: none; color: var(--ink-2); }
+nav.tabs a[aria-current="page"] { color: var(--ink); border-bottom: 3px solid var(--honey); }
+.cta { display: inline-flex; align-items: center; height: 46px; padding: 0 22px; border-radius: 999px; background: var(--ink); color: var(--honey); text-decoration: none; font-weight: 700; }
+.cta:hover { color: var(--honey); opacity: 0.9; }
+.notice { background: var(--honey); color: var(--on-honey); font-weight: 600; }
+.notice .wrap { padding-top: 12px; padding-bottom: 12px; }
+
+h1 { font: 800 44px/1 var(--display); letter-spacing: -0.03em; margin: 0; overflow-wrap: anywhere; }
+h2 { font: 800 32px/1.05 var(--display); letter-spacing: -0.02em; margin: 0; }
+h3 { font: 800 22px/1.1 var(--display); margin: 0; }
+section.page { padding-top: 48px; padding-bottom: 64px; display: flex; flex-direction: column; gap: 48px; }
+.split { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start; }
+.split > .main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.split > .side { flex: 1 1 340px; min-width: 0; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--ink-2); }
+.live::before { content: ""; width: 10px; height: 10px; border-radius: 999px; background: var(--amber); }
+.kicker { font-size: 19px; font-weight: 600; color: var(--muted); }
+.big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.big b { font: 800 clamp(72px, 10vw, 132px)/0.9 var(--display); letter-spacing: -0.05em; }
+.big span { font: 600 32px var(--display); }
+.comb { max-width: 100%; overflow: hidden; padding-top: 8px; }
+.comb .r { display: flex; gap: 5px; margin-bottom: -6px; }
+.comb .r.off::before { content: ""; flex: none; width: 15.5px; }
+.cell { flex: none; width: 36px; height: 41.6px; clip-path: var(--hex); background: var(--line-soft); }
+.cell.c-hive { background: var(--honey); }
+.cell.c-job { background: var(--amber); }
+.cell.c-done { background: var(--ink); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 28px; padding-top: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 10px; }
+.legend i { width: 16px; height: 18px; clip-path: var(--hex); }
+
+.chipin { background: var(--honey); color: var(--on-honey); border-radius: 28px; padding: 30px; display: flex; flex-direction: column; gap: 18px; scroll-margin-top: 24px; }
+.chipin h2 { font-size: 46px; line-height: 1; letter-spacing: -0.03em; }
+.chipin p { margin: 0; color: var(--on-honey-2); }
+.chipin label.field { display: flex; align-items: center; gap: 10px; height: 54px; padding: 0 18px; border-radius: 16px; background: #fff9ec; color: #4a4234; }
+.chipin input { flex: 1; min-width: 0; border: 0; background: transparent; font: 800 22px var(--display); color: #17140d; text-align: right; outline: none; }
+.chipin label.field:focus-within { outline: 3px solid #17140d; }
+.presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.preset { height: 48px; border: 2px solid #17140d; border-radius: 999px; background: transparent; color: #17140d; font-weight: 700; font-size: 17px; cursor: pointer; }
+.preset[aria-pressed="true"] { background: #17140d; color: var(--honey); }
+.rails { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 999px; background: var(--honey-2); }
+.rail { height: 44px; border: 0; border-radius: 999px; background: transparent; color: #17140d; font-weight: 600; cursor: pointer; }
+.rail[aria-pressed="true"] { background: #fff9ec; font-weight: 800; }
+.go { height: 60px; border: 0; border-radius: 999px; background: #17140d; color: var(--honey); font-weight: 700; font-size: 19px; cursor: pointer; }
+.go:disabled { opacity: 0.55; cursor: default; }
+.target { padding: 14px 16px; border-radius: 16px; background: #fff9ec; color: #17140d; font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
+.small-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.small { display: inline-flex; align-items: center; height: 44px; padding: 0 16px; border: 2px solid #17140d; border-radius: 999px; background: transparent; color: #17140d; font-weight: 700; font-size: 15px; text-decoration: none; cursor: pointer; }
+.small.solid { background: #17140d; color: var(--honey); }
+.progress { margin: 0; padding: 16px 20px; list-style: none; border-radius: 18px; background: #fff9ec; color: #17140d; display: flex; flex-direction: column; gap: 10px; }
+.progress li { display: flex; align-items: center; gap: 12px; }
+.progress li::before { content: ""; flex: none; width: 20px; height: 23px; clip-path: var(--hex); background: #eadfc4; }
+.progress li.done::before { background: #17140d; }
+.progress li.now { font-weight: 800; }
+.progress li.now::before { background: var(--honey); outline: 0; }
+.error { padding: 12px 16px; border-radius: 14px; background: #17140d; color: #fff9ec; }
+
+.cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.card { display: flex; flex-direction: column; gap: 14px; padding: 24px; border-radius: 22px; background: var(--surface); border: 1px solid var(--line); }
+.card.dark { background: var(--inverse); color: var(--on-inverse); border-color: var(--inverse); }
+.card.dark .muted { color: var(--on-inverse-2); }
+.chip { align-self: flex-start; padding: 4px 12px; border-radius: 999px; font-size: 14px; font-weight: 700; background: var(--honey); color: #17140d; white-space: nowrap; }
+.chip.ink { background: var(--ink); color: var(--bg); }
+.chip.quiet { background: var(--line-soft); color: var(--ink); }
+.card.dark .chip.ink { background: var(--on-inverse); color: var(--inverse); }
+.track { height: 12px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.track i { display: block; height: 100%; border-radius: 999px; background: var(--amber); }
+.headrow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; }
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 4px 24px; }
+.item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+.item:last-child { border-bottom: 0; }
+.item .what { flex: 1 1 240px; min-width: 0; }
+.item .sats { font: 800 20px var(--display); min-width: 100px; text-align: right; }
+.item .when { width: 120px; font-size: 15px; color: var(--muted); }
+.dot { flex: none; width: 22px; height: 25px; clip-path: var(--hex); background: var(--honey); }
+.dot.job { background: var(--amber); }
+.dot.done { background: var(--ink); }
+.dot.quiet { background: var(--line); }
+.empty { padding: 24px; border-radius: 22px; border: 1.5px dashed var(--line); color: var(--muted); }
+
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { height: 44px; padding: 0 18px; border: 2px solid var(--ink); border-radius: 999px; background: transparent; color: var(--ink); font-weight: 700; font-size: 15px; cursor: pointer; }
+.pill[aria-pressed="true"] { background: var(--ink); color: var(--honey); }
+.joblist { display: flex; flex-direction: column; gap: 10px; flex: 1 1 460px; min-width: 0; }
+.job { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; grid-template-areas: "chip model sum" "chip model when"; align-items: center; gap: 2px 16px; width: 100%; padding: 18px 20px; border: 1.5px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; }
+.job .c { grid-area: chip; }
+.job .model { grid-area: model; }
+.job .sum { grid-area: sum; text-align: right; }
+.job .w { grid-area: when; text-align: right; font-size: 14px; color: var(--muted); }
+.job[aria-pressed="true"] { border: 2.5px solid var(--ink); padding: 17px 19px; }
+.job .model { min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.job .sum { font-weight: 700; }
+.detail { flex: 1 1 400px; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 28px; padding: 28px; display: flex; flex-direction: column; gap: 20px; }
+dl.facts { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+dl.facts dt { font-size: 14px; color: var(--muted); }
+dl.facts dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.outcome { padding: 20px; border-radius: 20px; background: var(--inverse); color: var(--on-inverse); display: flex; flex-direction: column; gap: 6px; }
+.outcome b { font: 800 20px var(--display); color: var(--honey); }
+.equation { background: var(--inverse); color: var(--on-inverse); border-radius: 32px; padding: 32px; display: flex; flex-direction: column; gap: 18px; }
+.equation .terms { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; }
+.equation .term { display: flex; flex-direction: column; }
+.equation .term b { font: 800 clamp(32px, 4vw, 50px)/1 var(--display); }
+.equation .term span, .equation .op, .equation p { color: var(--on-inverse-2); }
+.equation .op { font: 800 36px var(--display); }
+.equation p { margin: 0; }
+.table { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; }
+table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 15px; }
+th { text-align: left; color: var(--muted); font-weight: 600; padding: 14px 16px; }
+td { padding: 12px 16px; border-top: 1px solid var(--line-soft); vertical-align: top; }
+td.num, th.num { text-align: right; }
+details summary { cursor: pointer; font-weight: 700; padding: 8px 0; }
+pre { margin: 0; padding: 18px; border-radius: 16px; background: var(--inverse); color: var(--on-inverse); font: 13px/1.6 var(--mono); overflow-x: auto; }
+.keeper { display: flex; flex-direction: column; gap: 10px; padding: 24px; border-radius: 24px; background: var(--surface); border: 1px solid var(--line); }
+.keeper b { font: 800 26px var(--display); }
+footer.bottom { background: var(--inverse); color: var(--on-inverse); }
+footer.bottom .wrap { padding-top: 32px; padding-bottom: 40px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px 40px; }
+footer.bottom b { font: 800 26px var(--display); color: var(--honey); }
+footer.bottom p { margin: 6px 0 0; max-width: 560px; color: var(--on-inverse-2); }
+footer.bottom a { color: var(--honey); font-weight: 700; }
+@media (max-width: 520px) {
+  h1 { font-size: 36px; }
+  .chipin { padding: 22px; }
+  .chipin h2 { font-size: 38px; }
+  .detail { padding: 22px; }
+  dl.facts { grid-template-columns: minmax(0, 1fr); }
+  .job { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip sum" "model model" "when when"; gap: 8px 12px; }
+  .job .w { text-align: left; }
+  .comb .r { gap: 3px; margin-bottom: -3.7px; }
+  .comb .r.off::before { width: 9.5px; }
+  .cell { width: 22px; height: 25.4px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brandline">
+      <a class="brand" id="home" href="./">
+        <svg width="30" height="34" viewBox="0 0 72 80" aria-hidden="true">
+          <defs><clipPath id="mark"><path d="M36 3 L68 21.5 L68 58.5 L36 77 L4 58.5 L4 21.5 Z"/></clipPath></defs>
+          <g clip-path="url(#mark)"><path d="M0 40 C 12 34, 24 46, 36 40 S 60 34, 72 40 L 72 80 L 0 80 Z" fill="#ffc22e"/></g>
+          <path d="M36 3 L68 21.5 L68 58.5 L36 77 L4 58.5 L4 21.5 Z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="round"/>
+        </svg>
+        <b>hive</b>
+      </a>
+      <a class="switch" id="switch" href="../../" hidden>All hives</a>
+    </div>
+    <nav class="tabs" aria-label="This hive">
+      <a href="#hive" data-tab="hive">The hive</a>
+      <a href="#jobs" data-tab="jobs">Jobs</a>
+      <a href="#keepers" data-tab="keepers">Keepers</a>
+      <a href="#audit" data-tab="audit">Audit</a>
+    </nav>
+    <a class="cta" href="#chip-in">Chip in</a>
+  </div>
+</header>
+<div class="notice" id="notice" role="status" hidden><div class="wrap" id="notice-text"></div></div>
+
+<main>
+  <section class="page wrap" id="tab-hive" aria-labelledby="hive-name">
+    <div class="split">
+      <div class="main">
+        <span class="live" id="updated">Reading the hive…</span>
+        <div>
+          <h1 id="hive-name">This hive</h1>
+          <p class="muted" id="hive-purpose" style="margin:6px 0 0; font-size:17px"></p>
+        </div>
+        <div class="kicker">This hive holds</div>
+        <div class="big"><b id="balance">–</b><span>sats</span></div>
+        <p style="margin:0; max-width:580px; font-size:19px; color:var(--ink-2)">Filled by its members and spent only on AI inference, paid to providers one signed receipt at a time.</p>
+        <div class="comb" id="comb" role="img" aria-label="The hive's sats as a honeycomb"></div>
+        <div class="legend" id="legend"></div>
+      </div>
+
+      <aside class="side">
+        <div class="chipin" id="chip-in" tabindex="-1">
+          <div>
+            <h2>Chip in</h2>
+            <p>Any amount helps. Your sats count once they land in the hive, and each one can be traced to a job.</p>
+          </div>
+          <div id="chip-form">
+            <div style="display:flex; flex-direction:column; gap:14px">
+              <div class="presets" role="group" aria-label="Amount">
+                <button class="preset" type="button" data-amount="5000" aria-pressed="false">5,000</button>
+                <button class="preset" type="button" data-amount="21000" aria-pressed="true">21,000</button>
+                <button class="preset" type="button" data-amount="100000" aria-pressed="false">100,000</button>
+              </div>
+              <label class="field"><span>Other</span><input id="amount" inputmode="numeric" autocomplete="off" value="21,000" aria-label="Amount in sats"><span style="font-weight:600; color:#17140d">sats</span></label>
+              <div class="rails" role="group" aria-label="Pay with">
+                <button class="rail" type="button" data-rail="lightning" aria-pressed="true">Lightning</button>
+                <button class="rail" type="button" data-rail="arkade" aria-pressed="false">Arkade</button>
+              </div>
+              <button class="go" type="button" id="go">Chip in 21,000 sats</button>
+              <div class="error" id="chip-error" role="alert" hidden></div>
+            </div>
+          </div>
+          <div id="chip-pay" hidden style="display:flex; flex-direction:column; gap:14px">
+            <div>
+              <div style="font-weight:700" id="pay-label">Lightning invoice</div>
+              <div class="target" id="pay-target" style="margin-top:6px"></div>
+            </div>
+            <div class="small-actions">
+              <button class="small solid" type="button" id="copy-target">Copy</button>
+              <a class="small" id="open-wallet" href="#" hidden>Open in wallet</a>
+              <button class="small" type="button" id="chip-again">Start over</button>
+            </div>
+            <ol class="progress" id="pay-progress" aria-live="polite"></ol>
+          </div>
+          <div id="chip-closed" hidden style="display:flex; flex-direction:column; gap:10px">
+            <p id="closed-text"></p>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; padding-top:14px; border-top:1.5px solid var(--honey-2)">
+            <span style="font-weight:700">Or send from any Arkade wallet to the hive's address</span>
+            <div class="target" id="treasury-address">–</div>
+            <div class="small-actions"><button class="small" type="button" id="copy-address">Copy address</button></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:18px">
+      <div class="headrow"><h2>Jobs in progress</h2><a href="#jobs" style="font-weight:700">All jobs →</a></div>
+      <div class="cards" id="working"></div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:18px">
+      <div class="headrow"><h2>Buzzing lately</h2><a href="#audit" style="font-weight:700">Every output →</a></div>
+      <div id="activity"></div>
+    </div>
+  </section>
+
+  <section class="page wrap" id="tab-jobs" hidden aria-labelledby="jobs-title">
+    <div class="headrow">
+      <div style="display:flex; flex-direction:column; gap:8px; max-width:680px">
+        <h1 id="jobs-title" style="font-size:clamp(44px,6vw,72px)">Jobs</h1>
+        <p class="muted" style="margin:0; font-size:18px">Each job is one contract holding a capped amount for one provider until a deadline. The provider is paid what the agent's receipts say, and the rest comes back to the hive.</p>
+      </div>
+      <div class="pills" role="group" aria-label="Filter jobs" id="filters"></div>
+    </div>
+    <div class="split" style="gap:24px">
+      <div class="joblist" id="joblist"></div>
+      <div class="detail" id="detail" aria-live="polite"></div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:16px">
+      <h2>Providers this hive has paid</h2>
+      <div class="cards" id="providers"></div>
+    </div>
+  </section>
+
+  <section class="page wrap" id="tab-keepers" hidden aria-labelledby="keepers-title">
+    <div style="display:flex; flex-direction:column; gap:10px; max-width:700px">
+      <h1 id="keepers-title" style="font-size:clamp(44px,6vw,72px)">Keepers</h1>
+      <p class="muted" style="margin:0; font-size:18px">Three keepers hold this hive. Any two of them can open a job or pay a withdrawal, and only for terms their administrators approved first. Each keeper's signer rebuilds every message itself before it signs.</p>
+    </div>
+    <div class="cards" id="keepers"></div>
+    <div class="cards">
+      <div class="card dark" id="halt-card"></div>
+      <div class="card">
+        <h3>Who can do what</h3>
+        <p style="margin:0">Any pair of keepers (1 + 2, 1 + 3 or 2 + 3) can sign a spend from the hive. One keeper alone can sign nothing, and a job's contract pays its provider only what the agent's receipts say.</p>
+        <p class="muted" style="margin:0">The delegatee renews the hive's coins before they expire and can send them nowhere but back into the hive.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="page wrap" id="tab-audit" hidden aria-labelledby="audit-title">
+    <div style="display:flex; flex-direction:column; gap:10px; max-width:720px">
+      <h1 id="audit-title" style="font-size:clamp(44px,6vw,72px)">Audit every cell</h1>
+      <p class="muted" style="margin:0; font-size:18px">Every figure on this page is a Bitcoin output you can look up, a contract you can rebuild or a signature you can check.</p>
+    </div>
+    <div class="equation" id="equation"></div>
+    <div class="cards">
+      <div class="card">
+        <h3>The hive's address</h3>
+        <div><div class="muted" style="font-size:14px">Address</div><div class="mono" id="audit-address">–</div></div>
+        <div><div class="muted" style="font-size:14px">Treasury script</div><div class="mono" id="audit-script">–</div></div>
+        <div><div class="muted" style="font-size:14px">Lightning address</div><div class="mono" id="audit-ln">–</div></div>
+      </div>
+      <div class="card" id="listing-card"></div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:14px">
+      <div class="headrow"><h2>Every coin, and what it is</h2><span class="muted">Read from the indexer, sorted by this hive's records</span></div>
+      <div class="table"><table>
+        <thead><tr><th scope="col">Output</th><th scope="col" class="num">Sats</th><th scope="col">What it is</th><th scope="col">Batch expiry</th></tr></thead>
+        <tbody id="coins"></tbody>
+      </table></div>
+      <p class="muted" style="margin:0; font-size:14px">Nothing is counted before its output is seen, and a renewal is never counted as a contribution.</p>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:14px">
+      <h2>Job contracts</h2>
+      <div class="table"><table>
+        <thead><tr><th scope="col">Job</th><th scope="col">Address</th><th scope="col" class="num">Cap</th><th scope="col">Status</th><th scope="col">Closing transaction</th></tr></thead>
+        <tbody id="contracts"></tbody>
+      </table></div>
+    </div>
+  </section>
+</main>
+
+<footer class="bottom">
+  <div class="wrap">
+    <div>
+      <b id="footer-name">hive</b>
+      <p>Held by three keepers. Any two can move it, every move is an output anyone can check, and no key ever signs a transaction.</p>
+    </div>
+    <nav aria-label="Footer" style="display:flex; flex-wrap:wrap; gap:8px 28px">
+      <a href="#audit">Audit every cell</a>
+      <a href="#keepers">Keepers</a>
+      <a href="../../" id="footer-all" hidden>All hives</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString("en-US");
+const hosted = /^\/h\/[^/]+\/$/.test(location.pathname);
+const state = { status: null, view: null, filter: "all", selected: null, amount: 21000, rail: "lightning", pour: null };
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === undefined || value === null || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key === "style") node.setAttribute("style", value);
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? "" : String(value));
+  }
+  for (const child of children.flat()) {
+    if (child === undefined || child === null || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+const short = (s, a = 8, b = 6) => (s && s.length > a + b + 1 ? `${s.slice(0, a)}…${s.slice(-b)}` : s || "");
+const outpoint = (c) => `${short(c.txid, 4, 4)}:${c.vout}`;
+const provider = (script) => short(script.startsWith("5120") ? script.slice(4) : script, 4, 4);
+const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+function relative(iso) {
+  if (!iso) return "";
+  const seconds = (new Date(iso).getTime() - Date.now()) / 1000;
+  const abs = Math.abs(seconds);
+  if (abs < 60) return rtf.format(Math.round(seconds), "second");
+  if (abs < 3600) return rtf.format(Math.round(seconds / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(seconds / 3600), "hour");
+  return rtf.format(Math.round(seconds / 86400), "day");
+}
+const date = (iso) => (iso ? new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "–");
+async function copy(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const was = button.textContent;
+    button.textContent = "Copied";
+    setTimeout(() => (button.textContent = was), 1500);
+  } catch {
+    button.textContent = "Select and copy";
+  }
+}
+
+// Tabs follow the address, so every view can be linked to.
+function showTab() {
+  const hash = location.hash.slice(1) || "hive";
+  const tab = hash === "chip-in" ? "hive" : ["hive", "jobs", "keepers", "audit"].includes(hash) ? hash : "hive";
+  for (const name of ["hive", "jobs", "keepers", "audit"]) $(`tab-${name}`).hidden = name !== tab;
+  for (const link of document.querySelectorAll("nav.tabs a")) {
+    if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+  if (tab === "jobs" && state.view) renderJobs();
+  if (hash === "chip-in") {
+    $("chip-in").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("chip-in").focus({ preventScroll: true });
+  } else window.scrollTo({ top: 0 });
+}
+window.addEventListener("hashchange", showTab);
+
+const escrowKind = (e) =>
+  e.status === "open" || e.status === "funding" ? "working" : e.status === "claimed" ? "delivered" : e.status === "refunded" ? "home" : "closed";
+const kindChip = {
+  working: (e) => el("span", { class: "chip" }, e.status === "funding" ? "Funding" : "Working"),
+  delivered: () => el("span", { class: "chip ink" }, "Delivered"),
+  home: () => el("span", { class: "chip quiet" }, "Came home"),
+  closed: () => el("span", { class: "chip quiet" }, "Closed"),
+};
+
+function renderHive() {
+  const { view, status } = state;
+  const listing = status.listing ? status.listing.body : null;
+  const name = listing ? listing.name : "This hive";
+  document.title = `${name} · Hive`;
+  $("hive-name").textContent = name;
+  $("footer-name").textContent = name;
+  $("hive-purpose").textContent = listing ? listing.purpose : "";
+  $("switch").hidden = !hosted;
+  $("footer-all").hidden = !hosted;
+  if (hosted) $("home").setAttribute("href", "../../");
+  $("updated").textContent = `Live · updated ${new Date(view.generatedAt).toLocaleTimeString("en-US", { timeStyle: "short" })}`;
+  $("balance").textContent = fmt(view.treasury.balanceSats);
+  $("treasury-address").textContent = view.treasury.address || "–";
+
+  const held = view.treasury.balanceSats;
+  const out = view.totals.inEscrowSats;
+  const done = view.totals.paidSats;
+  const whole = held + out + done;
+  const unit = whole / 52;
+  const cells = [];
+  const nOut = unit ? Math.round(out / unit) : 0;
+  const nDone = unit ? Math.round(done / unit) : 0;
+  const nHive = unit ? Math.max(0, 52 - nOut - nDone) : 0;
+  for (let i = 0; i < 52; i++) cells.push(i < nHive ? "c-hive" : i < nHive + nOut ? "c-job" : i < nHive + nOut + nDone ? "c-done" : "");
+  $("comb").replaceChildren(...[0, 1, 2, 3].map((r) =>
+    el("div", { class: r % 2 ? "r off" : "r" }, ...cells.slice(r * 13, r * 13 + 13).map((k) => el("span", { class: `cell ${k}` })))));
+  $("comb").setAttribute("aria-label", `Honeycomb of 52 cells: ${nHive} in the hive, ${nOut} out on jobs, ${nDone} delivered`);
+  $("legend").replaceChildren(
+    el("span", {}, el("i", { style: "background:var(--honey)" }), "In the hive ", el("b", {}, fmt(held))),
+    el("span", {}, el("i", { style: "background:var(--amber)" }), "Out on jobs ", el("b", {}, fmt(out))),
+    el("span", {}, el("i", { style: "background:var(--ink)" }), "Delivered ", el("b", {}, fmt(done))),
+    el("span", { class: "muted" }, whole ? `One cell ≈ ${fmt(Math.round(unit))} sats · ${fmt(view.totals.contributedSats)} chipped in so far` : "Empty so far: be the first to chip in"));
+
+  const working = view.escrows.filter((e) => escrowKind(e) === "working");
+  const recent = view.escrows.filter((e) => escrowKind(e) === "delivered").slice(-1);
+  $("working").replaceChildren(...(working.length || recent.length
+    ? [...working.map(jobCard), ...recent.map(jobCard)]
+    : [el("p", { class: "empty" }, "No job is running. Keepers open one when a provider's quote is approved.")]));
+
+  const events = [
+    ...view.contributions.map((c) => ({
+      at: c.createdAt,
+      dot: "",
+      what: c.rail === "lightning" ? "A contribution over Lightning" : c.rail === "arkade" ? "A contribution from an Arkade wallet" : "A contribution sent to the hive's address",
+      sats: `+${fmt(c.amountSats)}`,
+      ref: outpoint(c),
+    })),
+    ...view.renewals.map((r) => ({ at: null, dot: "quiet", what: "Coins renewed before they expired", sats: fmt(r.amountSats), ref: outpoint(r) })),
+  ].sort((a, b) => (b.at || "").localeCompare(a.at || "")).slice(0, 8);
+  $("activity").replaceChildren(events.length
+    ? el("div", { class: "list" }, ...events.map((e) =>
+        el("div", { class: "item" },
+          el("span", { class: `dot ${e.dot}` }),
+          el("span", { class: "what" }, e.what),
+          el("span", { class: "sats" }, e.sats),
+          el("span", { class: "when" }, e.at ? relative(e.at) : ""),
+          el("a", { class: "mono", href: "#audit", style: "color:var(--link)" }, e.ref))))
+    : el("p", { class: "empty" }, "Nothing yet. Contributions appear here once their outputs land in the hive."));
+}
+
+function jobCard(e) {
+  const kind = escrowKind(e);
+  const used = e.receipt ? e.receipt.amountSats : 0;
+  if (kind === "delivered") {
+    return el("a", { class: "card dark", href: "#jobs", style: "text-decoration:none", onclick: () => (state.selected = e.escrowId) },
+      el("div", { class: "headrow" }, kindChip.delivered(), el("span", { class: "muted", style: "font-size:15px" }, `job ${short(e.escrowId, 4, 4)}`)),
+      el("div", { style: "font:800 36px/1 var(--display); letter-spacing:-0.03em" }, fmt(e.close ? e.close.providerSats : used), " ", el("span", { style: "font-size:20px; font-weight:600" }, "sats to the provider")),
+      el("div", { class: "muted", style: "font-size:15px" }, e.close ? `${fmt(e.close.treasurySats)} back in the hive · ` : "", e.model));
+  }
+  return el("a", { class: "card", href: "#jobs", style: "text-decoration:none", onclick: () => (state.selected = e.escrowId) },
+    el("div", { class: "headrow" }, kindChip.working(e), el("span", { class: "muted", style: "font-size:15px" }, `closes ${relative(e.timeoutAt)}`)),
+    el("div", {}, el("div", { class: "mono", style: "font-size:16px; font-weight:500" }, e.model), el("div", { class: "muted", style: "font-size:15px" }, `Provider ${provider(e.providerPayoutScript)}`)),
+    el("div", { class: "track" }, el("i", { style: `width:${Math.min(100, (100 * used) / e.capSats).toFixed(1)}%` })),
+    el("div", { style: "font-size:15px" }, el("b", {}, fmt(used)), ` of ${fmt(e.capSats)} sats used`));
+}
+
+function renderJobs() {
+  const all = state.view.escrows.slice().reverse();
+  const labels = { all: "All", working: "Working", delivered: "Delivered", home: "Came home" };
+  $("filters").replaceChildren(...Object.entries(labels).map(([key, label]) =>
+    el("button", {
+      class: "pill", type: "button", "aria-pressed": String(state.filter === key),
+      onclick: () => { state.filter = key; renderJobs(); },
+    }, `${label} · ${key === "all" ? all.length : all.filter((e) => escrowKind(e) === key).length}`)));
+  const shown = all.filter((e) => state.filter === "all" || escrowKind(e) === state.filter);
+  if (!shown.some((e) => e.escrowId === state.selected)) state.selected = shown[0]?.escrowId ?? null;
+  $("joblist").replaceChildren(...(shown.length ? shown.map((e) => {
+    const kind = escrowKind(e);
+    const summary = kind === "delivered" && e.close ? `${fmt(e.close.providerSats)} paid` : kind === "home" ? `${fmt(e.capSats)} back` : `${fmt(e.receipt ? e.receipt.amountSats : 0)} / ${fmt(e.capSats)}`;
+    return el("button", {
+      class: "job", type: "button", "aria-pressed": String(e.escrowId === state.selected),
+      onclick: () => {
+        state.selected = e.escrowId;
+        renderJobs();
+        // On a narrow screen the detail sits under the list.
+        if (window.innerWidth < 900) $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
+      },
+    },
+      el("span", { class: "c" }, kindChip[kind](e)),
+      el("span", { class: "model" }, el("span", { class: "mono", style: "font-size:15px; font-weight:500" }, e.model), el("span", { class: "muted", style: "font-size:14px" }, `Provider ${provider(e.providerPayoutScript)}`)),
+      el("span", { class: "sum" }, summary),
+      el("span", { class: "w" }, kind === "working" ? `closes ${relative(e.timeoutAt)}` : date(e.timeoutAt)));
+  }) : [el("p", { class: "empty" }, "No job here yet.")]));
+  renderDetail(shown.find((e) => e.escrowId === state.selected));
+  renderProviders();
+}
+
+function renderDetail(e) {
+  const box = $("detail");
+  if (!e) {
+    box.replaceChildren(el("p", { class: "muted", style: "margin:0" }, "Pick a job to see its terms, its latest receipt and how it closed."));
+    return;
+  }
+  const kind = escrowKind(e);
+  const used = e.receipt ? e.receipt.amountSats : 0;
+  const big = kind === "delivered" && e.close ? e.close.providerSats : kind === "home" && e.close ? e.close.treasurySats : used;
+  const bigLabel = kind === "delivered" ? "Paid to the provider" : kind === "home" ? "Back in the hive" : "Used so far";
+  const outcome =
+    kind === "working"
+      ? ["Still working", `The provider claims the latest receipt when the job closes. If it never does, the whole ${fmt(e.capSats)} sats come back to the hive at the deadline, with no one needing to act.`]
+      : kind === "delivered"
+        ? ["Claimed by the provider", e.close ? `The contract paid exactly ${fmt(e.close.providerSats)} sats and sent ${fmt(e.close.treasurySats)} back to the hive in the same transaction.` : "The provider claimed what the latest receipt says."]
+        : kind === "home"
+          ? ["Came home at its deadline", "Nobody claimed it, so once the deadline passed the whole job returned to the hive."]
+          : ["Closed", "This job's coin was spent. Its closing transaction is listed below."];
+  box.replaceChildren(
+    el("div", { class: "headrow" }, kindChip[kind](e), el("span", { class: "mono muted" }, `job ${short(e.escrowId, 6, 6)}`)),
+    el("div", {},
+      el("div", { class: "muted" }, bigLabel),
+      el("div", { style: "font:800 64px/1 var(--display); letter-spacing:-0.04em; margin-top:6px" }, fmt(big), " ", el("span", { style: "font-size:24px; font-weight:600" }, "sats")),
+      el("div", { class: "track", style: "margin-top:14px; height:14px" }, el("i", { style: `width:${Math.min(100, (100 * (kind === "delivered" && e.close ? e.close.providerSats : used)) / e.capSats).toFixed(1)}%` })),
+      el("div", { style: "margin-top:8px; color:var(--ink-2); font-size:15px" }, e.receipt ? `Latest receipt: ${fmt(e.receipt.amountSats)} of the ${fmt(e.capSats)} cap` : "No receipt signed yet")),
+    el("dl", { class: "facts" },
+      el("div", {}, el("dt", {}, "Model"), el("dd", { class: "mono" }, e.model)),
+      el("div", {}, el("dt", {}, "Provider"), el("dd", { class: "mono" }, provider(e.providerPayoutScript))),
+      el("div", {}, el("dt", {}, "Cap"), el("dd", {}, `${fmt(e.capSats)} sats`)),
+      el("div", {}, el("dt", {}, "Deadline"), el("dd", {}, date(e.timeoutAt))),
+      el("div", {}, el("dt", {}, "Contract"), el("dd", { class: "mono" }, short(e.address, 10, 6))),
+      el("div", {}, el("dt", {}, "Coin"), el("dd", { class: "mono" }, e.coin ? outpoint(e.coin) : "not funded yet"))),
+    el("div", { class: "outcome" }, el("b", {}, outcome[0]), el("span", {}, outcome[1]),
+      e.close ? el("span", { class: "mono", style: "color:var(--on-inverse-2)" }, `closing transaction ${short(e.close.txid, 8, 8)}`) : null));
+}
+
+function renderProviders() {
+  const byScript = new Map();
+  for (const e of state.view.escrows) {
+    const p = byScript.get(e.providerPayoutScript) || { script: e.providerPayoutScript, models: new Set(), jobs: 0, paid: 0, working: 0 };
+    p.models.add(e.model);
+    p.jobs += 1;
+    if (escrowKind(e) === "working") p.working += 1;
+    if (escrowKind(e) === "delivered" && e.close) p.paid += e.close.providerSats;
+    byScript.set(e.providerPayoutScript, p);
+  }
+  const providers = [...byScript.values()].sort((a, b) => b.paid - a.paid);
+  $("providers").replaceChildren(...(providers.length ? providers.map((p) =>
+    el("div", { class: "card" },
+      el("div", { class: "headrow" }, el("span", { class: "mono", style: "font-size:16px; font-weight:600" }, provider(p.script)), p.working ? el("span", { class: "chip" }, "On a job") : el("span", { class: "chip quiet" }, "Available")),
+      el("div", { class: "mono muted" }, [...p.models].join(" · ")),
+      el("div", { style: "font:800 40px/1 var(--display); letter-spacing:-0.03em" }, fmt(p.paid), " ", el("span", { style: "font-size:17px; font-weight:600; color:var(--muted)" }, "sats delivered")),
+      el("div", { class: "muted", style: "font-size:15px" }, `${p.jobs} ${p.jobs === 1 ? "job" : "jobs"} with this hive`)))
+    : [el("p", { class: "empty" }, "No provider has served this hive yet.")]));
+}
+
+function renderKeepers() {
+  const listing = state.status.listing;
+  $("keepers").replaceChildren(...(listing
+    ? listing.body.stewardKeys.map((key, i) =>
+        el("div", { class: "keeper" },
+          el("b", {}, `Keeper ${i + 1}`),
+          el("span", { class: "mono" }, key),
+          el("span", { class: "muted", style: "font-size:15px" }, `Signs with keeper ${[1, 2, 3].filter((k) => k !== i + 1).join(" or keeper ")}`)))
+    : [el("p", { class: "empty" }, "This hive has no signed listing on this server, so its keepers are not shown.")]));
+  const halted = state.status.halted;
+  $("halt-card").replaceChildren(
+    el("h3", { style: "color:var(--honey)" }, "Halt switch"),
+    el("p", { style: "margin:0" }, halted ? `On: ${state.status.haltReason}. Keepers refuse new jobs and the hive takes no new contributions. Claims, refunds and withdrawals still go through.` : "Off. When it is on, keepers refuse new jobs and the hive takes no new contributions; claims, refunds and withdrawals still go through."));
+}
+
+function renderAudit() {
+  const { view, status } = state;
+  const held = view.treasury.balanceSats;
+  const { contributedSats, inEscrowSats, paidSats } = view.totals;
+  const rest = contributedSats - held - inEscrowSats - paidSats;
+  const term = (n, label) => el("span", { class: "term" }, el("b", {}, fmt(n)), el("span", {}, label));
+  $("equation").replaceChildren(
+    el("span", { style: "font-weight:700; color:var(--honey)" }, "Every sat chipped in is somewhere"),
+    el("div", { class: "terms" },
+      el("span", { class: "term" }, el("b", { style: "color:var(--honey)" }, fmt(contributedSats)), el("span", {}, "chipped in")),
+      el("span", { class: "op" }, "="), term(held, "in the hive"),
+      el("span", { class: "op" }, "+"), term(inEscrowSats, "out on jobs"),
+      el("span", { class: "op" }, "+"), term(paidSats, "delivered"),
+      rest > 0 ? [el("span", { class: "op" }, "+"), term(rest, "renewal fees and withdrawals")] : null),
+    el("p", {}, rest < 0
+      ? `The hive holds ${fmt(-rest)} sats more than was chipped in: outputs whose origin is not settled yet stay out of the contributions.`
+      : "Leftovers and unclaimed jobs that came home are already back in the hive, as their own outputs."));
+  $("audit-address").textContent = view.treasury.address || "–";
+  $("audit-script").textContent = view.treasury.script || "–";
+  $("audit-ln").textContent = view.treasury.lightningAddress || "none";
+  const listing = status.listing;
+  $("listing-card").replaceChildren(...(listing
+    ? [el("h3", {}, "Signed by its three keepers"),
+       el("p", { style: "margin:0" }, "This server checked all three keepers' signatures over the hive's name, purpose, keys, treasury and Lightning address before listing it. Check them yourself with the listing below."),
+       el("div", {}, el("div", { class: "muted", style: "font-size:14px" }, "Listing id"), el("div", { class: "mono" }, listing.listingId)),
+       el("details", {}, el("summary", {}, "The signed listing"), el("pre", {}, JSON.stringify(listing, null, 2)))]
+    : [el("h3", {}, "No signed listing"), el("p", { style: "margin:0" }, "This server runs the hive without a listing from its keepers. Its figures below still come from observed outputs.")]));
+
+  const kinds = new Map();
+  for (const c of view.contributions) kinds.set(`${c.txid}:${c.vout}`, c.rail === "lightning" ? "Contribution · Lightning" : c.rail === "arkade" ? "Contribution · from a wallet" : "Contribution · sent to the address");
+  for (const r of view.renewals) kinds.set(`${r.txid}:${r.vout}`, "Renewal");
+  for (const u of view.unattributed ?? []) for (const c of u.coins) kinds.set(`${c.txid}:${c.vout}`, "Renewal or contribution, not settled yet");
+  $("coins").replaceChildren(...(view.treasury.coins.length ? view.treasury.coins.map((c) =>
+    el("tr", {},
+      el("td", { class: "mono" }, `${c.txid}:${c.vout}`),
+      el("td", { class: "num", style: "font-weight:700" }, fmt(c.amountSats)),
+      el("td", {}, kinds.get(`${c.txid}:${c.vout}`) || "The hive's own output: change, a job's leftover or a refund"),
+      el("td", {}, c.expiresAt ? `${date(c.expiresAt)} (${relative(c.expiresAt)})` : "unknown")))
+    : [el("tr", {}, el("td", { colspan: "4", class: "muted" }, "The hive holds no coin yet."))]));
+  $("contracts").replaceChildren(...(view.escrows.length ? view.escrows.slice().reverse().map((e) =>
+    el("tr", {},
+      el("td", { class: "mono" }, short(e.escrowId, 8, 6)),
+      el("td", { class: "mono" }, e.address),
+      el("td", { class: "num" }, fmt(e.capSats)),
+      el("td", {}, kindChip[escrowKind(e)](e)),
+      el("td", { class: "mono" }, e.close ? e.close.txid : "–")))
+    : [el("tr", {}, el("td", { colspan: "5", class: "muted" }, "No job has been opened yet."))]));
+}
+
+// Chip in: a payment request, then the payment followed until its output lands in the hive.
+function setAmount(amount) {
+  state.amount = amount;
+  $("amount").value = amount ? fmt(amount) : "";
+  for (const b of document.querySelectorAll(".preset")) b.setAttribute("aria-pressed", String(Number(b.dataset.amount) === amount));
+  $("go").textContent = amount ? `Chip in ${fmt(amount)} sats` : "Chip in";
+  $("go").disabled = !amount;
+}
+document.querySelector(".presets").addEventListener("click", (event) => {
+  const b = event.target.closest("button[data-amount]");
+  if (b) setAmount(Number(b.dataset.amount));
+});
+$("amount").addEventListener("input", (event) => setAmount(parseInt(event.target.value.replace(/[^0-9]/g, ""), 10) || 0));
+document.querySelector(".rails").addEventListener("click", (event) => {
+  const b = event.target.closest("button[data-rail]");
+  if (!b) return;
+  state.rail = b.dataset.rail;
+  for (const r of document.querySelectorAll(".rail")) r.setAttribute("aria-pressed", String(r === b));
+});
+const POUR_ERRORS = {
+  INVALID_POUR: "That amount is outside what this hive accepts. Try a smaller one, or send larger amounts from an Arkade wallet.",
+  HALTED: "This hive is not taking contributions right now.",
+  SLOW_DOWN: "Too many requests at once. Try again in a moment.",
+  TREASURY_FULL: "This hive is full for now.",
+  INTAKE_DISABLED: "This hive takes contributions at its address only.",
+};
+$("go").addEventListener("click", async () => {
+  $("chip-error").hidden = true;
+  $("go").disabled = true;
+  try {
+    const response = await fetch("api/pour", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amountSats: state.amount, rail: state.rail }) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "FAILED");
+    state.pour = { ...body, settled: false, credited: null };
+    showPayment();
+    follow(body.id);
+  } catch (error) {
+    $("chip-error").textContent = POUR_ERRORS[error.message] || "The hive could not create a payment request just now. Try again shortly.";
+    $("chip-error").hidden = false;
+  } finally {
+    $("go").disabled = !state.amount;
+  }
+});
+function showPayment() {
+  const p = state.pour;
+  $("chip-form").hidden = true;
+  $("chip-pay").hidden = false;
+  const lightning = p.rail === "lightning";
+  $("pay-label").textContent = lightning ? `Lightning invoice for ${fmt(p.amountSats)} sats` : `Send exactly ${fmt(p.amountSats)} sats to this Arkade address`;
+  $("pay-target").textContent = lightning ? p.invoice : p.destination;
+  $("open-wallet").hidden = !lightning;
+  if (lightning) $("open-wallet").setAttribute("href", `lightning:${p.invoice}`);
+  const steps = lightning
+    ? ["Invoice ready", "Waiting for your payment", "On its way to the hive", "Landed in the hive"]
+    : ["Address ready", "Waiting for your send", "Landed in the hive"];
+  const at = p.credited ? steps.length : p.settled ? steps.length - 1 : 1;
+  $("pay-progress").replaceChildren(...steps.map((label, i) =>
+    el("li", { class: i < at ? "done" : i === at ? "now" : "" }, label)),
+    p.credited ? el("li", { class: "done" }, `${fmt(p.credited.amountSats)} sats counted · ${outpoint(p.credited)}`) : null);
+}
+async function follow(id) {
+  const started = Date.now();
+  while (state.pour && state.pour.id === id && !state.pour.credited && Date.now() - started < 30 * 60 * 1000) {
+    await new Promise((done) => setTimeout(done, 3000));
+    try {
+      const status = await (await fetch(`api/pour/${id}`, { cache: "no-store" })).json();
+      if (!state.pour || state.pour.id !== id) return;
+      state.pour.settled = Boolean(status.settled);
+      state.pour.credited = status.credited || null;
+      showPayment();
+      if (status.credited) load();
+    } catch {}
+  }
+}
+$("copy-target").addEventListener("click", (event) => copy($("pay-target").textContent, event.target));
+$("copy-address").addEventListener("click", (event) => copy($("treasury-address").textContent, event.target));
+$("chip-again").addEventListener("click", () => {
+  state.pour = null;
+  $("chip-pay").hidden = true;
+  $("chip-form").hidden = false;
+});
+
+function renderChipState() {
+  const s = state.status;
+  const closed = s.halted || !s.intake;
+  $("chip-closed").hidden = !closed;
+  if (closed && !state.pour) $("chip-form").hidden = true;
+  if (!closed && !state.pour) $("chip-form").hidden = false;
+  $("closed-text").textContent = s.halted
+    ? `This hive is not taking contributions right now: ${s.haltReason}.`
+    : "This hive takes contributions at its address only.";
+  $("notice").hidden = !s.halted;
+  $("notice-text").textContent = s.halted ? `New jobs and contributions are halted: ${s.haltReason}. Claims, refunds and withdrawals still go through.` : "";
+}
+
+async function load() {
+  try {
+    const [status, view] = await Promise.all([
+      fetch("api/status", { cache: "no-store" }).then((r) => r.json()),
+      fetch("api/view", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error("view")))),
+    ]);
+    state.status = status;
+    state.view = view;
+    renderHive();
+    renderJobs();
+    renderKeepers();
+    renderAudit();
+    renderChipState();
+  } catch {
+    $("updated").textContent = "Could not read the hive just now. Trying again shortly.";
+  }
+}
+showTab();
+setAmount(21000);
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

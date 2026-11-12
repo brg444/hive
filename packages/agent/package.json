@@ -1,0 +1,14 @@
+{
+  "name": "@hive/agent",
+  "version": "4.0.0-dev",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hive/kit": "workspace:*",
+    "@hive/protocol": "workspace:*",
+    "@noble/curves": "2.0.1"
+  }
+}

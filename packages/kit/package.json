@@ -1,0 +1,9 @@
+{
+  "name": "@hive/kit",
+  "version": "4.0.0-dev",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

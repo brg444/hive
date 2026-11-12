@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 730" width="1200" height="730" role="img" aria-label="Members chip in to the hive's treasury, a Bitcoin contract. The Buzz server asks a provider for a quote over Nostr, the hive approves a job and its treasury funds an escrow, the hive's agent uses the provider's MeshLLM through a metering sidecar and signs a receipt per answer, the provider claims the receipted sats from the escrow while the rest returns to the treasury, and the provider can cash out over Lightning.">
+<style>
+.m-zone { fill: #ffffff; stroke: #eadfc4; stroke-width: 1.5; }
+.m-zone-ark { fill: #fff1cc; stroke: #eadfc4; stroke-width: 1.5; }
+.m-node { fill: #fff9ec; stroke: #17140d; stroke-width: 1.5; }
+.m-node-mesh { fill: #17140d; stroke: #ffc22e; stroke-width: 2.5; }
+.m-gpu { fill: none; stroke: #cfc4aa; stroke-width: 1.2; }
+.m-gpu-link { stroke: #ffc22e; stroke-width: 1.2; stroke-dasharray: 3 3; }
+text { font-family: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif; }
+.m-t-title { font-weight: 700; font-size: 13.5px; fill: #17140d; }
+.m-t-sub { font-size: 11.5px; fill: #6b6250; }
+.m-t-mesh { font-weight: 800; font-size: 17px; fill: #ffc22e; }
+.m-t-mesh-sub { font-size: 11.5px; fill: #cfc4aa; }
+.m-t-gpu { font-family: ui-monospace, Menlo, monospace; font-size: 10px; fill: #cfc4aa; }
+.m-t-zone { font-weight: 800; font-size: 11px; letter-spacing: 0.1em; fill: #6b6250; }
+.m-t-edge { font-weight: 600; font-size: 11.5px; fill: #4a4234; }
+.m-t-foot { font-weight: 600; font-size: 12px; fill: #6b6250; }
+.m-msg { fill: none; stroke: #4a4234; stroke-width: 1.5; }
+.m-money { fill: none; stroke: #c9820a; stroke-width: 3; }
+.m-head-msg { fill: #4a4234; }
+.m-head-money { fill: #c9820a; }
+.m-badge { fill: #ffc22e; stroke: #17140d; stroke-width: 1.5; }
+.m-t-badge { font-weight: 800; font-size: 11px; fill: #17140d; }
+</style>
+<rect width="1200" height="730" fill="#fff9ec"/>
+<defs>
+<marker id="m-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-head-msg" d="M0,0 L10,5 L0,10 Z"/></marker>
+<marker id="m-sats" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="m-head-money" d="M0,0 L10,5 L0,10 Z"/></marker>
+</defs>
+<!-- Legend -->
+<line class="m-money" x1="30" y1="44" x2="70" y2="44" marker-end="url(#m-sats)"/>
+<text class="m-t-edge" x="82" y="48">sats move</text>
+<line class="m-msg" x1="30" y1="72" x2="70" y2="72" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="82" y="76">messages and signatures</text>
+<!-- Zones -->
+<rect class="m-zone" x="225" y="120" width="345" height="305" rx="18"/>
+<text class="m-t-zone" x="243" y="143">BUZZ SERVER</text>
+<rect class="m-zone" x="815" y="120" width="370" height="305" rx="18"/>
+<text class="m-t-zone" x="1167" y="143" text-anchor="end">PROVIDER'S MACHINE</text>
+<rect class="m-zone-ark" x="225" y="480" width="785" height="205" rx="18"/>
+<text class="m-t-zone" x="243" y="503">BITCOIN</text>
+<!-- Members and pages -->
+<rect class="m-node" x="30" y="155" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="44" y="180">Members</text>
+<text class="m-t-sub" x="44" y="198">anyone who chips in</text>
+<rect class="m-node" x="240" y="160" width="150" height="60" rx="12"/>
+<text class="m-t-title" x="254" y="185">Hive pages</text>
+<text class="m-t-sub" x="254" y="203">directory · each hive</text>
+<rect class="m-node" x="405" y="160" width="150" height="60" rx="12"/>
+<text class="m-t-title" x="419" y="185">Coordinator</text>
+<text class="m-t-sub" x="419" y="203">jobs · claim desk</text>
+<rect class="m-node" x="240" y="255" width="150" height="60" rx="12"/>
+<text class="m-t-title" x="254" y="280">Approvals</text>
+<text class="m-t-sub" x="254" y="298">the hive's signers</text>
+<rect class="m-node" x="405" y="350" width="150" height="60" rx="12"/>
+<text class="m-t-title" x="419" y="375">Hive's agent</text>
+<text class="m-t-sub" x="419" y="393">signs receipts</text>
+<!-- Nostr -->
+<rect class="m-node" x="610" y="40" width="160" height="56" rx="12"/>
+<text class="m-t-title" x="624" y="64">Nostr relays</text>
+<text class="m-t-sub" x="624" y="82">provider cards · quotes</text>
+<!-- Provider -->
+<rect class="m-node" x="835" y="160" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="849" y="185">Solver</text>
+<text class="m-t-sub" x="849" y="203">prices each job</text>
+<rect class="m-node" x="835" y="255" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="849" y="280">Claim daemon</text>
+<text class="m-t-sub" x="849" y="298">collects payment</text>
+<rect class="m-node" x="835" y="350" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="849" y="375">Metering sidecar</text>
+<text class="m-t-sub" x="849" y="393">counts the tokens</text>
+<rect class="m-node-mesh" x="1015" y="160" width="155" height="250" rx="14"/>
+<text class="m-t-mesh" x="1031" y="189">MeshLLM</text>
+<text class="m-t-mesh-sub" x="1031" y="208">open models on</text>
+<text class="m-t-mesh-sub" x="1031" y="223">pooled GPUs, one</text>
+<text class="m-t-mesh-sub" x="1031" y="238">OpenAI-style API</text>
+<line class="m-gpu-link" x1="1092" y1="280" x2="1092" y2="296"/>
+<line class="m-gpu-link" x1="1092" y1="324" x2="1092" y2="340"/>
+<rect class="m-gpu" x="1031" y="252" width="122" height="28" rx="6"/>
+<text class="m-t-gpu" x="1043" y="270">machine · GPU</text>
+<rect class="m-gpu" x="1031" y="296" width="122" height="28" rx="6"/>
+<text class="m-t-gpu" x="1043" y="314">machine · GPU</text>
+<rect class="m-gpu" x="1031" y="340" width="122" height="28" rx="6"/>
+<text class="m-t-gpu" x="1043" y="358">machine · GPU</text>
+<text class="m-t-mesh-sub" x="1031" y="393">runs where it fits</text>
+<!-- Bitcoin band -->
+<rect class="m-node" x="30" y="515" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="44" y="540">Lightning address</text>
+<text class="m-t-sub" x="44" y="558">or straight from a wallet</text>
+<rect class="m-node" x="255" y="515" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="269" y="540">Treasury</text>
+<text class="m-t-sub" x="269" y="558">the hive's sats</text>
+<rect class="m-node" x="520" y="515" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="534" y="540">Job escrow</text>
+<text class="m-t-sub" x="534" y="558">one per job, capped</text>
+<rect class="m-node" x="790" y="515" width="160" height="60" rx="12"/>
+<text class="m-t-title" x="804" y="540">Provider wallet</text>
+<text class="m-t-sub" x="804" y="558">paid per receipt</text>
+<rect class="m-node" x="1040" y="515" width="145" height="60" rx="12"/>
+<text class="m-t-title" x="1054" y="540">Lightning</text>
+<text class="m-t-sub" x="1054" y="558">cash out anywhere</text>
+<rect class="m-node" x="255" y="617" width="735" height="50" rx="12"/>
+<text class="m-t-title" x="269" y="638">Arkade</text>
+<text class="m-t-sub" x="269" y="655">co-signs a spend only if the contract allows it</text>
+<text class="m-t-foot" x="617" y="712" text-anchor="middle">Every coin in this band is a Bitcoin output anyone can look up</text>
+<!-- 1 Chip in -->
+<line class="m-msg" x1="190" y1="190" x2="238" y2="190" marker-end="url(#m-arrow)"/>
+<line class="m-money" x1="110" y1="215" x2="110" y2="511" marker-end="url(#m-sats)"/>
+<text class="m-t-edge" x="124" y="404">chip in</text>
+<line class="m-money" x1="190" y1="545" x2="251" y2="545" marker-end="url(#m-sats)"/>
+<circle class="m-badge" cx="110" cy="360" r="11"/>
+<text class="m-t-badge" x="110" y="364" text-anchor="middle">1</text>
+<!-- 2 Quote over Nostr -->
+<path class="m-msg" d="M480 158 V68 H606" marker-start="url(#m-arrow)" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="543" y="60" text-anchor="middle">request</text>
+<path class="m-msg" d="M774 68 H915 V158" marker-start="url(#m-arrow)" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="844" y="60" text-anchor="middle">signed quote</text>
+<circle class="m-badge" cx="480" cy="112" r="11"/>
+<text class="m-t-badge" x="480" y="116" text-anchor="middle">2</text>
+<!-- 3 Fund the job -->
+<line class="m-msg" x1="315" y1="315" x2="315" y2="511" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="327" y="452">approve</text>
+<line class="m-money" x1="415" y1="545" x2="516" y2="545" marker-end="url(#m-sats)"/>
+<text class="m-t-edge" x="467" y="536" text-anchor="middle">the cap</text>
+<circle class="m-badge" cx="315" cy="420" r="11"/>
+<text class="m-t-badge" x="315" y="424" text-anchor="middle">3</text>
+<!-- 4 Do the work -->
+<line class="m-msg" x1="555" y1="370" x2="831" y2="370" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="750" y="362" text-anchor="middle">request · signed receipt</text>
+<line class="m-msg" x1="835" y1="392" x2="559" y2="392" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="750" y="411" text-anchor="middle">answer · token count</text>
+<line class="m-msg" x1="995" y1="388" x2="1011" y2="388" marker-start="url(#m-arrow)" marker-end="url(#m-arrow)"/>
+<circle class="m-badge" cx="582" cy="381" r="11"/>
+<text class="m-t-badge" x="582" y="385" text-anchor="middle">4</text>
+<!-- 5 Get paid -->
+<path class="m-msg" d="M833 285 H660 V511" marker-end="url(#m-arrow)"/>
+<text class="m-t-edge" x="747" y="277" text-anchor="middle">claim with receipts</text>
+<line class="m-money" x1="680" y1="545" x2="786" y2="545" marker-end="url(#m-sats)"/>
+<text class="m-t-edge" x="733" y="536" text-anchor="middle">receipted sats</text>
+<path class="m-money" d="M560 575 V597 H335 V579" marker-end="url(#m-sats)"/>
+<text class="m-t-edge" x="447" y="592" text-anchor="middle">the rest comes back</text>
+<circle class="m-badge" cx="660" cy="450" r="11"/>
+<text class="m-t-badge" x="660" y="454" text-anchor="middle">5</text>
+<!-- 6 Cash out -->
+<line class="m-money" x1="950" y1="545" x2="1036" y2="545" marker-end="url(#m-sats)"/>
+<circle class="m-badge" cx="993" cy="545" r="11"/>
+<text class="m-t-badge" x="993" y="549" text-anchor="middle">6</text>
+</svg>

@@ -1,0 +1,19 @@
+{
+  "name": "@hive/provider",
+  "version": "4.0.0-dev",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@arkade-os/swap": "0.0.24",
+    "@hive/ark": "workspace:*",
+    "@hive/executor": "workspace:*",
+    "@hive/kit": "workspace:*",
+    "@hive/protocol": "workspace:*",
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "nostr-tools": "2.25.2"
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "keys": {
+    "server": "03c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413",
+    "emulator": "0262a8e3eaf17c8fa6aa26bad04f940de898a9494727649800af4290a387070416",
+    "delegate": "0311500cebe495add5d95dc95a54e6f562b6231ddce6673cf94f55e9d2a1669a73"
+  },
+  "stewards": [
+    "02de9e68454ffa39b6451cb5ce466f4e8c57afc999ae21d176b0926a2af3da91e3",
+    "023e2cb3b9acc7d0ad7fe5dabb9324071512f6421b0cfcceea224b97dc28a026e1",
+    "0273b6bbb6953743a58b78507309f7d18cffa5f16e11feb0f3cead849d5c06e454"
+  ],
+  "pairs": {
+    "12": "69e204c0929f19ca3c380adbc0feba01c98dde78b18ebbeed4fb18df95a32d12",
+    "01": "583b5bcbdcda67616c183ff9679c642bb38f35204e1913134e49d0fd0deb1933",
+    "02": "95bdb24e3a78d661fc5308ec7466805e587987111aa28a1b1629221da2482131"
+  },
+  "cases": [
+    {
+      "name": "treasury",
+      "kind": "treasury",
+      "args": {
+        "pair01": "583b5bcbdcda67616c183ff9679c642bb38f35204e1913134e49d0fd0deb1933",
+        "pair02": "95bdb24e3a78d661fc5308ec7466805e587987111aa28a1b1629221da2482131",
+        "pair12": "69e204c0929f19ca3c380adbc0feba01c98dde78b18ebbeed4fb18df95a32d12",
+        "exitDelay": "020040",
+        "renewalWindow": "805101",
+        "maxFee": "f401"
+      },
+      "expected": {
+        "artifactIds": {
+          "treasury": "256efbe923c61565bdb45f0f44b6f7d05ce64b0b6e61cf936c322d3edf444472"
+        },
+        "pkScript": "5120be021dc1df686fd171923226ea360920839e0631e80b6b523f16b579094d7ae4",
+        "tapscripts": [
+          "03020040b27520583b5bcbdcda67616c183ff9679c642bb38f35204e1913134e49d0fd0deb1933ac",
+          "03020040b2752095bdb24e3a78d661fc5308ec7466805e587987111aa28a1b1629221da2482131ac",
+          "03020040b2752069e204c0929f19ca3c380adbc0feba01c98dde78b18ebbeed4fb18df95a32d12ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad2082d34566d74f8d6dc52ff0bec3bf79a0dad779cc247141551d8922f7db5182f6ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad20fd5f56f122826e66c8dbaca327a8e4a60177ebdbb8bc7d34dda14166564590a2ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad20a0f351e5f9b190dfd79202e1bf2f32f9ab0336965e9f9c17aa454efadace9086ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad2016983386e57699c63744fd27011fb6b537a9e8ec311bf375b4e19b9be711a1c6ac"
+        ],
+        "templateId": "b9918002294c805c6a12c52bcb6810b307cc2752e2688e0e707c0dc7bac246b5"
+      }
+    },
+    {
+      "name": "escrow",
+      "kind": "escrow",
+      "args": {
+        "payer": "3c9cfdb258d0058abfad91e94cb564ac166eb1a5a8bfe9d66e814aaee9f6129e",
+        "provider": "3ce4079d13702219234ca1b0c9e00ed518dc5bde5e8085860d8d0bb9de300113",
+        "providerProgram": "0271acb3ff85da34cd166d7a49bbc34352687120fba3f9fe49e2ab6687401db4",
+        "treasuryProgram": "291eb2cf6ac38e473a70b39cd0b57b4b8d763096beb45885f48f28d7c23449d7",
+        "escrowId": "3181a4bb83ef3faefd43ba9d8639fbb5c97c61f4843b62516a77e45fb597d70c",
+        "timeoutAt": "c041ca6a",
+        "exitDelay": "020040",
+        "pair01": "583b5bcbdcda67616c183ff9679c642bb38f35204e1913134e49d0fd0deb1933",
+        "pair02": "95bdb24e3a78d661fc5308ec7466805e587987111aa28a1b1629221da2482131",
+        "pair12": "69e204c0929f19ca3c380adbc0feba01c98dde78b18ebbeed4fb18df95a32d12"
+      },
+      "expected": {
+        "artifactIds": {
+          "escrow": "1ee05ced6a9754c4a7c38d82ef9e461bd9b9695f568d374d9e94967a0f1bdaf9"
+        },
+        "pkScript": "5120867c2113bc648631b59c06329094d9be4737af0b12e396f63453421ef05b5eee",
+        "tapscripts": [
+          "03020040b27520583b5bcbdcda67616c183ff9679c642bb38f35204e1913134e49d0fd0deb1933ac",
+          "03020040b2752095bdb24e3a78d661fc5308ec7466805e587987111aa28a1b1629221da2482131ac",
+          "03020040b2752069e204c0929f19ca3c380adbc0feba01c98dde78b18ebbeed4fb18df95a32d12ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad20e99e7f978237b004cc230acfdd165dc0defabc0ab13b590f2a4ddf48b13c9ca2ac",
+          "04c041ca6ab17520c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad2075c20a31e5d65cc97b9fbd17203e679f1a81db43d74e04d86bc1f13dfc2fd72bac"
+        ],
+        "templateId": "30436eb777941529a859cd2dd8cdd69626eff2b2fa6414a04b1cee826b13ac38"
+      }
+    },
+    {
+      "name": "wallet",
+      "kind": "wallet",
+      "args": {
+        "owner": "02c513976f94edb8d4819a3bf23a534ef875852de73bc24a0fa50962b3a81aa6a0",
+        "exitDelay": "020040",
+        "renewalWindow": "805101",
+        "maxFee": "f401"
+      },
+      "expected": {
+        "artifactIds": {
+          "wallet": "e9ba63a5c1c6782e12c63dc6415f30c5a039488d39e21314c3471252bc8bfaed"
+        },
+        "pkScript": "51202df9bc9578d4017bd6065922ba62e42e9acc6d6bf515bf2c78966476b851f700",
+        "tapscripts": [
+          "03020040b27520c513976f94edb8d4819a3bf23a534ef875852de73bc24a0fa50962b3a81aa6a0ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad2082d34566d74f8d6dc52ff0bec3bf79a0dad779cc247141551d8922f7db5182f6ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad2060853438389148a7ef5cc6d827769498ca7d86ccbafcde4ef6f765391bd3e485ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad203763d735d9e21bec66419547379a17f8f568de6711e80f4b15f0d894a8055989ac"
+        ],
+        "templateId": "c53ceecdb17ab72535cbb04783259ab6a0214671afbc5374d3e268d84af7f43f"
+      }
+    },
+    {
+      "name": "boarding",
+      "kind": "boarding",
+      "args": {
+        "owner": "02c513976f94edb8d4819a3bf23a534ef875852de73bc24a0fa50962b3a81aa6a0",
+        "boardingExitDelay": "040040",
+        "renewalProgram": "2df9bc9578d4017bd6065922ba62e42e9acc6d6bf515bf2c78966476b851f700",
+        "maxFee": "f401"
+      },
+      "expected": {
+        "artifactIds": {
+          "wallet": "e9ba63a5c1c6782e12c63dc6415f30c5a039488d39e21314c3471252bc8bfaed"
+        },
+        "pkScript": "5120c68245ed8712cd1d0b27933a007842fcc1b932d2f8a88067eab36bd97fd897ef",
+        "tapscripts": [
+          "20c513976f94edb8d4819a3bf23a534ef875852de73bc24a0fa50962b3a81aa6a0ad20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ac",
+          "03040040b27520c513976f94edb8d4819a3bf23a534ef875852de73bc24a0fa50962b3a81aa6a0ac",
+          "20c5d10d20b91fa45cfdc0ac7b0fd8b3b3cb7011b8fda5629c04fd77f257186413ad2087df36b29f08f4cd291865eebc1677949663e4a765e1dfd4f4553bef8596473dac"
+        ],
+        "templateId": "da46a92a72398c99e8d4e0592bb082aeaae26b4432c69195f55bca1cfaa61f1d"
+      }
+    }
+  ]
+}

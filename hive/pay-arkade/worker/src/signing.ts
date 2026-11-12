@@ -1,0 +1,79 @@
+// Quotes and receipts. Both are BIP-340 signatures over SHA-256 digests.
+//
+// A receipt is exactly what the escrow's claim path checks:
+//   sha256(jobId || num2bin(amountSats, 8))   (NUM2BIN is little-endian)
+// A quote is the provider's offer for one job, signed over its canonical JSON.
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { hex } from "@scure/base";
+
+export function receiptDigest(jobId: Uint8Array, amountSats: bigint): Uint8Array {
+    if (jobId.length !== 32) throw new Error("jobId must be 32 bytes");
+    if (amountSats <= 0n || amountSats >= 1n << 63n) throw new Error("amount out of range");
+    return sha256(concat(jobId, le(amountSats, 8)));
+}
+
+export function signReceipt(secret: Uint8Array, jobId: Uint8Array, amountSats: bigint): Uint8Array {
+    return schnorr.sign(receiptDigest(jobId, amountSats), secret);
+}
+
+export function verifyReceipt(agentPk: Uint8Array, jobId: Uint8Array, amountSats: bigint, sig: Uint8Array): boolean {
+    try {
+        return schnorr.verify(sig, receiptDigest(jobId, amountSats), agentPk);
+    } catch {
+        return false;
+    }
+}
+
+/** Canonical JSON: keys sorted at every level, no whitespace. Values must be JSON-safe. */
+export function canonical(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    if (value && typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .filter(([, v]) => v !== undefined)
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+        return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+}
+
+export function quoteDigest(quote: unknown): Uint8Array {
+    return sha256(new TextEncoder().encode(`pay.arkade.v1/quote:${canonical(quote)}`));
+}
+
+export function signQuote(secret: Uint8Array, quote: unknown): Uint8Array {
+    return schnorr.sign(quoteDigest(quote), secret);
+}
+
+export function verifyQuote(providerPk: Uint8Array, quote: unknown, sig: Uint8Array): boolean {
+    try {
+        return schnorr.verify(sig, quoteDigest(quote), providerPk);
+    } catch {
+        return false;
+    }
+}
+
+export function le(n: bigint, size: number): Uint8Array {
+    const out = new Uint8Array(size);
+    let v = n;
+    for (let i = 0; i < size; i++) {
+        out[i] = Number(v & 0xffn);
+        v >>= 8n;
+    }
+    return out;
+}
+
+export function concat(...parts: Uint8Array[]): Uint8Array {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0;
+    for (const p of parts) {
+        out.set(p, o);
+        o += p.length;
+    }
+    return out;
+}
+
+export const hexBytes = (value: unknown, size: number, name: string): Uint8Array => {
+    if (typeof value !== "string" || value.length !== size * 2) throw new Error(`${name} must be ${size} bytes of hex`);
+    return hex.decode(value.toLowerCase());
+};

@@ -1,0 +1,369 @@
+{
+  "formatVersion": 1,
+  "contractName": "JobEscrow",
+  "constructorInputs": [
+    {
+      "name": "agentPk",
+      "type": "pubkey"
+    },
+    {
+      "name": "providerPk",
+      "type": "pubkey"
+    },
+    {
+      "name": "treasuryProgram",
+      "type": "bytes32"
+    },
+    {
+      "name": "deadline",
+      "type": "int"
+    },
+    {
+      "name": "jobId",
+      "type": "bytes32"
+    },
+    {
+      "name": "renewalWindow",
+      "type": "int"
+    },
+    {
+      "name": "maxRenewalFee",
+      "type": "int"
+    },
+    {
+      "name": "exitDelay",
+      "type": "int"
+    },
+    {
+      "name": "delegatePk",
+      "type": "pubkey"
+    },
+    {
+      "name": "ownersPk",
+      "type": "pubkey"
+    }
+  ],
+  "functions": [
+    {
+      "name": "claim",
+      "arkade": {
+        "inputs": [
+          {
+            "name": "amount",
+            "type": "int"
+          },
+          {
+            "name": "agentSig",
+            "type": "bytes"
+          }
+        ],
+        "asm": [
+          "OP_PUSHCURRENTINPUTINDEX",
+          "0",
+          "OP_NUMEQUALVERIFY",
+          "<jobId>",
+          "OP_OVER",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_SHA256",
+          "OP_ROT",
+          "<agentPk>",
+          "OP_ROT",
+          "OP_SWAP",
+          "OP_CHECKSIGFROMSTACK",
+          "OP_VERIFY",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_OVER",
+          "0",
+          "OP_GREATERTHAN",
+          "OP_VERIFY",
+          "OP_SWAP",
+          "OP_SUB",
+          "OP_DUP",
+          "330",
+          "OP_GREATERTHAN",
+          "OP_IF",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_OVER",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUAL",
+          "OP_IF",
+          "OP_DUP",
+          "<treasuryProgram>",
+          "OP_EQUAL",
+          "OP_ELSE",
+          "OP_0",
+          "OP_ENDIF",
+          "OP_VERIFY",
+          "OP_DROP",
+          "OP_ENDIF",
+          "OP_1",
+          "OP_NIP"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "claim",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "providerSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<providerPk>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:claim>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "expire",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "OP_INSPECTNUMINPUTS",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "<deadline>",
+          "OP_CHECKTIME",
+          "OP_VERIFY",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUAL",
+          "OP_IF",
+          "OP_DUP",
+          "<treasuryProgram>",
+          "OP_EQUAL",
+          "OP_ELSE",
+          "OP_0",
+          "OP_ENDIF",
+          "OP_NIP"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "expire",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:expire>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renew",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "OP_PUSHEXPIRY",
+          "<renewalWindow>",
+          "OP_SUB",
+          "OP_CHECKTIME",
+          "OP_VERIFY",
+          "0x74797065",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "0x7265676973746572",
+          "OP_EQUALVERIFY",
+          "0x6f6e636861696e5f6f75747075745f696e6465786573",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "0x5b5d",
+          "OP_EQUALVERIFY",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "1",
+          "OP_SUB",
+          "OP_DUP",
+          "OP_INSPECTOUTPUTVALUE",
+          "<maxRenewalFee>",
+          "OP_ADD",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "5",
+          "0",
+          "OP_TUNNEL"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "renew",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:renew>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cooperative",
+      "leaves": [
+        {
+          "name": "cooperative",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "ownersSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<ownersPk>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "delegate",
+      "leaves": [
+        {
+          "name": "delegate",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "ownersSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "delegateSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<ownersPk>",
+            "OP_CHECKSIGVERIFY",
+            "<delegatePk>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unilateral",
+      "leaves": [
+        {
+          "name": "unilateral",
+          "witness": [
+            {
+              "name": "agentSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "providerSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ],
+          "asm": [
+            "<exitDelay>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<agentPk>",
+            "OP_CHECKSIGVERIFY",
+            "<providerPk>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    }
+  ],
+  "source": {
+    "entry": "job_escrow.ark",
+    "files": {
+      "job_escrow.ark": "pragma arkade ^0.1.0;\n\n// A job escrow holds one job's cap between a hive and a provider.\n// The provider claims what the hive agent's latest receipt says, and the\n// rest returns to the treasury. Unclaimed at the deadline, it returns whole.\n\ncontract JobEscrow(\n  // Hive agent key. Signs one cumulative receipt per answer.\n  pubkey agentPk,\n  // Provider key. Signs the claim, and co-signs the unilateral exit.\n  pubkey providerPk,\n  // Where the remainder and an expired escrow go: the treasury's taproot (segwit v1) program.\n  bytes32 treasuryProgram,\n  // Unix seconds, read from the emulator clock.\n  int deadline,\n  // Unique per job, so each job has its own address and its own receipts.\n  bytes32 jobId,\n  // How long before the coin's batch expires the executor may renew it, in seconds.\n  int renewalWindow,\n  // The most a renewal may take from the escrow in fees, in sats.\n  int maxRenewalFee,\n  // The Arkade server's unilateral exit delay (BIP68 sequence), stated so the escrow's script is fully\n  // determined by its arguments.\n  int exitDelay,\n  // The delegate service that renews the escrow before its batch expires (delegate.arkade.money on\n  // mainnet), from a renewal the agent and the provider presign together.\n  pubkey delegatePk,\n  // The MuSig2 aggregate of agentPk and providerPk: one key the two sign with together, since the\n  // delegate service accepts exactly one owner signature.\n  pubkey ownersPk\n) {\n  const int DUST = 330;\n\n  // The covenant checks the receipt and the treasury's share. The matching\n  // tapscript below makes the provider's signature the authorization, so\n  // nobody else can close the job with an older, smaller receipt.\n  // The receipt signature travels as plain bytes so that template tooling, which knows only scalar\n  // covenant inputs, can carry it; the cast below adds no opcodes.\n  function claim(int amount, bytes agentSig) {\n    require(this.activeInputIndex == 0, \"escrow first\");\n\n    // The receipt binds this job and the cumulative sats owed. It cannot name\n    // the coin: an Arkade spend evaluates a checkpoint built at spend time, so\n    // the outpoint seen here is not one the agent could have signed.\n    let receipt = sha256(jobId + num2bin(amount, 8));\n    require(checkSigFromStack(signature(agentSig), agentPk, receipt), \"receipt\");\n\n    int locked = tx.input.current.value;\n    require(amount > 0, \"nothing owed\");\n    // Renewal fees can leave less locked than the receipt owes; the provider then takes it all.\n    int rest = locked - amount;\n\n    // The provider signs this spend, so it chooses where its own share goes.\n    if (rest > DUST) {\n      require(tx.outputs[0].value >= rest, \"treasury short\");\n      let paidTo = tx.outputs[0].script;\n      require(paidTo.version == 1 && paidTo.program == treasuryProgram, \"treasury script\");\n    }\n  }\n\n  function claim(signature serverSig, signature providerSig, signature emulatorSig) tapscript {\n    require(checkMultisig([server, providerPk, emulator], [serverSig, providerSig, emulatorSig]));\n  }\n\n  @allow(unsigned-spend-path, \"anyone may return the escrow after the deadline, and the output pays the treasury\")\n  function expire() {\n    require(tx.numInputs == 1, \"escrow alone\");\n    require(checkTime(deadline), \"not yet\");\n    require(tx.outputs[0].value >= tx.input.current.value, \"treasury short\");\n    let paidTo = tx.outputs[0].script;\n    require(paidTo.version == 1 && paidTo.program == treasuryProgram, \"treasury script\");\n  }\n\n  // The executor renews the escrow before its batch expires, into the same escrow: the same script and\n  // value less at most maxRenewalFee, in a register intent with no onchain output. The covenant leaves\n  // nothing to choose, so the spend needs no signature from the hive or the provider.\n  @allow(unsigned-spend-path, \"renewal recreates this escrow unchanged; only a capped fee leaves it\")\n  function renew() {\n    require(checkTime(this.expiry - renewalWindow), \"too early to renew\");\n    require(tx.intent.field(\"type\") == \"register\", \"register intent\");\n    require(tx.intent.field(\"onchain_output_indexes\") == \"[]\", \"offchain only\");\n    int out = this.activeInputIndex - 1;\n    require(tx.outputs[out].value + maxRenewalFee >= tx.input.current.value, \"fee over cap\");\n    require(this.tunnel(out, {script: true, value: false, assets: true}), \"same escrow\");\n  }\n\n  // The agent and the provider together, through their aggregate key. A delegated renewal's proof is\n  // signed on this path; the agent could already hand the provider the whole cap with a receipt, so it\n  // adds no new trust.\n  function cooperative(signature serverSig, signature ownersSig) tapscript {\n    require(checkMultisig([server, ownersPk], [serverSig, ownersSig]));\n  }\n\n  // The delegated renewal's forfeit: the agent and the provider presign it, the delegate service adds\n  // its signature when it renews the escrow into the same escrow in a new batch.\n  function delegate(signature serverSig, signature ownersSig, signature delegateSig) tapscript {\n    require(checkMultisig([server, ownersPk, delegatePk], [serverSig, ownersSig, delegateSig]));\n  }\n\n  function unilateral(signature agentSig, signature providerSig) tapscript {\n    require(older(exitDelay));\n    require(checkMultisig([agentPk, providerPk], [agentSig, providerSig], 2));\n  }\n}\n"
+    }
+  },
+  "compiler": {
+    "name": "arkadec",
+    "version": "0.1.0-rc.1",
+    "options": {
+      "optimize": true
+    }
+  },
+  "updatedAt": "2026-11-12T11:31:58.699767722+00:00",
+  "fingerprint": "sha256:59bf7e514edc008ddfb144f70257288469fed74bdcb8fa3d2a16ca7a6c6b7bed"
+}

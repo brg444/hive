@@ -1,0 +1,56 @@
+{
+  "format": "template/v1",
+  "type": "offchain",
+  "variables": {
+    "agent_pk": "pubkey",
+    "provider_pk": "pubkey",
+    "treasury_program": "bytes32",
+    "deadline": "int",
+    "job_id": "bytes32",
+    "renewal_window": "int",
+    "max_renewal_fee": "int",
+    "exit_delay": "int",
+    "amount": "int",
+    "agent_sig": "bytes",
+    "treasury_share": "int",
+    "payout": "bytes",
+    "delegate_pk": "pubkey",
+    "owners_pk": "pubkey"
+  },
+  "inputs": [
+    {
+      "name": "escrow",
+      "contract": {
+        "artifact": "4f372ffcc8c19804fcedb87359b7bfac3d83312e67f261fe2b3ef04d62858dc2",
+        "arguments": {
+          "agentPk": "<agent_pk>",
+          "providerPk": "<provider_pk>",
+          "treasuryProgram": "<treasury_program>",
+          "deadline": "<deadline>",
+          "jobId": "<job_id>",
+          "renewalWindow": "<renewal_window>",
+          "maxRenewalFee": "<max_renewal_fee>",
+          "exitDelay": "<exit_delay>",
+          "delegatePk": "<delegate_pk>",
+          "ownersPk": "<owners_pk>"
+        }
+      },
+      "spend": {
+        "function": "claim",
+        "arguments": {
+          "amount": "<amount>",
+          "agentSig": "<agent_sig>"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "locking": "5120<treasury_program>",
+      "amount": "<treasury_share>"
+    },
+    {
+      "locking": "<payout>"
+    }
+  ]
+}

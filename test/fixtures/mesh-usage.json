@@ -1,0 +1,85 @@
+{
+  "schema": "buzzpool-mesh-usage/v1",
+  "status": "passed",
+  "testedAt": "2026-10-08T15:17:46Z",
+  "command": "python3 tools/mesh-run.py proof",
+  "endpoint": "http://127.0.0.1:9337/v1",
+  "models": {
+    "object": "list",
+    "data": [
+      {
+        "id": "local-gguf/sha256-847545e60c92b0f0",
+        "object": "model",
+        "created": 1791472664,
+        "owned_by": "skippy-runtime"
+      }
+    ]
+  },
+  "nonstream": {
+    "request": {
+      "model": "local-gguf/sha256-847545e60c92b0f0",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with exactly: Buzz Pool local test."
+        }
+      ],
+      "max_tokens": 32,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "requestSha256": "4042a3fc7fda90fbec98f54c68065c6e05fb2e6f62a908d5ca0dfdcdad991e7b",
+    "status": 200,
+    "contentType": "application/json",
+    "body": "{\"id\":\"chatcmpl-1791472666510\",\"object\":\"chat.completion\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Buzz Pool local test.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":21,\"completion_tokens\":5,\"total_tokens\":26,\"prompt_tokens_details\":{\"cached_tokens\":0}},\"timings\":{\"cache_restore_ms\":0.0,\"draft_n\":0,\"draft_n_accepted\":0,\"native_mtp_proposal_compute_us\":0,\"native_mtp_rejected\":0,\"native_mtp_verification_compute_us\":0,\"native_mtp_verifications\":0,\"predicted_ms\":1451.057541,\"predicted_n\":5,\"predicted_per_second\":3.4457627342291595,\"prompt_ms\":576.625666,\"prompt_n\":21,\"prompt_per_second\":36.41877432490145,\"queue_wait_ms\":0.034875,\"suffix_prefill_n\":20}}",
+    "responseSha256": "3b3df34da2e4dbc24e3a5a613b9a07f09934e01af5aae9f9707a9ad8b8037fd0",
+    "usage": {
+      "prompt_tokens": 21,
+      "completion_tokens": 5,
+      "total_tokens": 26,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    }
+  },
+  "stream": {
+    "request": {
+      "model": "local-gguf/sha256-847545e60c92b0f0",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with exactly: Buzz Pool local test."
+        }
+      ],
+      "max_tokens": 32,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    },
+    "requestSha256": "9741aea5a688a725d93ea9a804014df0d4b01d3f3a34ace41ba66cd8e252de36",
+    "status": 200,
+    "contentType": "text/event-stream",
+    "body": "data: {\"id\":\"chatcmpl-1791472666520\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1791472666562\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Buzz\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1791472666576\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" Pool\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1791472666589\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" local\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1791472666602\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" test\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1791472666612\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\".\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1791472666624\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[],\"usage\":{\"prompt_tokens\":21,\"completion_tokens\":5,\"total_tokens\":26,\"prompt_tokens_details\":{\"cached_tokens\":0}},\"timings\":{\"cache_restore_ms\":0.0,\"draft_n\":0,\"draft_n_accepted\":0,\"native_mtp_proposal_compute_us\":0,\"native_mtp_rejected\":0,\"native_mtp_verification_compute_us\":0,\"native_mtp_verifications\":0,\"predicted_ms\":100.689459,\"predicted_n\":5,\"predicted_per_second\":49.65763099392559,\"prompt_ms\":2.601458,\"prompt_n\":21,\"prompt_per_second\":8072.396325445193,\"queue_wait_ms\":0.0205,\"suffix_prefill_n\":20}}\n\ndata: {\"id\":\"chatcmpl-1791472666624\",\"object\":\"chat.completion.chunk\",\"created\":1791472666,\"model\":\"local-gguf/sha256-847545e60c92b0f0\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+    "responseSha256": "c0b29fb78bbac9272c225ec85303fd61b179c470662cad1600409d5466f04310",
+    "usage": {
+      "prompt_tokens": 21,
+      "completion_tokens": 5,
+      "total_tokens": 26,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "usageChunkIndex": 6,
+    "chunkCount": 8
+  },
+  "spending": false,
+  "limitation": "Standalone usage proof only; receipt gating and the regtest claim are separate Stage 4 checks."
+}

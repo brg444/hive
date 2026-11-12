@@ -1,0 +1,301 @@
+{
+  "contractName": "BuzzEscrow",
+  "constructorInputs": [
+    {
+      "name": "payer",
+      "type": "bytes32"
+    },
+    {
+      "name": "provider",
+      "type": "bytes32"
+    },
+    {
+      "name": "providerProgram",
+      "type": "bytes32"
+    },
+    {
+      "name": "treasuryProgram",
+      "type": "bytes32"
+    },
+    {
+      "name": "escrowId",
+      "type": "bytes32"
+    },
+    {
+      "name": "timeoutAt",
+      "type": "int"
+    },
+    {
+      "name": "exitDelay",
+      "type": "int"
+    },
+    {
+      "name": "pair01",
+      "type": "bytes32"
+    },
+    {
+      "name": "pair02",
+      "type": "bytes32"
+    },
+    {
+      "name": "pair12",
+      "type": "bytes32"
+    }
+  ],
+  "structs": [],
+  "functions": [
+    {
+      "name": "exit01",
+      "leaves": [
+        {
+          "name": "exit01",
+          "asm": [
+            "<exitDelay>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<pair01>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "pairSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exit02",
+      "leaves": [
+        {
+          "name": "exit02",
+          "asm": [
+            "<exitDelay>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<pair02>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "pairSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exit12",
+      "leaves": [
+        {
+          "name": "exit12",
+          "asm": [
+            "<exitDelay>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<pair12>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "pairSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "claim",
+      "arkade": {
+        "inputs": [
+          {
+            "name": "amount",
+            "type": "int"
+          },
+          {
+            "name": "receiptSig",
+            "type": "bytes"
+          },
+          {
+            "name": "claimSig",
+            "type": "bytes"
+          }
+        ],
+        "asm": [
+          "0x74797065",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_DROP",
+          "<timeoutAt>",
+          "OP_CHECKTIME",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_INSPECTNUMINPUTS",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "OP_DUP",
+          "0",
+          "OP_GREATERTHAN",
+          "OP_VERIFY",
+          "OP_DUP",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "<providerProgram>",
+          "OP_EQUALVERIFY",
+          "OP_DUP",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_OVER",
+          "OP_SUB",
+          "OP_DUP",
+          "330",
+          "OP_GREATERTHAN",
+          "OP_IF",
+          "1",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "<treasuryProgram>",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_ELSE",
+          "OP_DROP",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_ENDIF",
+          "0x61726b6164652d6d6574657265642d657363726f772f7631",
+          "<escrowId>",
+          "OP_CAT",
+          "OP_OVER",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_SHA256",
+          "2",
+          "OP_ROLL",
+          "OP_SWAP",
+          "<payer>",
+          "OP_CHECKSIGFROMSTACK",
+          "OP_VERIFY",
+          "0x62757a7a706f6f6c2f657363726f772f636c61696d2f7631",
+          "<escrowId>",
+          "OP_CAT",
+          "OP_SWAP",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_SHA256",
+          "<provider>",
+          "OP_CHECKSIGFROMSTACK"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "claim",
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:claim>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "refund",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "0x74797065",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_DROP",
+          "<timeoutAt>",
+          "OP_CHECKTIME",
+          "OP_VERIFY",
+          "OP_INSPECTNUMINPUTS",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "<treasuryProgram>",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_GREATERTHANOREQUAL"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "refund",
+          "asm": [
+            "<timeoutAt>",
+            "OP_CHECKLOCKTIMEVERIFY",
+            "OP_DROP",
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:refund>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

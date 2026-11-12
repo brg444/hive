@@ -1,0 +1,69 @@
+{
+  "format": "template/v1",
+  "type": "intent",
+  "variables": {
+    "agent_pk": "pubkey",
+    "provider_pk": "pubkey",
+    "treasury_program": "bytes32",
+    "deadline": "int",
+    "job_id": "bytes32",
+    "renewal_window": "int",
+    "max_fee": "int",
+    "exit_delay": "int",
+    "delegate_pk": "pubkey",
+    "owners_pk": "pubkey"
+  },
+  "inputs": [
+    {
+      "name": "escrow",
+      "schedule": {
+        "before_expiry_seconds": "<renewal_window>"
+      },
+      "contract": {
+        "definition": {
+          "artifact": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "arguments": {
+          "agentPk": "<agent_pk>",
+          "providerPk": "<provider_pk>",
+          "treasuryProgram": "<treasury_program>",
+          "deadline": "<deadline>",
+          "jobId": "<job_id>",
+          "renewalWindow": "<renewal_window>",
+          "maxRenewalFee": "<max_fee>",
+          "exitDelay": "<exit_delay>",
+          "delegatePk": "<delegate_pk>",
+          "ownersPk": "<owners_pk>"
+        }
+      },
+      "spend": {
+        "function": "renew",
+        "leaf": "renew"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "renewed",
+      "index": 0,
+      "value": {
+        "from": "escrow"
+      },
+      "locking": {
+        "from": "escrow"
+      },
+      "assets": [
+        {
+          "from": "escrow"
+        }
+      ]
+    }
+  ],
+  "fees": {
+    "from": "escrow",
+    "max": "<max_fee>"
+  },
+  "packets": {
+    "output_index": 1
+  }
+}

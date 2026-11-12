@@ -1,0 +1,382 @@
+{
+  "contractName": "SimpleWallet",
+  "constructorInputs": [
+    {
+      "name": "owner",
+      "type": "pubkey"
+    },
+    {
+      "name": "exitDelay",
+      "type": "int"
+    },
+    {
+      "name": "renewalWindow",
+      "type": "int"
+    },
+    {
+      "name": "maxFee",
+      "type": "int"
+    }
+  ],
+  "structs": [],
+  "functions": [
+    {
+      "name": "exit",
+      "leaves": [
+        {
+          "name": "exit",
+          "asm": [
+            "<exitDelay>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<owner>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "ownerSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renew",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "OP_PUSHEXPIRY",
+          "<renewalWindow>",
+          "OP_SUB",
+          "OP_CHECKTIME",
+          "OP_VERIFY",
+          "0x74797065",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "0x7265676973746572",
+          "OP_EQUALVERIFY",
+          "0x6f6e636861696e5f6f75747075745f696e6465786573",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "0x5b5d",
+          "OP_EQUALVERIFY",
+          "0x636f7369676e6572735f7075626c69635f6b6579732e30",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "<DELEGATE_KEY>",
+          "OP_EQUALVERIFY",
+          "0x636f7369676e6572735f7075626c69635f6b6579732e31",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_DROP",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_1SUB",
+          "OP_INSPECTOUTPUTVALUE",
+          "<maxFee>",
+          "OP_ADD",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_1SUB",
+          "5",
+          "0",
+          "OP_TUNNEL"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "renew",
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:renew>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "send",
+      "arkade": {
+        "inputs": [
+          {
+            "name": "validUntil",
+            "type": "int"
+          },
+          {
+            "name": "amount",
+            "type": "int"
+          },
+          {
+            "name": "change",
+            "type": "int"
+          },
+          {
+            "name": "sig",
+            "type": "bytes"
+          }
+        ],
+        "asm": [
+          "OP_DUP",
+          "OP_CHECKTIME",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_TOALTSTACK",
+          "0x74797065",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_DROP",
+          "OP_OVER",
+          "OP_0NOTEQUAL",
+          "OP_IF",
+          "0",
+          "1",
+          "0",
+          "OP_TUNNEL",
+          "OP_VERIFY",
+          "OP_OVER",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_DUP",
+          "1",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_NUMEQUALVERIFY",
+          "OP_ELSE",
+          "OP_DUP",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_ENDIF",
+          "0x73696d706c65737477616c6c65742f73656e642f7631",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTOUTPOINT",
+          "4",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_CAT",
+          "OP_SWAP",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_OVER",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_FROMALTSTACK",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_SWAP",
+          "OP_0NOTEQUAL",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUM2BIN",
+          "OP_SWAP",
+          "OP_CAT",
+          "OP_SHA256",
+          "OP_CAT",
+          "OP_SHA256",
+          "<owner>",
+          "32",
+          "OP_RIGHT",
+          "OP_CHECKSIGFROMSTACK"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "send",
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:send>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "withdraw",
+      "arkade": {
+        "inputs": [
+          {
+            "name": "validUntil",
+            "type": "int"
+          },
+          {
+            "name": "amount",
+            "type": "int"
+          },
+          {
+            "name": "change",
+            "type": "int"
+          },
+          {
+            "name": "sig",
+            "type": "bytes"
+          }
+        ],
+        "asm": [
+          "OP_DUP",
+          "OP_CHECKTIME",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_TOALTSTACK",
+          "0x74797065",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "0x7265676973746572",
+          "OP_EQUALVERIFY",
+          "0x6f6e636861696e5f6f75747075745f696e6465786573",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "2",
+          "OP_PICK",
+          "OP_0NOTEQUAL",
+          "OP_IF",
+          "0x5b325d",
+          "OP_ELSE",
+          "0x5b315d",
+          "OP_ENDIF",
+          "OP_EQUALVERIFY",
+          "OP_INSPECTNUMOUTPUTS",
+          "2",
+          "OP_PICK",
+          "OP_0NOTEQUAL",
+          "2",
+          "OP_ADD",
+          "OP_NUMEQUALVERIFY",
+          "OP_OVER",
+          "OP_0NOTEQUAL",
+          "OP_IF",
+          "0x636f7369676e6572735f7075626c69635f6b6579732e30",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_VERIFY",
+          "<DELEGATE_KEY>",
+          "OP_EQUALVERIFY",
+          "0x636f7369676e6572735f7075626c69635f6b6579732e31",
+          "OP_INSPECTINTENTMESSAGE",
+          "OP_NOT",
+          "OP_VERIFY",
+          "OP_DROP",
+          "0",
+          "1",
+          "0",
+          "OP_TUNNEL",
+          "OP_VERIFY",
+          "OP_OVER",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_DUP",
+          "2",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_NUMEQUALVERIFY",
+          "OP_ELSE",
+          "OP_DUP",
+          "1",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_LESSTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_ENDIF",
+          "0x73696d706c65737477616c6c65742f77697468647261772f7631",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTOUTPOINT",
+          "4",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_CAT",
+          "OP_SWAP",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_OVER",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_FROMALTSTACK",
+          "8",
+          "OP_NUM2BIN",
+          "OP_CAT",
+          "OP_SWAP",
+          "OP_0NOTEQUAL",
+          "OP_1ADD",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUM2BIN",
+          "OP_SWAP",
+          "OP_CAT",
+          "OP_SHA256",
+          "OP_CAT",
+          "OP_SHA256",
+          "<owner>",
+          "32",
+          "OP_RIGHT",
+          "OP_CHECKSIGFROMSTACK"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "withdraw",
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:withdraw>",
+            "OP_CHECKSIG"
+          ],
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

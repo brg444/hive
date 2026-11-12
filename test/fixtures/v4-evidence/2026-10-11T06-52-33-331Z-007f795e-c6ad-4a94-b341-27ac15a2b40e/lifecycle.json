@@ -1,0 +1,756 @@
+{
+  "schema": "buzzpool-lifecycle/v4",
+  "status": "passed",
+  "network": "regtest",
+  "pool": {
+    "treasuryAddress": "tark1qr340xg400jtxat9hdd0ungyu6s05zjtdf85uj9smyzxshf98ndah4xgukc2eawetue577vtz2vvnjsxd83y9tc9n6lkty6rfsdqt29rsfr87f",
+    "treasuryScript": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3",
+    "stewardKeys": [
+      "0329df62588bac22ff14d2fa84e7d0bee9f554c3e663a891956d42fb1052c3da7f",
+      "0291030a8ce0f36925264404098c749f9e6f33811aba6734fcfe3bb54eefe6acdc",
+      "02f8d9cbb371b0ec6ce86b9d2b6be95a0f2a765db101953344aa10de335668b3fb"
+    ],
+    "pairKeys": {
+      "12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+      "01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+      "02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b"
+    },
+    "renewal": {
+      "windowSeconds": 1200,
+      "maxFeeSats": 2000
+    },
+    "renewalWatch": {
+      "templateId": "de178deecefb842a4e858a2cfd268b5bcf30386e26a8a7e1111b52bbb5047745",
+      "delegationId": "93"
+    },
+    "lightningAddress": null
+  },
+  "operator": {
+    "keys": {
+      "server": "02e35799157be4b37565bb5afe4d04e6a0fa0a4b6a4f4e48b0d904685d253cdbdb",
+      "emulator": "02999413c46fa10ada5cbc4bcc79a1d09160c2ba3cfc812705d7a13e5e545fb2a9",
+      "delegate": "025f9044ac8efd30c13c0bf8a57bdc8f8394197bede48800d3d058b89243c5c72a"
+    },
+    "info": {
+      "network": "regtest",
+      "signerPubkey": "02e35799157be4b37565bb5afe4d04e6a0fa0a4b6a4f4e48b0d904685d253cdbdb",
+      "checkpointTapscript": "03030040b27520edc5eaefe4d006efe50a24491c0590ef6b2a12287f276fdf4dbb9530130837a2ac",
+      "unilateralExitDelay": 1024,
+      "boardingExitDelay": 2048,
+      "dust": 330
+    }
+  },
+  "provider": {
+    "cardId": "9b90a0c0d51fe6d06d7d1e8312b6ba04432fc5441e2c78cae5dc87337341bf30",
+    "payoutAddress": "tark1qr340xg400jtxat9hdd0ungyu6s05zjtdf85uj9smyzxshf98ndak9j7mgkfxkmrnvspkpdmn5kjnzlgmp5yefzfg68y9vj336wpajdtxqt7sc",
+    "payoutScript": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab",
+    "payoutOwner": "02368af72b2a404da2c7560b3f6a1cf8cabe05d10cdf3d06510f881512fc034f6b",
+    "payoutWallet": {
+      "renewalWindowSeconds": 1200,
+      "maxFeeSats": 2000
+    }
+  },
+  "model": "local-gguf/sha256-847545e60c92b0f0",
+  "treasuryFunding": {
+    "txid": "c01da8b72f875e1fdcca2c7544b3f3094166cf1c6674ddd5583816f0d264d992",
+    "vout": 1,
+    "amount": 60000,
+    "script": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3",
+    "createdAt": 1791701563,
+    "expiresAt": 1791705658,
+    "isSpent": false,
+    "isSwept": false,
+    "isPreconfirmed": true,
+    "spentBy": "",
+    "settledBy": "",
+    "arkTxid": "",
+    "commitmentTxids": [
+      "25f6de084f528dd5d815bb770b74fed7fd0128faea11300a1553d6c598bb18cf"
+    ]
+  },
+  "escrows": {
+    "paid": {
+      "quote": {
+        "body": {
+          "capSats": "30000",
+          "emulatorKey": "999413c46fa10ada5cbc4bcc79a1d09160c2ba3cfc812705d7a13e5e545fb2a9",
+          "exitDelaySeconds": "1024",
+          "inputRateMsatPerMillionTokens": "30000000000",
+          "model": "local-gguf/sha256-847545e60c92b0f0",
+          "network": "regtest",
+          "operatorKey": "e35799157be4b37565bb5afe4d04e6a0fa0a4b6a4f4e48b0d904685d253cdbdb",
+          "outputRateMsatPerMillionTokens": "60000000000",
+          "pair": "arkade:BTC->compute:METERED_INFERENCE",
+          "payerReceiptKey": "27e71c20b69b0fe78c289db0193735d2b9c6b08aedbf8691fa72de8d44912f06",
+          "profile": "buzzpool-metered/v2",
+          "providerPayoutScript": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab",
+          "providerRfqKey": "b90a8a95f8d082e34d3d8b3011b7e8cbbc37edc667373fe76f5d49697efb0f18",
+          "providerWorkloadKey": "0d77f2c39989d2e5b048a504f36243de69fd5218c4615aec362437250d110087",
+          "quoteExpiresAt": "1791701864",
+          "quoteNonce": "9c6e5e1b53fc2a000a906399bc0046ed364121c9154d2ab0622108b22c1d6d19",
+          "requestId": "ddae5eb6d41d7cc3ad7968d03ff774dcd82c7e2d5c177b9d9fd348d1041575f1",
+          "stewardPairKeys": [
+            "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+            "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+            "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413"
+          ],
+          "timeoutAt": "1791702044",
+          "treasuryScript": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+        },
+        "quoteId": "dfd07c87d0c9d137573f82556fc130ecacbbe635722c3d7540cfe7437de36565",
+        "signature": "312643dc721621e8c693c8e67777303b98b5528e7a6573917692874ca9ba3147624651ac6cd5eb5c516595df3bfe5226fd0a8d905a71a559dec0e089e75b9ec6"
+      },
+      "coin": {
+        "txid": "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2",
+        "vout": 1,
+        "amountSats": 30000,
+        "expiresAt": 1791705658
+      },
+      "pair": "01"
+    },
+    "unpaid": {
+      "quote": {
+        "body": {
+          "capSats": "10000",
+          "emulatorKey": "999413c46fa10ada5cbc4bcc79a1d09160c2ba3cfc812705d7a13e5e545fb2a9",
+          "exitDelaySeconds": "1024",
+          "inputRateMsatPerMillionTokens": "30000000000",
+          "model": "local-gguf/sha256-847545e60c92b0f0",
+          "network": "regtest",
+          "operatorKey": "e35799157be4b37565bb5afe4d04e6a0fa0a4b6a4f4e48b0d904685d253cdbdb",
+          "outputRateMsatPerMillionTokens": "60000000000",
+          "pair": "arkade:BTC->compute:METERED_INFERENCE",
+          "payerReceiptKey": "27e71c20b69b0fe78c289db0193735d2b9c6b08aedbf8691fa72de8d44912f06",
+          "profile": "buzzpool-metered/v2",
+          "providerPayoutScript": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab",
+          "providerRfqKey": "b90a8a95f8d082e34d3d8b3011b7e8cbbc37edc667373fe76f5d49697efb0f18",
+          "providerWorkloadKey": "0d77f2c39989d2e5b048a504f36243de69fd5218c4615aec362437250d110087",
+          "quoteExpiresAt": "1791701864",
+          "quoteNonce": "eea63867fe7afdfd61b80be337f6dfb6465be6e4d2f026e3013683457f7f2277",
+          "requestId": "1bd9ae6b9a5beb9d3ae5dd072e65045577091d386e0431ccddd0ba0cb1877f6f",
+          "stewardPairKeys": [
+            "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+            "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+            "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413"
+          ],
+          "timeoutAt": "1791701924",
+          "treasuryScript": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+        },
+        "quoteId": "2e62a9e5c29f946e8b712a6c9edc8ef0a46f10740d7497964ac3e4323fb9fd6b",
+        "signature": "18fea08f08b44c1380b52947c1e4b17a3e1570880713193b98c1b2b6b3c0c8309b56448c76251991d760dd15242cd67351a187c6b6f139a9db8e180c3e6e26ed"
+      },
+      "coin": {
+        "txid": "2e4c09b96f1a539e546f58ca89dd23d856a16488b295f59ef79ed33403cd238e",
+        "vout": 1,
+        "amountSats": 10000,
+        "expiresAt": 1791705658
+      },
+      "pair": "02"
+    }
+  },
+  "inferences": [
+    {
+      "sha256": "3b3df34da2e4dbc24e3a5a613b9a07f09934e01af5aae9f9707a9ad8b8037fd0",
+      "contentType": "application/json",
+      "amountSats": "930",
+      "requestId": "65093eb869ab2752dda28fbd74d50fc1cdd9c0dc9874a573dff9056eb68ac24c"
+    },
+    {
+      "sha256": "c0b29fb78bbac9272c225ec85303fd61b179c470662cad1600409d5466f04310",
+      "contentType": "text/event-stream",
+      "amountSats": "1860",
+      "requestId": "7304c19dc6c5626ea309237eda6bd8fc30bb5ba2a1b32b70328cc93633f47fb7"
+    }
+  ],
+  "replay": {
+    "usageChanged": false,
+    "receiptsChanged": false,
+    "latest": {
+      "frozen": false,
+      "latestReceipt": {
+        "escrowId": "dfd07c87d0c9d137573f82556fc130ecacbbe635722c3d7540cfe7437de36565",
+        "amountSats": "1860",
+        "signature": "894f48b2256aa861143ef7d7bfe669bdca8f6fe3b02d79cbfa6ca4afe98016fff1a642d1a18f7ac378f60cafa1ada5078be1372a2f6af3fd11f81d5cf10a93d7"
+      },
+      "cumulativeInputTokens": "42",
+      "cumulativeOutputTokens": "10",
+      "sequence": "2"
+    }
+  },
+  "closeDecision": {
+    "schema": "buzzpool-close-decision/v4",
+    "escrowId": "dfd07c87d0c9d137573f82556fc130ecacbbe635722c3d7540cfe7437de36565",
+    "receipt": {
+      "escrowId": "dfd07c87d0c9d137573f82556fc130ecacbbe635722c3d7540cfe7437de36565",
+      "amountSats": "1860",
+      "signature": "894f48b2256aa861143ef7d7bfe669bdca8f6fe3b02d79cbfa6ca4afe98016fff1a642d1a18f7ac378f60cafa1ada5078be1372a2f6af3fd11f81d5cf10a93d7"
+    },
+    "cumulativeInputTokens": "42",
+    "cumulativeOutputTokens": "10"
+  },
+  "fundings": {
+    "paid": [
+      {
+        "status": "done",
+        "txid": "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2",
+        "arkTxid": "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2",
+        "attempts": [
+          {
+            "route": "self",
+            "at": 1791701570981,
+            "result": "accepted",
+            "reference": "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2"
+          }
+        ],
+        "plan": {
+          "account": "treasury",
+          "pair": "01",
+          "coins": [
+            {
+              "txid": "c01da8b72f875e1fdcca2c7544b3f3094166cf1c6674ddd5583816f0d264d992",
+              "vout": 1,
+              "amount": 60000,
+              "script": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+            }
+          ],
+          "templateId": "e7a29873c1e7de7a2131bdbcf72b8637f64ab2a7a43cfd44c73a723c6ae63055",
+          "variables": {
+            "pair01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+            "pair02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+            "pair12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+            "exit_delay": "020040",
+            "renewal_window": "b004",
+            "max_fee": "d007",
+            "amount": "3075",
+            "change": "3075",
+            "valid_until": "6333cb6a",
+            "dest": "5120e04039dfc38b0b6e76171d9529817dc6a8e955ab653a77dcc1a79ca00f1239c1"
+          },
+          "amount": 30000,
+          "change": 30000,
+          "validUntil": 1791701859,
+          "destination": "5120e04039dfc38b0b6e76171d9529817dc6a8e955ab653a77dcc1a79ca00f1239c1"
+        },
+        "attestations": [
+          "f96f6de19e12d0c00650178706d4fe7b4dc2de3443789468cdda2efea0e16b80cf07b450999a2bdca7b9911b7b15405903a9b605e5fcf21c992369f5e3ef2867"
+        ],
+        "request": {
+          "templateId": "e7a29873c1e7de7a2131bdbcf72b8637f64ab2a7a43cfd44c73a723c6ae63055",
+          "variables": {
+            "pair01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+            "pair02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+            "pair12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+            "exit_delay": "020040",
+            "renewal_window": "b004",
+            "max_fee": "d007",
+            "amount": "3075",
+            "change": "3075",
+            "valid_until": "6333cb6a",
+            "dest": "5120e04039dfc38b0b6e76171d9529817dc6a8e955ab653a77dcc1a79ca00f1239c1",
+            "sig_0": "f96f6de19e12d0c00650178706d4fe7b4dc2de3443789468cdda2efea0e16b80cf07b450999a2bdca7b9911b7b15405903a9b605e5fcf21c992369f5e3ef2867"
+          },
+          "outpoints": [
+            "c01da8b72f875e1fdcca2c7544b3f3094166cf1c6674ddd5583816f0d264d992:1"
+          ],
+          "expiresAt": 1791701859,
+          "pubkey": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+          "signature": "499cd07a7894247d5ab5eb241dcd4e50e52e33b1447fb4885809dd355631848f985ec4e03b06878e79a92918200191908cbe87900bf543e4df257ac11281ead5"
+        }
+      }
+    ],
+    "unpaid": [
+      {
+        "status": "done",
+        "txid": "2e4c09b96f1a539e546f58ca89dd23d856a16488b295f59ef79ed33403cd238e",
+        "arkTxid": "2e4c09b96f1a539e546f58ca89dd23d856a16488b295f59ef79ed33403cd238e",
+        "attempts": [
+          {
+            "route": "self",
+            "at": 1791701578118,
+            "result": "accepted",
+            "reference": "2e4c09b96f1a539e546f58ca89dd23d856a16488b295f59ef79ed33403cd238e"
+          }
+        ],
+        "plan": {
+          "account": "treasury",
+          "pair": "02",
+          "coins": [
+            {
+              "txid": "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2",
+              "vout": 0,
+              "amount": 30000,
+              "script": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+            }
+          ],
+          "templateId": "488a0f81c898a15c81c0956f6f05da143d4ef4f3da02c2f9f632a6f091a4382b",
+          "variables": {
+            "pair01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+            "pair02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+            "pair12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+            "exit_delay": "020040",
+            "renewal_window": "b004",
+            "max_fee": "d007",
+            "amount": "1027",
+            "change": "204e",
+            "valid_until": "6333cb6a",
+            "dest": "5120150af23348919a6ce7a55dbec2e6bb9c10385867a7c2de51fc2fbc93c558d46e"
+          },
+          "amount": 10000,
+          "change": 20000,
+          "validUntil": 1791701859,
+          "destination": "5120150af23348919a6ce7a55dbec2e6bb9c10385867a7c2de51fc2fbc93c558d46e"
+        },
+        "attestations": [
+          "f62f8d7690e25eb3d5eba0589bde330771ff5094a57b7aaf10201949d740c5ec6df0cf571b7ff0b0403086c8431d5df4af25352ebcecc55e506b6c377732a832"
+        ],
+        "request": {
+          "templateId": "488a0f81c898a15c81c0956f6f05da143d4ef4f3da02c2f9f632a6f091a4382b",
+          "variables": {
+            "pair01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+            "pair02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+            "pair12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+            "exit_delay": "020040",
+            "renewal_window": "b004",
+            "max_fee": "d007",
+            "amount": "1027",
+            "change": "204e",
+            "valid_until": "6333cb6a",
+            "dest": "5120150af23348919a6ce7a55dbec2e6bb9c10385867a7c2de51fc2fbc93c558d46e",
+            "sig_0": "f62f8d7690e25eb3d5eba0589bde330771ff5094a57b7aaf10201949d740c5ec6df0cf571b7ff0b0403086c8431d5df4af25352ebcecc55e506b6c377732a832"
+          },
+          "outpoints": [
+            "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2:0"
+          ],
+          "expiresAt": 1791701859,
+          "pubkey": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+          "signature": "9dca6d0238a0d3f07fd8b40ab22687cb8f0e4ce8ac063381e08607241f50b40aa3ca08c789e22274bc91ae38c7d51fa2206d6937ff313464bcf3516a1356e03b"
+        }
+      }
+    ]
+  },
+  "claimRegistrations": [],
+  "claim": {
+    "escrowId": "dfd07c87d0c9d137573f82556fc130ecacbbe635722c3d7540cfe7437de36565",
+    "amountSats": 1860,
+    "claimSignature": "b98db0730801d4a2321711a5aabc555c3dd72c89a6a4af2799a7b76d1adb9a3ec5463ccf4e0a91272f05a0a0349d9f2f5cdffd982d8b2542e9724739bd64f0d5",
+    "submissions": [
+      {
+        "at": "2026-10-11T06:53:04.807Z",
+        "route": "self",
+        "result": "accepted"
+      }
+    ],
+    "txid": "146a90b50362ad5cc2d9692c865060d417d3faa38372361facbee568ee953d85",
+    "paidSats": 1860
+  },
+  "refund": {
+    "txid": "2d83585b5b446ea4269bc3cab90badd8cb263c41176b3f8a5af06ca8335e3227",
+    "treasurySats": 10000,
+    "executedBy": "watch"
+  },
+  "cashout": null,
+  "withdrawal": [
+    {
+      "status": "done",
+      "txid": "92e3cc5ced76f696a56dc475abcaf39a96428b950e50bee2f2c98c88958e135d",
+      "arkTxid": "92e3cc5ced76f696a56dc475abcaf39a96428b950e50bee2f2c98c88958e135d",
+      "attempts": [
+        {
+          "route": "delegatee",
+          "at": 1791701934663,
+          "result": "accepted",
+          "reference": "6a6765bf9a0d98a38996f2a9b4742abd7dc79f27a1fa453878b6c5058b14face"
+        }
+      ],
+      "plan": {
+        "account": "treasury",
+        "pair": "12",
+        "coins": [
+          {
+            "txid": "146a90b50362ad5cc2d9692c865060d417d3faa38372361facbee568ee953d85",
+            "vout": 1,
+            "amount": 28140,
+            "script": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+          }
+        ],
+        "templateId": "b16045eee555f6ee89299032ddc6671d7e0c3d136ee2ec2134175d33fce87b0d",
+        "variables": {
+          "pair01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+          "pair02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+          "pair12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+          "exit_delay": "020040",
+          "renewal_window": "b004",
+          "max_fee": "d007",
+          "amount": "8813",
+          "change": "645a",
+          "valid_until": "ff35cb6a",
+          "dest": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab"
+        },
+        "amount": 5000,
+        "change": 23140,
+        "validUntil": 1791702527,
+        "destination": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab"
+      },
+      "request": {
+        "templateId": "b16045eee555f6ee89299032ddc6671d7e0c3d136ee2ec2134175d33fce87b0d",
+        "variables": {
+          "pair01": "b0d91376a04bdaaae73f888d41e561ebe63d28a084ec6b6610aabc5d1c1d3344",
+          "pair02": "5a3fa097770f33425f29b64707c9c6d40845d9095335a7af04a9e3e58dfb0e6b",
+          "pair12": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+          "exit_delay": "020040",
+          "renewal_window": "b004",
+          "max_fee": "d007",
+          "amount": "8813",
+          "change": "645a",
+          "valid_until": "ff35cb6a",
+          "dest": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab",
+          "sig_0": "b6ca622b8aff17e33c4a1b75935ab4c1a4b100ec61183938c30d691c3f6419deab256d22415939b5977571fffd04e173f68e84ec2745454b26943505bfb7c01b"
+        },
+        "outpoints": [
+          "146a90b50362ad5cc2d9692c865060d417d3faa38372361facbee568ee953d85:1"
+        ],
+        "expiresAt": 1791702527,
+        "pubkey": "e98b7d7f2361a8a1e2c27d6e528a91cc570898ebff0544e8122a2498a3e29413",
+        "signature": "efd2270f694c7d566b90c12a3a60e00673be982f7d705d155f93571df5255dc32c278d9b8a2781e15ba520179f8e6254b44b3f6f3ea58047e7a4c3e859c5f358"
+      }
+    }
+  ],
+  "sweep": [
+    {
+      "status": "done",
+      "txid": "0444d7186e6d412249b0c5c0eb853c6c833c8de718b4d38b3c6f645a996f4197",
+      "arkTxid": "0444d7186e6d412249b0c5c0eb853c6c833c8de718b4d38b3c6f645a996f4197",
+      "attempts": [
+        {
+          "route": "self",
+          "at": 1791701935861,
+          "result": "accepted",
+          "reference": "0444d7186e6d412249b0c5c0eb853c6c833c8de718b4d38b3c6f645a996f4197"
+        }
+      ],
+      "plan": {
+        "account": "wallet",
+        "coins": [
+          {
+            "txid": "92e3cc5ced76f696a56dc475abcaf39a96428b950e50bee2f2c98c88958e135d",
+            "vout": 1,
+            "amount": 5000,
+            "script": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab"
+          },
+          {
+            "txid": "146a90b50362ad5cc2d9692c865060d417d3faa38372361facbee568ee953d85",
+            "vout": 0,
+            "amount": 1860,
+            "script": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab"
+          }
+        ],
+        "templateId": "90833af35f1a636a78ed1ca5ef4909d6dfa2aa6eb0fe201bc7bc7e0efa05bbc7",
+        "variables": {
+          "owner": "02368af72b2a404da2c7560b3f6a1cf8cabe05d10cdf3d06510f881512fc034f6b",
+          "exit_delay": "020040",
+          "renewal_window": "b004",
+          "max_fee": "d007",
+          "amount": "cc1a",
+          "change": "",
+          "valid_until": "b73acb6a",
+          "dest": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+        },
+        "amount": 6860,
+        "change": 0,
+        "validUntil": 1791703735,
+        "destination": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3"
+      },
+      "request": {
+        "templateId": "90833af35f1a636a78ed1ca5ef4909d6dfa2aa6eb0fe201bc7bc7e0efa05bbc7",
+        "variables": {
+          "owner": "02368af72b2a404da2c7560b3f6a1cf8cabe05d10cdf3d06510f881512fc034f6b",
+          "exit_delay": "020040",
+          "renewal_window": "b004",
+          "max_fee": "d007",
+          "amount": "cc1a",
+          "change": "",
+          "valid_until": "b73acb6a",
+          "dest": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3",
+          "sig_0": "7139395a59d7d12f13968c6ffb235a1b82a1eabae738df7f6067470ad84424aec22899c766bb9b50c8154f225d5238322c0e197620e1d6321dc1402e835aa770",
+          "sig_1": "221074af5e3e7fbcedabf30e3f5e30d730060454ab06738d2b39f408081bd26947d16e4f4e90aa81646cda12805f55818d9f820b2a891048983d9cce11a6d55e"
+        },
+        "outpoints": [
+          "92e3cc5ced76f696a56dc475abcaf39a96428b950e50bee2f2c98c88958e135d:1",
+          "146a90b50362ad5cc2d9692c865060d417d3faa38372361facbee568ee953d85:0"
+        ],
+        "expiresAt": 1791703735,
+        "pubkey": "368af72b2a404da2c7560b3f6a1cf8cabe05d10cdf3d06510f881512fc034f6b",
+        "signature": "d90f29f13f11fce977e3eb1682254b8d782b42758eb5cae937539e81be51cd7b605881301e7079b29bc81feadae9cf4b0770eadbe21cbc1190649f7c64d6bc9f"
+      }
+    }
+  ],
+  "renewals": [],
+  "renewalFees": 0,
+  "balances": {
+    "treasurySats": 60000,
+    "providerWalletSats": 0,
+    "paidEscrowSats": 0,
+    "unpaidEscrowSats": 0
+  },
+  "treasuryWatch": {
+    "status": "active",
+    "attempts": []
+  },
+  "view": {
+    "schema": "buzzpool-pool-view/v4",
+    "generatedAt": "2026-10-11T06:58:56.935Z",
+    "treasury": {
+      "address": "tark1qr340xg400jtxat9hdd0ungyu6s05zjtdf85uj9smyzxshf98ndah4xgukc2eawetue577vtz2vvnjsxd83y9tc9n6lkty6rfsdqt29rsfr87f",
+      "script": "5120d4c8e5b0acf5d95f334f798b1298c9ca0669e242af059ebf6593434c1a05a8a3",
+      "lightningAddress": null,
+      "balanceSats": 60000,
+      "coins": [
+        {
+          "txid": "0444d7186e6d412249b0c5c0eb853c6c833c8de718b4d38b3c6f645a996f4197",
+          "vout": 0,
+          "amountSats": 6860,
+          "expiresAt": "2026-10-11T08:00:58.000Z"
+        },
+        {
+          "txid": "92e3cc5ced76f696a56dc475abcaf39a96428b950e50bee2f2c98c88958e135d",
+          "vout": 0,
+          "amountSats": 23140,
+          "expiresAt": "2026-10-11T08:00:58.000Z"
+        },
+        {
+          "txid": "2d83585b5b446ea4269bc3cab90badd8cb263c41176b3f8a5af06ca8335e3227",
+          "vout": 0,
+          "amountSats": 10000,
+          "expiresAt": "2026-10-11T08:00:58.000Z"
+        },
+        {
+          "txid": "2e4c09b96f1a539e546f58ca89dd23d856a16488b295f59ef79ed33403cd238e",
+          "vout": 0,
+          "amountSats": 20000,
+          "expiresAt": "2026-10-11T08:00:58.000Z"
+        }
+      ]
+    },
+    "contributions": [
+      {
+        "txid": "c01da8b72f875e1fdcca2c7544b3f3094166cf1c6674ddd5583816f0d264d992",
+        "vout": 1,
+        "amountSats": 60000,
+        "createdAt": "2026-10-11T06:52:43.000Z",
+        "expiresAt": "2026-10-11T08:00:58.000Z",
+        "spent": true,
+        "rail": "direct"
+      },
+      {
+        "txid": "0444d7186e6d412249b0c5c0eb853c6c833c8de718b4d38b3c6f645a996f4197",
+        "vout": 0,
+        "amountSats": 6860,
+        "createdAt": "2026-10-11T06:58:55.000Z",
+        "expiresAt": "2026-10-11T08:00:58.000Z",
+        "spent": false,
+        "rail": "direct"
+      }
+    ],
+    "renewals": [],
+    "escrows": [
+      {
+        "escrowId": "dfd07c87d0c9d137573f82556fc130ecacbbe635722c3d7540cfe7437de36565",
+        "model": "local-gguf/sha256-847545e60c92b0f0",
+        "providerPayoutScript": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab",
+        "capSats": 30000,
+        "timeoutAt": "2026-10-11T07:00:44.000Z",
+        "address": "tark1qr340xg400jtxat9hdd0ungyu6s05zjtdf85uj9smyzxshf98ndahczq880u8zctdempw8v49xqhm34ga926kef6wlwvrfuu5q83ywwpgu5fdd",
+        "coin": {
+          "txid": "748cf153399cf05ee4ff661078d6efb660e0099542d161ac8438936e09602ce2",
+          "vout": 1,
+          "amountSats": 30000
+        },
+        "status": "claimed",
+        "receipt": {
+          "amountSats": 1860,
+          "signature": "894f48b2256aa861143ef7d7bfe669bdca8f6fe3b02d79cbfa6ca4afe98016fff1a642d1a18f7ac378f60cafa1ada5078be1372a2f6af3fd11f81d5cf10a93d7"
+        },
+        "close": {
+          "kind": "claim",
+          "txid": "146a90b50362ad5cc2d9692c865060d417d3faa38372361facbee568ee953d85",
+          "providerSats": 1860,
+          "treasurySats": 28140
+        }
+      },
+      {
+        "escrowId": "2e62a9e5c29f946e8b712a6c9edc8ef0a46f10740d7497964ac3e4323fb9fd6b",
+        "model": "local-gguf/sha256-847545e60c92b0f0",
+        "providerPayoutScript": "5120165eda2c935b639b201b05bb9d2d298be8d8684ca449468e42b2518e9c1ec9ab",
+        "capSats": 10000,
+        "timeoutAt": "2026-10-11T06:58:44.000Z",
+        "address": "tark1qr340xg400jtxat9hdd0ungyu6s05zjtdf85uj9smyzxshf98ndak9g27ge53yv6dnn62hd7ctnth8qs8pvx0f7zmeglctauj0z434rw8y7nsy",
+        "coin": {
+          "txid": "2e4c09b96f1a539e546f58ca89dd23d856a16488b295f59ef79ed33403cd238e",
+          "vout": 1,
+          "amountSats": 10000
+        },
+        "status": "refunded",
+        "receipt": null,
+        "close": {
+          "kind": "refund",
+          "txid": "2d83585b5b446ea4269bc3cab90badd8cb263c41176b3f8a5af06ca8335e3227",
+          "providerSats": 0,
+          "treasurySats": 10000
+        }
+      }
+    ],
+    "totals": {
+      "contributedSats": 66860,
+      "inEscrowSats": 0,
+      "paidSats": 1860,
+      "refundedSats": 10000
+    }
+  },
+  "runId": "1ee67e3a-2da3-4fd5-8ec6-30d054aa6625",
+  "skipped": 0,
+  "environment": "cloud sandbox regtest stack (arkd v0.9.16, emulator v0.0.8, 4096-second batches) with a local delegatee built from arkade-os/delegatee e8a7390; self execution first; development run, not evidence",
+  "startedAt": "2026-10-11T06:52:33.332Z",
+  "completedAt": "2026-10-11T06:58:56.969Z",
+  "command": "pnpm gate:lifecycle --network regtest --stub-upstream --run 1ee67e3a-2da3-4fd5-8ec6-30d054aa6625",
+  "sourceSha256": {
+    "contracts/v4/boarding.json": "7d747861643a9ebc04ec9eebe38796ad84d3bce6fbf7de7616eb76c8710e9d11",
+    "contracts/v4/escrow.json": "52c208cb80fd7bd8167b45d50255bc9cb1177dc8870a6f1d7f06c8d4c6976201",
+    "contracts/v4/treasury.json": "9ba3ad753d7f92dd976e08eb3e52a2cff41e472881ccd5ca73b483c10b533faa",
+    "contracts/v4/wallet.json": "b21367fb7084760b94f8b19433165112f5003b91f48ba56bf397ec3df467a5c6",
+    "gates/lifecycle.ts": "a136ef785b2b15614278cb60e1bf379e24b7980b024158c9240e08f89e5b8bd7",
+    "gates/refusals.ts": "5b8afa1a1166ee5583eb10c0b09d228ecb567ef3c25422530b30a873e2e50688",
+    "gates/renewal.ts": "bd16be342f98bb99ddf524583fbe69f2897ef747fb93218c7d12850b8261729c",
+    "gates/support/env.ts": "ac15dd42b16e54572b8054bf9408c94770b339d9839be28374ae7a2490d53ada",
+    "gates/support/lightning.ts": "418cb4faa6a2688a864b4e6162c82c9e9c32bdea30c58f2292ca945493620187",
+    "gates/support/mutinynet.ts": "9b8144556c86a2c8800ff784ba30bdb8b284fc55b783d41983ed125d4642f6ff",
+    "gates/support/relay.ts": "83e82249b3b6b9e2549e852185e254a464423651702dcb55a5581ea8c00f670c",
+    "gates/support/run.ts": "9b58a9de31a38fb82bce30dd4d61e75e6b251361ba2f5c7f5e8b57b7eebba5fb",
+    "package.json": "cc180d909704421d440f30b28a14059ca9300a8efcc31f9bfbdb77f9a20f3a2d",
+    "packages/agent/package.json": "a32f16149783af531ca1c0dfcdf508a7900ca80e24276c941961a3585bf8841a",
+    "packages/agent/src/config.ts": "2e4a236be3241cfde355d326ca23d3fdaa15474cc15a49355cbe2c9f089a6f6c",
+    "packages/agent/src/index.ts": "c6446359af5b86ddd4a0d5ac9859230216c632332df6402091b698e859fde2c4",
+    "packages/agent/src/proxy-main.ts": "2b273f1c515112583881eff163938cda8a8f5cb7b5cc9c5fe32fe12ddab1c6da",
+    "packages/agent/src/proxy.ts": "4350202aa3978502100fe6f52e7c06cdb65febee8a90b29ccd0cb2b91123c541",
+    "packages/agent/src/sidecar-client.ts": "58f10fe36a31a9b790f5de68094a70de0580206822e791e8ca553dc74f96bff0",
+    "packages/ark/package.json": "0c00ef65ed84a411f9054e40eb4deac8eb9709814940ab18f42d2213de61d35d",
+    "packages/ark/src/accounts.ts": "85ab75032cf7b612fdf7b265f6f388bb63980a5d34446448f5eb0902958ca151",
+    "packages/ark/src/attest.ts": "8efa194277f693a86e27e37791bdb06ef9f09c3ecd175908d829ead1fc83aa8f",
+    "packages/ark/src/contract.ts": "df2cc36214b74721ee3c3a9e38795a027fe0370de80949af8c87d6faa7c2e42d",
+    "packages/ark/src/covenant.ts": "97bd41f9830a6d7f1dfd1e78a21959744f4bb3bf87583a91d52ef2a508c43bdc",
+    "packages/ark/src/deployment.ts": "58adf4070fd431c657f796bfa45f3bb7571c22c25a20d7b2c3b84bf9f6364abc",
+    "packages/ark/src/emulator-opcodes.json": "543ac0f56184527f813473c3b38bdb3f6c6a62b2ec9ef9a257d52941c9472615",
+    "packages/ark/src/encoding.ts": "6a717f8c2e98fba6dbcc16250952eaa368baae7196c237c57013554643c98f24",
+    "packages/ark/src/index.ts": "4ae66b5cc11df0460659ab3852c82e106a80af2591350d229b97f9a301092ac9",
+    "packages/ark/src/musig.ts": "e41fb30fb527b70dc64779560a692f7aa55719b249d92c320edc78237f6518ad",
+    "packages/ark/src/psbt.ts": "0fb1cc6f2de69551dc5825fd2d06f9749e58213417882ae1013b376fbbc20fc7",
+    "packages/ark/src/services.ts": "dcf58c19f92adf9e0ef6aa44314f1649351f5777899f082b005df8bd47311bdc",
+    "packages/ark/src/spends.ts": "8b10e3594bd53d1c3a57a0a9c1112a2aaed1740de43530a48a79e73e44f862b1",
+    "packages/ark/src/taproot.ts": "6e914d74958a9cf11d74991d61d283b63b6169201c3f7ca85f08e5c0fcb4698a",
+    "packages/ark/src/templates.ts": "680ea76da1086b43e336e711e4a2550db31c5365c3c305f7b57385cc52556896",
+    "packages/ark/src/wallet.ts": "65734a5214015cef41dfc9d7d6395549601cc28a09088627ac62f636c3178200",
+    "packages/ark/test/derivation.test.ts": "0cdd6820ee695c876db0e5e8821190a66c8fce7c7a134a1cc2a845a8d685ff80",
+    "packages/ark/test/encoding.test.ts": "202a861cc4ff2f939570449b265afc7bd5ddce610065c523c649a9a3c1a9eca3",
+    "packages/ark/test/musig.test.ts": "e805ac15801324f02b3fa6b738706309a2cb01a5d32b0214e92a6765c58ece96",
+    "packages/ark/test/vectors/derivations.json": "5a6351fd5b16a9620851c9cfd7204755b1c0c87108e3e263060eead1724e7be6",
+    "packages/ark/test/vectors/spends.json": "483c02e6e743e5f3f690f4aea5afed287871b356df0762d6f1b5f28084562239",
+    "packages/executor/package.json": "5e767cb63fd6167d157e7e79ab748981db2f3e7d947233d55a3811342ca0a3a7",
+    "packages/executor/src/index.ts": "1927c9ae1bc3ceca5c84fd7a7c551a3d3a70bd24c043bde0f68fcac94a3b3aec",
+    "packages/executor/src/router.ts": "7650962be7026f18c5214c1ac7944653284a4f6bcdf367888a4fc4800c4559dc",
+    "packages/executor/src/routes.ts": "9f5df91c486a307396a7c854e380ec48f6f8df263d2d86c4dab6f4b400f19959",
+    "packages/executor/src/spend.ts": "cdd66888149e728fb178f096e4a3eb93461b663b96931f8ab6f19701e98ba316",
+    "packages/executor/test/router.test.ts": "b46f784eb170b80f3092977e15dad31a39afb8b63557adbd969a898cf54f0d5c",
+    "packages/kit/package.json": "ea4a9a0523961033ccaf09d19f331332f3eff4329997457868d0ca3bf9b25d31",
+    "packages/kit/src/bytes.ts": "db682508610c00f2b1aa3594a6fb1e85bc24e41d21304ce7bcd6c19b2f7cce08",
+    "packages/kit/src/checkpoint.ts": "f9eb621057860f3030eb0ef2a271e9c8529766906aa2621f94fb0ceba205d7cf",
+    "packages/kit/src/clock.ts": "1287a7437bfdc851773d37f881cb32218fb2c4a12aa9ed259dc0c35be93950c7",
+    "packages/kit/src/fault.ts": "ef2bafa76aae401d0c43f403d902efdddc6df0937a090513354e667949c01b96",
+    "packages/kit/src/halt.ts": "c966df4a7f4062959e83cc81afb160b5adf1112c7b902d8dd55b767b0df11370",
+    "packages/kit/src/http.ts": "c76b52b00acbf08216bda6ab8ec0191a90c529f295c8d8b718dd9a189c5a68b1",
+    "packages/kit/src/index.ts": "14b77aee7d2f0e1d8e8dd697f1a74e1f7a0c4b058b055bc28fb910a59ed266f7",
+    "packages/kit/src/lock.ts": "936f50b3b3e0ddd56dc5435d1e5d3b635d4a69a35797d2d3a52fa65bee0033d2",
+    "packages/kit/src/schedule.ts": "bbb9456d8d33691f824fbf523fbc9af63db6e06770b0057bd92837720cebc507",
+    "packages/kit/src/state.ts": "369073484eea646125ee95c1d465df000fcbd861edcc4ac7df00eec90094022e",
+    "packages/kit/src/validate.ts": "b04c6f572fa28cb02df3f7b1affe36fa5e3c6ce882819305bbd9516db4a40413",
+    "packages/kit/src/worker.ts": "f339466b8911cbfc9d27423b5210eaf841dd01df4ffd3d69c0e3edf776d1b9e8",
+    "packages/kit/test/fixtures/echo-worker.ts": "f5e306f0faa24e9b3d1413ed781a5da12b28f3ba3cc6c5853de6e45aa600f212",
+    "packages/kit/test/kit.test.ts": "25bcd6e80d8f33d1c5047977732e3a2829ed2be71cbc24da45e327e4c6b257c0",
+    "packages/pool/package.json": "57f31fc8f74a0244694d0b859b595f027949c0ca394c6a762a39ac7650d19bee",
+    "packages/pool/src/claims.ts": "b2802e4f21026d264d894234f05e4c685843e94627720acfefce9a76753cab17",
+    "packages/pool/src/contributions.ts": "b2d7791bf06130474c13ebca85046b12e6a2faa574dfcad7e6ee2052066d3113",
+    "packages/pool/src/index.ts": "08bab72cb99edc1c204b8ad8d88cadb2c08bb378a846bfbcf7c0ad26bd3526e2",
+    "packages/pool/src/intake.ts": "5e48b5664d48ab19e3051f8ae211324a46e7286515fcb7ea02e774f62b6df974",
+    "packages/pool/src/purchase.ts": "a3dc041ddde474ed15810d4958fb4365d3eec8be597bba6fda63055fab6373d8",
+    "packages/pool/src/refund.ts": "caeec76a88e689030334342b8e2bdf1f9ce7a0b35c5b0b177889052bd5046032",
+    "packages/pool/src/rfq.ts": "575832155072aeaeeb9154c907a5e71c106cb80c169c8317b92ed6dcfd95255d",
+    "packages/pool/src/treasury.ts": "c58d624721af898d4a989624dad4daf865de2d93cc5df8870fae96092bd03d4f",
+    "packages/pool/src/view.ts": "d0102c43df7b037abd5a6bdbd8fe51be06b626194614c7b500a2543cf93189a1",
+    "packages/pool/src/withdraw.ts": "27b1f6aa6aabf76a83d0fdbb249b0bccdf402ebbb30a6dfddafb1b7f12a1d8eb",
+    "packages/protocol/package.json": "481600db1d1b77336475555fb6f524d9b8567ba41d85ecccbd2982c77e6eb154",
+    "packages/protocol/src/bolt11.ts": "c2f2704ca1c84c168480112a9d7c9829d4a4043f8890585d253eff2d1113a75e",
+    "packages/protocol/src/canonical.ts": "57166b974479a433e51d0ba5cd37ab26fc1e4a91d3e337d4e5d6c24917249584",
+    "packages/protocol/src/card.ts": "9b008822206b513b8d00b82c12e0afb2bbe25741f7c906f87d50e8774969e9df",
+    "packages/protocol/src/index.ts": "b7f5c8e390cbaf8d938e5e5a82b77a051b2bb0d2895db6301b7262d17889c278",
+    "packages/protocol/src/inference.ts": "63a8fdda80be43a1bde692816b4654ae1c781674c20e85d921a5cada015fd34c",
+    "packages/protocol/src/keys.ts": "fb4970d18cacaf8b3f5ed03da1141dfa9225e5a89f9e32bd896726edffd9361c",
+    "packages/protocol/src/metered.ts": "d9023d7d8515251dc572464d08326ddd30f8d9c9fa3295c4894a6e975a400d8b",
+    "packages/protocol/src/quote.ts": "ce4a085ec3e11f7c51babdc9a9a0003197a76af8c5b62ccc8e533cffc6c81491",
+    "packages/protocol/src/receipt.ts": "94ee2e5ffa1600aef9e595289908668bc08fba309ce0af02447ef2ad0a08025d",
+    "packages/protocol/src/rfq.ts": "7fe71f231b153f16d4afe910640598a4e5afda4c1c095a29b3fc7fa424ecf7f9",
+    "packages/protocol/test/inference.test.ts": "29e98fd04f461c74d849546f1b2ed49350c731049dc653761af88e4641594e29",
+    "packages/protocol/test/metered.test.ts": "d2f86730e12f0827cfc427177378119f3d8c364a28818d2e3ee90939d3f71a12",
+    "packages/protocol/test/rfq.test.ts": "de1dd526fd6e483da5030d1f95ab48285efc046d066863d97d3b97821929ba7a",
+    "packages/protocol/test/vectors.test.ts": "16df7d35034ec2a6cb527adbc02a75667b9e9c32fe900c63dd1673e9ef78e096",
+    "packages/protocol/vectors/protocol.json": "9ae18ca421109f399b95ef3ce506ac9855292e7590825f65d74c70f5f55c12d5",
+    "packages/provider/package.json": "11631d9e30ccc1d0e2ac22e07c9c172a294d7954671806786df667b6b008467e",
+    "packages/provider/src/cashout.ts": "22d24f9716c8048765e2882ad04f19909844aed210f34266134e0c7d1b48b873",
+    "packages/provider/src/challenge-worker.ts": "c55d665e1d000c455a1b6d53c445db21fddc8c97706b45a1969167d25171960f",
+    "packages/provider/src/challenge.ts": "4d3a9e1c279f926123c4f0e367b8425f09e9f06bbe876ec2b3b16632768ad2f8",
+    "packages/provider/src/claim-daemon-main.ts": "28eb3674e03391388572f24fc1b716ac156dfff1de0ed50217f7987415b7a6d8",
+    "packages/provider/src/claim-daemon.ts": "6b6866e243daa091d7687f6c9d45d1434d773f1195ad942ca2acfac8381bf5d3",
+    "packages/provider/src/claim-worker.ts": "4a7a0e6299385b2e204adeb8f8ee65b10e9e53b6683e00b6686a3d59669b6a9f",
+    "packages/provider/src/claim.ts": "a795d2e679225c9dd40228aa1310e3a8d1ad6098b44f4e2890164213a1061603",
+    "packages/provider/src/config.ts": "142a17d1592e1739f8c1b4289b82959976ae193b3117076f2ddfd2790503ce0d",
+    "packages/provider/src/index.ts": "d020b26eb6346171fe6630de0429a64dc869cc26129cc0dc93d19285121196b7",
+    "packages/provider/src/sidecar-main.ts": "41120411da50ff80d3bd3c16b1522b0f25bb39ca5b4c211d6c316f725389342e",
+    "packages/provider/src/sidecar/meter.ts": "f74341f856343fef338f1e116635d37f14d4bdfc1c6435da86926fc04a845170",
+    "packages/provider/src/sidecar/server.ts": "a19abf1c88bffd8591a603169363c426c1a20697ed50b55fe48aeb70baff36d5",
+    "packages/provider/src/sidecar/upstream.ts": "73d99cc774008a9e225f10e2d6aa449ec83bcae04bd570c00dc8ae4347319f86",
+    "packages/provider/src/solver-main.ts": "d0ada207895f1f3b56698b33176b6cdc560d368d996d5f7c3dffcd446febb901",
+    "packages/provider/src/solver.ts": "9093c948b0d327592fd8aa3f9b15e9dbd183c947b7bd13e0348a33da964a232f",
+    "packages/provider/test/provider.test.ts": "b8b4676d3e5ac68d36490a6dd4cf223f82a9c5109338278bb998145b9ac29dcb",
+    "packages/steward/package.json": "98498381388be0cfaa3f7e5f065c683c81162e222a128ca15af50cc72eb56bb6",
+    "packages/steward/src/client.ts": "5c1130560f321f37487706a516f927078a33db4df92310a7fa165f88e56d9ae8",
+    "packages/steward/src/config.ts": "2c19b4646a8d9f15bc7ad2d0182ad734106e7111a944e1c6b94d3bf25c481c1e",
+    "packages/steward/src/index.ts": "c49badea271493fb3ce9aff17bd33928078e40edd8411e667a4cbf15e932f029",
+    "packages/steward/src/pair.ts": "f88534a5ca951b555409c925907ed1b188d67da9a1e5b283ec84aca39f9cdf2c",
+    "packages/steward/src/policy.ts": "f0aa111e8b2c4a28280c7cfb4ca598db225a2eb02ec8b8dc82720f3e1d14eb5b",
+    "packages/steward/src/purpose.ts": "e9080eb47870545d4f4376630b73865d928979404a317cdf8f5c611561dffc07",
+    "packages/steward/src/service.ts": "db35129b3a6e3920d20262b60c93a8f0206fdd919c998e24ef19f41fdb61a0b2",
+    "packages/steward/src/signer.ts": "8816ae3a7923b3618a0e46c7102cbeb53f85331234e09c57ff139f0c4e02ca39",
+    "packages/steward/src/worker.ts": "548d2ea899f0f8ff60d26b071f572d192052db48c3d3bfbc4f8cbe8974b41300",
+    "pnpm-lock.yaml": "8313c3f1a846ce661da4144bf879f4f673aa08bf01f883c2fa2dadbaacc64cfa",
+    "tools/ark-vectors.ts": "50d9d26b02afa2d384f7c22c8ebd4c316fb05d944195ecd1b0f12502b46fbcc0",
+    "tools/audit.ts": "0d12ddcfdb1b2d8d4e6ee4281c53fa21dc8ac8d5fc89fd6d9a5e1192e768b45d",
+    "tools/bootstrap.py": "e1d7ed4564d6b92d8d704988b9de4df34264e2f8a079154d1ca345a56fca9a1b",
+    "tools/delegatee-ref/go.mod": "f79d6c4dd996dd8846d8e874586ae5d308c9f0d9395617eb2f1b8c3c7b87a358",
+    "tools/delegatee-ref/go.sum": "1a973f01b68963922452059713cbc0c3744c8df93f673ea91c50ab6a84f840f2",
+    "tools/delegatee-ref/main.go": "c1cac0ac419d7b4257c35c2ed696252dd48d12d93272803bf6b511e93a2b9b16",
+    "tools/delegatee-ref/protocol.go": "a42db36d92f80c1151a319011211fe87cb3debe1d5df429af113728d9e565d85",
+    "tools/delegatee-ref/spend.go": "f9147d67f2745883bc8f45e6b5559c0c154a23b18fadb322fe67af03442a10ad",
+    "tools/evidence.py": "d4499576623767a07523f20a621f3231961c272ee25d40371e1dbd8c17ccf9b4",
+    "tools/mesh-bootstrap.py": "9dda4f513c7696350169ae6a4f7a9870bad4406d6b318a4757b8f78b1e76d737",
+    "tools/mesh-run.py": "5aaad81b32f113e29b422f4ad5f2af3d417343f3edb1e025208e27280779c0f7",
+    "tools/ops.ts": "2887398df3f37a378faba7da31d20a812ee06e5ad3e2c4196f757bdfd9c98aaf",
+    "tools/protocol-vectors.ts": "1187338369088ccbd7cbd3cd3395a8b583fbe5637d22d29624444924df840b97",
+    "tools/regtest.py": "cb72e33d64fedf16a82c2ba5ebb6227770f903628c1934e34a5543470026c801",
+    "tools/services.ts": "9878a71fe2c7d8e331476bea30b0390150f75734ef55a6411ac58dbe0cf1e8cc",
+    "tools/spend-vectors.ts": "247d54915ff1d7ee18c683dd5c35072019743c239819de6990e0c023d7068d70",
+    "tools/test-evidence.py": "10d709fc9ee38dd5aa0728b8df23de107c6a4dd970994910e0a3513b984d821c",
+    "tsconfig.json": "926aba385a90c7902caabe4a9bc7931686df03de6b1901d32aaacb1a6c2aaeb4"
+  },
+  "limits": [
+    "The delegatee builds and submits every transaction; the pool's keys sign attestations and spend requests only.",
+    "Claims reach the delegatee through a steward pair, which can delay a claim but cannot change it; the escrow refunds at its deadline regardless.",
+    "Usage accounting relies on the upstream's reported usage and the provider's sidecar; it is not a proof of model computation."
+  ]
+}

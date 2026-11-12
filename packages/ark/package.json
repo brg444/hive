@@ -1,0 +1,17 @@
+{
+  "name": "@hive/ark",
+  "version": "4.0.0-dev",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hive/executor": "workspace:*",
+    "@hive/kit": "workspace:*",
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "@scure/base": "2.0.0",
+    "@scure/btc-signer": "2.0.1"
+  }
+}

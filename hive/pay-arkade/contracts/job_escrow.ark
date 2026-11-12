@@ -1,0 +1,104 @@
+pragma arkade ^0.1.0;
+
+// A job escrow holds one job's cap between a hive and a provider.
+// The provider claims what the hive agent's latest receipt says, and the
+// rest returns to the treasury. Unclaimed at the deadline, it returns whole.
+
+contract JobEscrow(
+  // Hive agent key. Signs one cumulative receipt per answer.
+  pubkey agentPk,
+  // Provider key. Signs the claim, and co-signs the unilateral exit.
+  pubkey providerPk,
+  // Where the remainder and an expired escrow go: the treasury's taproot (segwit v1) program.
+  bytes32 treasuryProgram,
+  // Unix seconds, read from the emulator clock.
+  int deadline,
+  // Unique per job, so each job has its own address and its own receipts.
+  bytes32 jobId,
+  // How long before the coin's batch expires the executor may renew it, in seconds.
+  int renewalWindow,
+  // The most a renewal may take from the escrow in fees, in sats.
+  int maxRenewalFee,
+  // The Arkade server's unilateral exit delay (BIP68 sequence), stated so the escrow's script is fully
+  // determined by its arguments.
+  int exitDelay,
+  // The delegate service that renews the escrow before its batch expires (delegate.arkade.money on
+  // mainnet), from a renewal the agent and the provider presign together.
+  pubkey delegatePk,
+  // The MuSig2 aggregate of agentPk and providerPk: one key the two sign with together, since the
+  // delegate service accepts exactly one owner signature.
+  pubkey ownersPk
+) {
+  const int DUST = 330;
+
+  // The covenant checks the receipt and the treasury's share. The matching
+  // tapscript below makes the provider's signature the authorization, so
+  // nobody else can close the job with an older, smaller receipt.
+  // The receipt signature travels as plain bytes so that template tooling, which knows only scalar
+  // covenant inputs, can carry it; the cast below adds no opcodes.
+  function claim(int amount, bytes agentSig) {
+    require(this.activeInputIndex == 0, "escrow first");
+
+    // The receipt binds this job and the cumulative sats owed. It cannot name
+    // the coin: an Arkade spend evaluates a checkpoint built at spend time, so
+    // the outpoint seen here is not one the agent could have signed.
+    let receipt = sha256(jobId + num2bin(amount, 8));
+    require(checkSigFromStack(signature(agentSig), agentPk, receipt), "receipt");
+
+    int locked = tx.input.current.value;
+    require(amount > 0, "nothing owed");
+    // Renewal fees can leave less locked than the receipt owes; the provider then takes it all.
+    int rest = locked - amount;
+
+    // The provider signs this spend, so it chooses where its own share goes.
+    if (rest > DUST) {
+      require(tx.outputs[0].value >= rest, "treasury short");
+      let paidTo = tx.outputs[0].script;
+      require(paidTo.version == 1 && paidTo.program == treasuryProgram, "treasury script");
+    }
+  }
+
+  function claim(signature serverSig, signature providerSig, signature emulatorSig) tapscript {
+    require(checkMultisig([server, providerPk, emulator], [serverSig, providerSig, emulatorSig]));
+  }
+
+  @allow(unsigned-spend-path, "anyone may return the escrow after the deadline, and the output pays the treasury")
+  function expire() {
+    require(tx.numInputs == 1, "escrow alone");
+    require(checkTime(deadline), "not yet");
+    require(tx.outputs[0].value >= tx.input.current.value, "treasury short");
+    let paidTo = tx.outputs[0].script;
+    require(paidTo.version == 1 && paidTo.program == treasuryProgram, "treasury script");
+  }
+
+  // The executor renews the escrow before its batch expires, into the same escrow: the same script and
+  // value less at most maxRenewalFee, in a register intent with no onchain output. The covenant leaves
+  // nothing to choose, so the spend needs no signature from the hive or the provider.
+  @allow(unsigned-spend-path, "renewal recreates this escrow unchanged; only a capped fee leaves it")
+  function renew() {
+    require(checkTime(this.expiry - renewalWindow), "too early to renew");
+    require(tx.intent.field("type") == "register", "register intent");
+    require(tx.intent.field("onchain_output_indexes") == "[]", "offchain only");
+    int out = this.activeInputIndex - 1;
+    require(tx.outputs[out].value + maxRenewalFee >= tx.input.current.value, "fee over cap");
+    require(this.tunnel(out, {script: true, value: false, assets: true}), "same escrow");
+  }
+
+  // The agent and the provider together, through their aggregate key. A delegated renewal's proof is
+  // signed on this path; the agent could already hand the provider the whole cap with a receipt, so it
+  // adds no new trust.
+  function cooperative(signature serverSig, signature ownersSig) tapscript {
+    require(checkMultisig([server, ownersPk], [serverSig, ownersSig]));
+  }
+
+  // The delegated renewal's forfeit: the agent and the provider presign it, the delegate service adds
+  // its signature when it renews the escrow into the same escrow in a new batch.
+  function delegate(signature serverSig, signature ownersSig, signature delegateSig) tapscript {
+    require(checkMultisig([server, ownersPk, delegatePk], [serverSig, ownersSig, delegateSig]));
+  }
+
+  function unilateral(signature agentSig, signature providerSig) tapscript {
+    require(older(exitDelay));
+    require(checkMultisig([agentPk, providerPk], [agentSig, providerSig], 2));
+  }
+}

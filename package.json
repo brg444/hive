@@ -1,0 +1,61 @@
+{
+  "name": "hive",
+  "version": "4.0.0-dev",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 \"packages/*/test/*.test.ts\" \"test/**/*.test.ts\"",
+    "test:unit": "node --import tsx --test \"packages/*/test/*.test.ts\"",
+    "test:integration": "node --import tsx --test --test-concurrency=1 \"test/integration/*.test.ts\"",
+    "mesh:bootstrap": "python3 tools/mesh-bootstrap.py",
+    "mesh:start": "python3 tools/mesh-run.py start",
+    "mesh:stop": "python3 tools/mesh-run.py stop",
+    "ops": "node --experimental-eventsource --import tsx tools/ops.ts",
+    "dev": "tsx watch --clear-screen=false tools/dev.ts",
+    "test:python": "python3 tools/test-evidence.py",
+    "mesh:proof": "python3 tools/mesh-run.py proof",
+    "vectors:check": "tsx tools/ark-vectors.ts --check && tsx tools/spend-vectors.ts --check && tsx tools/protocol-vectors.ts --check",
+    "gate:lifecycle": "node --experimental-eventsource --import tsx gates/lifecycle.ts",
+    "gate:refusals": "node --experimental-eventsource --import tsx gates/refusals.ts",
+    "gate:renewal": "node --experimental-eventsource --import tsx gates/renewal.ts",
+    "gates:offline": "pnpm gate:lifecycle --offline && pnpm gate:refusals --offline && pnpm gate:renewal --offline",
+    "audit:v4": "tsx tools/audit.ts"
+  },
+  "devDependencies": {
+    "@arkade-os/sdk": "0.5.0-rc.18",
+    "@arkade-os/swap": "0.0.24",
+    "@biomejs/biome": "2.5.14",
+    "@hive/agent": "workspace:*",
+    "@hive/ark": "workspace:*",
+    "@hive/executor": "workspace:*",
+    "@hive/kit": "workspace:*",
+    "@hive/hive": "workspace:*",
+    "@hive/protocol": "workspace:*",
+    "@hive/provider": "workspace:*",
+    "@hive/steward": "workspace:*",
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "@scure/btc-signer": "2.0.1",
+    "@types/node": "22.18.10",
+    "@types/ws": "8.18.1",
+    "nostr-tools": "2.25.2",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "ws": "8.18.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "@arkade-os/swap>@arkade-os/sdk": "0.4.78"
+    }
+  }
+}
