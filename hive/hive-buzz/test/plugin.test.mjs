@@ -212,7 +212,7 @@ test("in the hive's channel: proposals draw as cards with live counts, Propose s
     assert.ok(!card.matches({ ...message, channelId: "elsewhere" }), "only in the hive's channel");
     assert.ok(!card.matches({ ...message, content: "a proposal: lunch?" }));
     const cardHtml = renderToString(React.createElement(card.component, { message }));
-    for (const t of ["Translate the docs", "30,000 sats", "Running", "👍 1 · ✅ 2 of 2 keepers", "2,000 sats a day"]) assert.ok(cardHtml.includes(t), `card shows ${t}`);
+    for (const t of ["Translate the docs", "30,000 sats", "Running", "👍 1", "2 of 2 keepers", "2,000 sats a day"]) assert.ok(cardHtml.includes(t), `card shows ${t}`);
 
     // Propose: only in the hive's channel, and it fills the composer with a proposal to complete.
     const [propose] = seen.composer;
@@ -223,11 +223,16 @@ test("in the hive's channel: proposals draw as cards with live counts, Propose s
     assert.equal(seen.accessories[0].placement, undefined, "the status line sits above the composer");
     const line = renderToString(React.createElement(seen.accessories[0].component, { channelId: "chan" }));
     assert.match(line, /1 proposal open, next decision in 23 h/);
-    // Rendering cannot click, so the button the tool returns is captured and its handler called.
+    // Rendering cannot click, so the button the tool returns is captured and its handler called:
+    // Propose opens the form in place of the status line, and Cancel would close it.
     let el;
     renderToString(React.createElement(() => (el = propose.component(toolProps))));
     el.props.onClick();
-    assert.match(inserted, /^Proposal: \nBudget: /);
+    const form = renderToString(React.createElement(seen.accessories[0].component, { channelId: "chan" }));
+    for (const t of ["Propose work to Test Hive", "Purpose and output", "Budget in sats", "Who uses it", "Add to message"]) assert.ok(form.includes(t), `form shows ${t}`);
+    assert.equal(renderToString(React.createElement(seen.accessories[0].component, { channelId: "elsewhere" })), "", "only in the hive's channel");
+    assert.equal(inserted, null, "nothing goes into the message until the form is filled in");
+    el.props.onClick();
 
     // The page: Bob is a member with a node, and the running proposal is for everyone.
     const home = renderToString(React.createElement(seen.pages[0].component, {}));
@@ -252,6 +257,7 @@ test("a keeper hears once about a proposal whose discussion closed without their
     assert.equal(decide.length, 1);
     assert.match(decide[0].title, /“Docs” is ready for keepers/);
     const keepers = renderToString(React.createElement(seen.pages[0].component, { initialTab: "keepers" }));
-    assert.ok(keepers.includes("Keepers (1)"), "the tab counts what waits for this keeper");
+    assert.match(keepers, /Keepers<span[^>]*>1<\/span>/, "the tab counts what waits for this keeper");
+    assert.ok(keepers.includes("Waiting for your decision") && keepers.includes("Needs your decision"));
     seen.cleanups.forEach((stop) => stop());
 });

@@ -1,7 +1,7 @@
 // Proposals as Buzz messages, and the coordinator that reads them with their reactions and replies.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatProposal, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
+import { formatProposal, parseNodeClaim, parseProposal, proposalFromForm } from "../shared/proposal.mjs";
 import { coordinate, membersFile, proposalId } from "../bot/coordinator.mjs";
 import { plan } from "../bot/announce.mjs";
 
@@ -108,4 +108,20 @@ test("the bot announces approvals and declines once, from the governance state",
     assert.deepEqual(first.posts.map((p) => p.key), ["approved:p-1", "declined:p-2"]);
     assert.match(first.posts[0].text, /^Approved: “Docs”, 30,000 sats\. 2 keepers approved it/);
     assert.equal(first.posts[1].text, "Declined: “Avatars”. Outside the hive's purpose.");
+});
+
+test("the Propose form's fields become the same message text, or say what is missing", () => {
+    const { text } = proposalFromForm({ title: " Docs ", purpose: "Translate the docs.\nEvery page.", budget: "30,000", start: "2026-11-15", end: "2026-12-10",
+        who: "everyone", allowance: "2000", work: "", provider: "", report: "A link to the pull request." });
+    const p = parseProposal(text);
+    assert.equal(p.title, "Docs");
+    assert.equal(p.budgetSats, 30000);
+    assert.equal(p.days, 26);
+    assert.equal(p.who, "everyone");
+    assert.equal(p.allowanceSats, 2000);
+    assert.equal(p.purpose, "Translate the docs. Every page.");
+    assert.equal(proposalFromForm({ title: "x", budget: "", purpose: "y" }).problem, "Set a budget in sats.");
+    assert.equal(proposalFromForm({ title: "x", budget: "10", purpose: "y", start: "2026-11-15" }).problem, "Give both dates, or neither for 30 days from approval.");
+    assert.equal(proposalFromForm({ title: "x", budget: "10", purpose: "y", start: "2026-11-15", end: "2026-11-01" }).problem, "The end date comes after the start.");
+    assert.equal(parseProposal(proposalFromForm({ title: "x", budget: "10", purpose: "y" }).text).start, null);
 });

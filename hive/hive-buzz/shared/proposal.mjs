@@ -97,3 +97,30 @@ export function parseNodeClaim(text) {
 export function discussionSeconds(budgetSats, smallSats) {
     return budgetSats < smallSats ? DAY : 2 * DAY;
 }
+
+/**
+ * A proposal from the Propose form's fields, as the message text to send, or the first thing missing.
+ * fields: { title, purpose, budget, start, end, who, allowance, work, provider, report }, all strings
+ * as typed; dates are YYYY-MM-DD and go together.
+ */
+export function proposalFromForm(fields) {
+    const f = (k) => String(fields[k] ?? "").trim();
+    const budgetSats = num(f("budget"));
+    const allowance = f("allowance") ? num(f("allowance")) : null;
+    if (!f("title")) return { text: null, problem: "Give the work a title." };
+    if (!Number.isSafeInteger(budgetSats) || budgetSats <= 0) return { text: null, problem: "Set a budget in sats." };
+    if (!f("purpose")) return { text: null, problem: "Say what the work is for and what it produces." };
+    if (Boolean(f("start")) !== Boolean(f("end"))) return { text: null, problem: "Give both dates, or neither for 30 days from approval." };
+    let start = null, end = null;
+    if (f("start")) {
+        if (!isoDay.test(f("start")) || !isoDay.test(f("end"))) return { text: null, problem: "Dates are YYYY-MM-DD." };
+        start = toUnix(f("start"));
+        end = toUnix(f("end")) + DAY - 1;
+        if (!(end > start)) return { text: null, problem: "The end date comes after the start." };
+    }
+    if (allowance !== null && (!Number.isSafeInteger(allowance) || allowance <= 0)) return { text: null, problem: "A daily allowance is a whole number of sats." };
+    const who = ["me", "everyone", "named"].includes(f("who")) ? f("who") : "me";
+    const text = formatProposal({ title: f("title"), budgetSats, start, end, who, allowanceSats: allowance,
+        purpose: f("purpose").replace(/\s*\n+\s*/g, " "), work: f("work"), provider: f("provider"), report: f("report") });
+    return { text, problem: null };
+}

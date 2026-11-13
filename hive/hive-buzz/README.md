@@ -72,8 +72,11 @@ writes `dist/<id>/manifest.json` and `plugin.js` for that hive. The community ow
 the Buzz desktop app: Settings → Plugins → Manage plugins → Add → Browse, pick that folder, review
 the one network origin it asks for, and install.
 
-In the hive's channel it adds the proposal card, the Propose button and a status line above the
-composer (the treasury, open proposals with the next decision, jobs waiting for keepers). The
+In the hive's channel it adds the proposal card, a status line above the composer (the treasury,
+open proposals with the next decision, jobs waiting for keepers) and a Propose button that opens a
+short form in its place; the form writes the proposal into the message box, and the member sends it.
+It draws with Buzz's own design tokens, so it follows the app's light and dark themes, with Buzz's
+amber for the hive's mark and anything still waiting on the community. The
 hive's page has four tabs: an overview with the treasury, the viewer's allowances and live
 proposals; every proposal; what waits for keepers; and the money, with chip-ins, payouts, jobs and
 providers. It knows the viewer from the community's connection, and it uses Buzz's conversation
@@ -141,6 +144,6 @@ Propose button and the status line, the viewer's allowances, the keepers' notifi
 error state when the hive is unreachable. `test/governance.test.mjs` covers the proposal format and
 the coordinator: support, approval after discussion, declines with reasons, withdrawals, removed
 reactions and the members file. Behind a proxy, set `NODE_USE_ENV_PROXY=1`.
-`node test/preview.mjs <treasury> <token file> <out.html>` renders the page for a screenshot.
+`node test/preview.mjs <out.html> [--buzz-app <block/buzz-app checkout>] [--dark]` renders the proposal card, the status line, the Propose form and the page with sample data, in Buzz's own design tokens when given its checkout, for screenshots.
 
 Not yet exercised: the plugin inside the Buzz app itself, which only runs on desktop.
