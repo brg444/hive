@@ -1,28 +1,87 @@
 # Hive
 
-A group of people gather Bitcoin in a shared treasury, called a hive, and spend
-it on AI inference from independent providers. Members chip in over Lightning
-or by sending to the hive's address. Three keepers they trust approve each job,
-any two of them can fund it, and the provider is paid for exactly the tokens it
-served, against receipts the buyer's agent signs as the responses come back.
-Whatever a job leaves unused goes back to the hive, and a job nobody claims
-returns in full at its deadline without anyone signing.
+Hive is a proof of concept for a Bitcoin treasury that a Buzz community keeps together and spends on
+AI inference served over MeshLLM. Members chip in from any Arkade wallet, propose work in the hive's
+Buzz channel and approve it with reactions. When a member asks the hive's model, the hive's agent
+buys the answer from an independent provider, three keepers chosen by the community hold the
+treasury's keys, and any two of them sign each job's payment from their own devices. The provider
+is paid for exactly the tokens it served, against receipts the agent signs as the answers come back,
+and whatever a job leaves unused goes back to the treasury, at its deadline if nobody claims it,
+with nobody signing.
 
-The repository holds the whole system: the contracts that hold the money, the
-keepers' signing workers, the provider's metering and claim daemon, the
-buyer's receipt proxy, the server and site that host the hives, and the tools
-that run and audit them. It runs on regtest and on Mutinynet, and on mainnet
-for a keepers' hive whose server runs its own delegatee, behind an explicit
-opt-in (see [Networks](#networks)).
+## Status
 
-The `hive/` folder holds the pilot that brings a hive to where its members
-already work. `hive/pay-arkade` is a MeshLLM plugin through which a provider is
-paid per token from an escrow on Arkade, and `hive/hive-buzz` is a Buzz plugin,
-with the read-only service and the bot behind it, that shows a community its
-hive. Each has its own README, and the pilot has run its claim and its
-deadline return on mainnet with small amounts.
+I built this to show that a community treasury paying for AI can be done with Buzz and Arkade, and
+it works: the whole flow, from HiveBot setting a hive up in its channel to a provider paid and the
+remainder back in the treasury, runs end to end on a local regtest stack, with the keepers'
+consoles in a real browser, for a hive whose agent runs on the host as well as for one that brings
+its own node. The escrow behind each job has claimed and returned on mainnet with small amounts.
+The rest has never run end to end on mainnet.
 
-## A job from start to finish
+It is a proof of concept and was built quickly, largely with AI coding tools, so it is vibecoded in
+places. I am not going to keep developing it. If your community wants to take it further, fork it:
+with some dirty work it can run, and with real interest it can grow into something sturdier. Read
+it and test it before trusting it with funds that matter.
+
+The known gaps are the ones you would expect at this stage. Keepers can fund jobs and nothing else,
+so there is no keeper-signed withdrawal, no tooling for the exit path, for replacing a keeper or for
+winding a hive down. The keeper console is reproducible and hashed, though it is not published as a
+signed release. The signing desk answers anyone who asks it, the buyer trusts the usage a provider
+reports for each answer, and member allowances are counted without a lock. Pages and the desk
+rebuild their view from disk on every request, the services run from a git checkout with little
+logging, and CI does not run the test suites. Mainnet sits behind an explicit opt-in, with the
+Operator and Emulator pinned in the code and hard ceilings on escrows, chip-ins and treasury size.
+
+## How it fits together
+
+- **[`hive/hive-buzz`](hive/hive-buzz/README.md)** is the Buzz side: the plugin that draws the hive in
+  its channel (proposals, the treasury, jobs waiting for keepers), HiveBot, which sets a hive up and
+  reports on it, and the keeper console, where keepers make their keys behind a passkey and sign
+  payments.
+- **[`hive/pay-arkade`](hive/pay-arkade/README.md)** is the MeshLLM side: a plugin through which a
+  provider is paid per token from an escrow on Arkade, with the agent signing a receipt after every
+  answer.
+- **The Hive service** (`tools/service.ts`, run with `pnpm ops service`) carries any number of hives
+  for the communities that use it: it reads each hive's channel as members' plugins forward it,
+  builds the treasury from the keepers' keys, runs the signing desk and, if asked, each hive's agent
+  node. It holds no key that moves funds.
+- **The contracts and the signing code** (`packages/`, `contracts/`) hold the money and decide what
+  signatures can move it.
+
+## Running it yourself
+
+[Running Hive for a Buzz community](docs/self-hosting.md) sets up a host (the service, the delegatee
+and the keeper console, with `deploy/setup.sh`), the MeshLLM nodes, and walks one hive from setup to
+a paid job. It also shows how to rehearse the whole flow on a local regtest stack first.
+
+## Getting started
+
+You need Node 22 or later and pnpm 10 (`corepack enable` picks up the pinned
+version). `pnpm vectors:check` also needs Go 1.26, and the MeshLLM tools need
+Python 3.
+
+```bash
+pnpm install
+pnpm check                 # format, lint, typecheck and every test, none skipped
+pnpm dev                   # the site with three sample hives at http://127.0.0.1:8790/
+pnpm gates:offline         # the three gates against the in-memory network
+pnpm audit:v4 --offline    # recheck the evidence those gates wrote
+```
+
+Everything above runs without a network and moves no value. The offline gates
+write under `.local/offline-evidence/`; the lifecycle gate takes about four
+minutes because it waits out an unused escrow's deadline. The Buzz plugin has
+its own tests (`npm install && npm test` in `hive/hive-buzz`), and pay-arkade
+builds and tests with Cargo and Bun as [its README](hive/pay-arkade/README.md)
+describes.
+
+## The foundation
+
+Hive began as a hive hosted on its own website, with chip-ins over Lightning and jobs bought over
+Nostr, and the Buzz and MeshLLM path is built on the same contracts and signing code. That earlier
+system is still here and still tested, and the sections below describe it.
+
+### A job from start to finish
 
 1. **Chip in.** Contributions arrive at the hive's Lightning address or as a
    transfer to its Arkade address. The hive credits a contribution once it
@@ -45,7 +104,7 @@ deadline return on mainnet with small amounts.
 The provider can cash out to any Lightning invoice through a swap solver, or
 sweep its wallet to an Arkade address.
 
-## Safeguards
+### Safeguards
 
 The treasury, every job's escrow and every provider's wallet are Bitcoin
 outputs locked by rules that hold whoever runs the server:
@@ -65,7 +124,7 @@ outputs locked by rules that hold whoever runs the server:
 [How Hive works](docs/system.md) draws the whole flow, from chip-in to
 cash-out.
 
-## Hives and hosts
+### Hives and hosts
 
 One server can host many hives, each at `/h/<hive>/` with its own treasury,
 records, payment requests, claim queue and halt switch. The directory at `/`
@@ -85,25 +144,7 @@ consoles, hours apart if they like. Without `--keepers`, `pnpm ops init` still
 makes all three keys in the operator's checkout, for the gates and for trying
 Hive alone.
 
-## Getting started
-
-You need Node 22 or later and pnpm 10 (`corepack enable` picks up the pinned
-version). `pnpm vectors:check` also needs Go 1.26, and the MeshLLM tools need
-Python 3.
-
-```bash
-pnpm install
-pnpm check                 # format, lint, typecheck and every test, none skipped
-pnpm dev                   # the site with three sample hives at http://127.0.0.1:8790/
-pnpm gates:offline         # the three gates against the in-memory network
-pnpm audit:v4 --offline    # recheck the evidence those gates wrote
-```
-
-Everything above runs without a network and moves no value. The offline gates
-write under `.local/offline-evidence/`; the lifecycle gate takes about four
-minutes because it waits out an unused escrow's deadline.
-
-## Working on the site
+### Working on the site
 
 `pnpm dev` runs the site on your machine with three sample hives, at
 `http://127.0.0.1:8790/` (`--port` picks another). The directory of hives is
@@ -120,7 +161,7 @@ The pages load nothing from other sites, and the server's content policy
 blocks anything that tries. Typefaces live in `app/fonts/` and are served by
 `app/server.ts`, which is also where a new image or file would get its route.
 
-## Running a hive
+### Running a hive
 
 `pnpm ops` runs hives from a checkout on regtest or Mutinynet. Its records go
 under `.local/ops/<hive>/` and its keys under `.secrets/`, both ignored by git.
@@ -140,8 +181,7 @@ under `.local/ops/<hive>/` and its keys under `.secrets/`, both ignored by git.
 | `pnpm ops halt [--hive <hive>] <reason>` / `pnpm ops resume …` | Stops or restarts new jobs and contributions, for one hive or all of them |
 
 [Running Hive](docs/running.md) lists every command and what a test
-network needs, and [the live test](docs/live-test.md) walks a new hive from
-setup to a paid job.
+network needs.
 
 ## Networks
 
@@ -172,11 +212,12 @@ treasury size.
 | `app/` | The server, the directory (`hives.html`), a hive's page (`page.html`) and its typefaces |
 | `contracts/v4/` | The treasury, escrow, wallet and boarding contracts |
 | `gates/` | The lifecycle, refusals and renewal gates |
-| `tools/` | `ops.ts`, the signing desk (`desk.ts`), the local site (`dev.ts`), the audit, the test vector generators and the MeshLLM scripts |
+| `tools/` | `ops.ts`, the Hive service (`service.ts`), the signing desk (`desk.ts`), the agent nodes (`agents.ts`), the local site (`dev.ts`), backups, the audit and the test vector generators |
 | `test/` | Integration and architecture tests over an in-memory network |
-| `docs/` | How the system works, how to run it, the live test, and the agent's API |
+| `docs/` | How the system works, how to run it and host it, and the agent's API |
 | `hive/pay-arkade/` | The MeshLLM payment plugin, its escrow contract and its gates |
-| `hive/hive-buzz/` | The Buzz plugin, the hive's read-only service and its bot |
+| `hive/hive-buzz/` | The Buzz plugin, HiveBot, the keeper console and hive-api |
+| `deploy/` | Setup for a self-hosted host: the service, the delegatee, the console, TLS and backups |
 
 `test/architecture.test.ts` enforces which package may import which.
 

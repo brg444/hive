@@ -11,8 +11,8 @@
  *   POST /c/<channel>/agent/v1/events     a community's own agent node reports its activity
  *   GET  /c/<channel>/agent/v1/members    and fetches the members it may serve
  *
- * The pilot is gated: a hive HiveBot asks for waits until the service's operator approves it
- * (`pnpm ops service-approve <hive>`). From then on nothing needs a person here: once every keeper's
+ * A hive HiveBot asks for waits until the service's operator approves it
+ * (`pnpm ops service-approve <hive>`), so a host carries only the communities it agreed to. From then on nothing needs a person here: once every keeper's
  * key is in, the service builds the treasury from the three keys, and the hive's agent node starts.
  * The service holds no key that moves funds; each keeper's console checks every payment itself.
  *
@@ -214,7 +214,7 @@ export class HiveService {
     return registration;
   }
 
-  /** The operator opens a hive for the pilot. */
+  /** The operator opens a hive HiveBot asked for. */
   async approve(hive: string): Promise<Registration> {
     const files = this.files(hive);
     const registration = readJsonIfPresent<Registration>(files.registration);

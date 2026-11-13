@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sets up a Hive host on Debian 12 or Ubuntu 24.04: the shared service, the delegatee and its
+# Sets up a Hive host on Debian 12 or Ubuntu 24.04: the Hive service, the delegatee and its
 # Postgres database, the keeper console on its own origin, TLS through Caddy, and backups. Run it as
 # root from a checkout of the repository; it copies the checkout to /opt/hive and can be run again
 # after each update.
@@ -10,8 +10,7 @@
 # names, the Emulator's address, the delegatee's admin users and the backup key to be filled in.
 # Point both host names at this server before the second run, so Caddy can obtain certificates.
 #
-# Nothing here turns mainnet on: BUZZ_MAINNET stays commented out in hive.env until Alex enables it
-# for the run.
+# Nothing here turns mainnet on: BUZZ_MAINNET stays commented out in hive.env until you enable it.
 set -eu
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 2; }
 SRC=$(cd "$(dirname "$0")/.." && pwd)

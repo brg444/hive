@@ -37,7 +37,8 @@ On Mutinynet the services are pinned in the code, and every run needs
 `BUZZ_MUTINYNET=approved`. Mainnet needs `BUZZ_MAINNET=enabled` and the
 delegatee the hive's server runs (`DELEGATEE_NETWORK=bitcoin tools/delegatee.sh`),
 named by `BUZZ_DELEGATEE_URL` and `BUZZ_DELEGATE_KEY`; it takes only a keepers'
-hive. [The live test](live-test.md) walks through it.
+hive. [Running Hive for a Buzz community](self-hosting.md) sets up such a server
+and walks a hive from setup to a paid job.
 
 ## Operating a hive
 

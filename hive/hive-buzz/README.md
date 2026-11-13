@@ -14,6 +14,14 @@ Members chip in from their own wallets, and keepers sign each payment in the kee
   exact amount, the escrow address and a link to sign it in the keeper console.
 - **Agents** in the community get a `hive_status` tool that answers from the same data.
 
+## On a Hive service
+
+Most communities will use a Hive service rather than a host of their own: one service carries any
+number of hives, each found by its channel, and one plugin built with `--service` serves them all.
+[Running Hive for a Buzz community](../../docs/self-hosting.md) sets one up and walks a hive from
+setup to a paid job. The sections below describe the pieces, and hive-api, which runs one hive on a
+host of its own.
+
 ## hive-api
 
 `api/` serves `GET /hive/v1/state` from what the hive already has: the agent's pay-arkade event
@@ -166,7 +174,8 @@ page ever signing in anywhere: a save dialog on desktop Chrome and Edge, Save to
 share sheet on phones and Safari, and a plain download elsewhere. It gives the keeper the line to
 post in the hive's channel, `Hive keeper key: <key>`, which ties the key to their Buzz identity.
 
-To sign, a keeper opens the hive's signing desk (`pnpm ops desk`) in the console and unlocks the key
+To sign, a keeper opens the hive's signing desk in the console, on the Hive service or from
+`pnpm ops desk` on a host of its own, and unlocks the key
 with their passkey for one sitting. The console shares nonces for later signatures, keeping their
 secret halves on the device under the same passkey and deleting each before the signature that uses
 it. For each job waiting, it rebuilds the escrow from the job's terms with the hive's own code,
@@ -185,7 +194,7 @@ on one console stay with it. `test/keeper.test.mjs` covers the key handling, and
 `node test/keeper-browser.mjs` runs the page in Chromium with a virtual passkey: creating a key,
 saving its backup, keeping it across a reload and restoring it on another device. The repository's
 `test/keeper-console-e2e.ts` has two keepers sign a payment in their consoles, and
-`test/rehearsal.ts` runs a whole hive on regtest.
+`test/rehearsal-service.ts` runs two whole hives on a Hive service on regtest.
 
 ## The hive's bot
 

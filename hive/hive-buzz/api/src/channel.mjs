@@ -90,7 +90,7 @@ export function governanceFrom(events, cfg, usage = {}) {
         members: Object.fromEntries(Object.entries(result.nodes).map(([k, v]) => [k, { node: v.node }])),
         // Each keeper's treasury key, in the order the keepers were confirmed: the order the treasury is built in.
         keeperKeys: keepers.map((k) => result.keys[k]?.key ?? null),
-        // The community's own agent node, when a keeper named one; the shared service's otherwise.
+        // The community's own agent node, when a keeper named one; the service's own otherwise.
         agentKey: result.agent?.key ?? null,
     };
     return { governance, members: membersFile(result, cfg.model ? { model: cfg.model } : {}) };
