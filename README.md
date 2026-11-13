@@ -1,4 +1,9 @@
-# Hive
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hive-logo-dark.svg">
+    <img alt="Hive" src="docs/images/hive-logo.svg" height="56">
+  </picture>
+</h1>
 
 Hive is a proof of concept for a Bitcoin treasury that a Buzz community keeps together and spends on
 AI inference served over MeshLLM. Members chip in from any Lightning wallet through the hive's
