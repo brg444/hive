@@ -734,7 +734,7 @@ export function apply(ctx) {
                     h("span", { style: { fontWeight: 600, ...tnum, color: r.in ? C.good : C.text } }, `${r.in ? "+" : "−"}${sats(r.sats)}`)))));
     }
 
-    const TABS = [["home", "Overview"], ["proposals", "Proposals"], ["keepers", "Keepers"], ["money", "Money"]];
+    const TABS = [["home", "Overview"], ["proposals", "Proposals"], ["keepers", "Keepers"], ["money", "Treasury"]];
     const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: "var(--space-4)", alignItems: "start" };
 
     function HivePage(props) {

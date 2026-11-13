@@ -84,7 +84,7 @@ short form in its place; the form writes the proposal into the message box, and 
 It draws with Buzz's own design tokens, so it follows the app's light and dark themes, with Buzz's
 amber for the hive's mark and anything still waiting on the community. The
 hive's page has four tabs: an overview with the treasury, the viewer's allowances and live
-proposals; every proposal; what waits for keepers; and the money, with chip-ins, payouts, jobs and
+proposals; every proposal; what waits for keepers; and the treasury, with chip-ins, payouts, jobs and
 providers. It knows the viewer from the community's connection, and it uses Buzz's conversation
 hooks, which Buzz describes as a preview rather than a stable cross-version interface.
 
