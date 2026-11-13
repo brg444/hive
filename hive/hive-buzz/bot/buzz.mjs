@@ -40,9 +40,12 @@ export function buzzCli({ bin = "buzz", relay, secret, authTag, timeoutMs = 60_0
         });
     }
     return {
-        /** Post a message; resolves only once the relay accepted it. */
-        async send(channel, text) {
-            const res = await run(["messages", "send", "--channel", channel, "--content", "-"], text);
+        /** Post a message; resolves only once the relay accepted it. Mentioned keys must be channel members. */
+        async send(channel, text, { mentions = [], files = [] } = {}) {
+            const args = ["messages", "send", "--channel", channel, "--content", "-"];
+            for (const key of mentions) args.push("--mention", key);
+            for (const file of files) args.push("--file", file);
+            const res = await run(args, text);
             if (res?.accepted === false) throw new BuzzError(`the relay refused the message: ${res.message ?? "no reason given"}`);
             return res;
         },
@@ -60,6 +63,19 @@ export function buzzCli({ bin = "buzz", relay, secret, authTag, timeoutMs = 60_0
                 before = Math.min(...rows.map((e) => e.created_at));
             }
             return [...all.values()].sort((a, b) => a.created_at - b.created_at);
+        },
+        /** Display names for keys, from their Buzz profiles; keys without one are left out. */
+        async names(keys) {
+            if (!keys.length) return {};
+            const res = await run(["users", "get", "--pubkey", ...keys]).catch(() => []);
+            const rows = Array.isArray(res) ? res : res?.users ?? res?.profiles ?? [];
+            const out = {};
+            for (const r of rows) {
+                const key = r.pubkey ?? r.pk;
+                const name = r.display_name ?? r.displayName ?? r.name ?? r.profile?.display_name ?? r.profile?.name;
+                if (key && name) out[key] = String(name).slice(0, 60);
+            }
+            return out;
         },
         setProfile({ name, about, avatar }) {
             const args = ["users", "set-profile", "--name", name];

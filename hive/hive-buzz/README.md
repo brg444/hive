@@ -97,14 +97,12 @@ from hive-api.
 
 ### Trying it with the demo
 
-`demo/make-state.mjs` writes a sample hive state, and `.github/workflows/demo.yml` publishes it on
-the repo's GitHub Pages every six hours, so trying the plugin needs no host. Build the plugin
-against it with your own channel and keepers, and install the folder:
-
-```bash
-node plugin/build.mjs --api https://brg444.github.io/hive/demo --name "Hive demo" \
-  --channel <your channel ID> --keepers <npub>,<npub>
-```
+`demo/make-state.mjs` writes a sample hive state, and the repo's `Demo` workflow publishes it on
+GitHub Pages every six hours, so trying the plugin needs no host. The same workflow builds the
+plugin against it for the channel and keepers in two repository variables, `HIVE_DEMO_CHANNEL` and
+`HIVE_DEMO_KEEPERS` (npubs, comma-separated), and publishes it on the `plugin` branch. In Buzz,
+Settings → Plugins → Manage plugins → Add → Add from Git, with the repository's GitHub address and
+the branch `plugin`, installs it, and Check for updates picks up each new build.
 
 Proposals then work for real in that channel; the treasury, jobs and payouts on the page are
 sample data, marked as such, with addresses that no wallet accepts.
@@ -146,6 +144,22 @@ and `--small-sats` change the two numbers above, and `--as-of <unix seconds>` ju
 of another time, for rehearsing a decision without waiting out its discussion. For a plugin built without
 `--channel`, `hive-bot seed --state <dir> --channel <UUID> --keepers <npub,npub>` writes a
 governance file with just the channel and keepers for hive-api to serve.
+
+### Setting a hive up from its channel
+
+With `--onboard`, the bot sets the hive up in its channel, and every answer is a ✅ or a message:
+
+1. It asks who will keep the treasury, and each keeper reacts ✅ (`--keepers-needed`, 3 by default).
+2. Once enough have, the member who authorized the bot confirms them with ✅.
+3. It posts the plugin, built for that channel and those keepers, as an attachment.
+4. It says what happens with the treasury, and posts the chip-in address once hive-api has one.
+5. It shows the proposal format, and closes the setup when the first proposal arrives.
+
+Nobody copies a key or a channel ID: the bot reads them from the signed reactions and from the
+channel it is in. From the confirmation on, it coordinates with those keepers as with `--keepers`.
+`--plugin-api` gives the plugin hive-api's public HTTPS address when the bot reaches it at another,
+such as `http://127.0.0.1:8787` on the same host. `test/onboard-relay-e2e.mjs` runs the whole setup
+against a real relay.
 
 The bot checks the authorization against its own key before keeping it, and the relay admits the
 bot only through it: a member must authorize the key, and the messages then show as the bot's,

@@ -1,28 +1,31 @@
-# Serves the demo hive's state on GitHub Pages, for trying the Hive plugin for Buzz without running a
-# host: https://<owner>.github.io/<repo>/demo/hive/v1/state. It is sample data, regenerated every six
-# hours so its times stay current. Turn it on once under Settings → Pages → Source: GitHub Actions.
-name: Demo hive state
+# The Hive demo, served from this repo so trying the plugin needs no host and no build:
+#   - GitHub Pages serves sample hive state at https://<owner>.github.io/<repo>/demo/hive/v1/state,
+#     regenerated every six hours so its times stay current.
+#   - The `plugin` branch holds the plugin built against it, for Buzz's Add from Git. It is built
+#     for the channel and keepers in the repository variables HIVE_DEMO_CHANNEL and HIVE_DEMO_KEEPERS
+#     (npubs, comma-separated), and skipped while they are unset.
+# Turn Pages on once under Settings → Pages → Source: GitHub Actions.
+name: Demo
 
 on:
   push:
     branches: [main]
-    paths: ["hive/hive-buzz/demo/**", ".github/workflows/demo.yml"]
+    paths: ["hive/hive-buzz/**", ".github/workflows/demo.yml"]
   schedule:
     - cron: "23 */6 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
-  group: pages
+  group: demo
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  state:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -38,3 +41,33 @@ jobs:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  plugin:
+    if: github.event_name != 'schedule' && vars.HIVE_DEMO_CHANNEL != '' && vars.HIVE_DEMO_KEEPERS != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the demo plugin
+        working-directory: hive/hive-buzz
+        env:
+          API: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/demo
+          CHANNEL: ${{ vars.HIVE_DEMO_CHANNEL }}
+          KEEPERS: ${{ vars.HIVE_DEMO_KEEPERS }}
+        run: |
+          npm install --omit=dev --no-audit --no-fund
+          node plugin/build.mjs --api "$API" --name "Hive demo" --channel "$CHANNEL" --keepers "$KEEPERS" --out "$RUNNER_TEMP/plugin"
+      - name: Publish it on the plugin branch
+        working-directory: ${{ runner.temp }}/plugin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init -q -b plugin
+          git add .
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Demo plugin, built from ${GITHUB_SHA::7}"
+          git push -q --force "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" plugin

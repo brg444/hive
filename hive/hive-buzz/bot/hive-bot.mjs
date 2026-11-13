@@ -22,6 +22,15 @@
 // the relay, so the plugin can be tried in a channel before the bot runs: proposals typed there show
 // as cards with live counts, and the Propose button and status line appear.
 //
+//   hive-bot run ... --onboard [--keepers-needed 3] [--threshold 2] [--name "Hive"] [--plugin-api <HTTPS address>]
+//
+// --onboard sets the hive up in its channel, step by step: it asks who will keep the treasury
+// (each keeper reacts ✅), has the member who authorized the bot confirm them, posts the plugin built
+// for that channel and those keepers, says what happens with the treasury, and walks members through
+// the first proposal. Once keepers are confirmed, the bot coordinates with them as with --keepers.
+// The plugin calls hive-api at --plugin-api, its public HTTPS address, when the bot reaches it at
+// another (--api http://127.0.0.1:8787 on the same host, say).
+//
 // Every command takes --buzz <path to the buzz CLI>. Without it the bot uses the one inside the Buzz
 // desktop app when installed (macOS), else buzz on PATH.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -30,6 +39,9 @@ import { checkAuthTag, loadAuthTag, loadOrCreateKey, saveAuthTag } from "./ident
 import { markSaid, plan } from "./announce.mjs";
 import { buzzCli } from "./buzz.mjs";
 import { coordinate, membersFile } from "./coordinator.mjs";
+import { EMPTY, onboardingPlan } from "./onboard.mjs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { bech32 } from "@scure/base";
 
 const [command, ...argv] = process.argv.slice(2);
@@ -112,10 +124,54 @@ async function coordinateOnce(buzz, channel, state, gov) {
     return governance;
 }
 
+const onboardingPath = () => join(stateDir, "onboarding.json");
+const loadOnboarding = () => (existsSync(onboardingPath()) ? JSON.parse(readFileSync(onboardingPath(), "utf8")) : null);
+const eventIdOf = (sent) => sent?.event_id ?? sent?.id ?? sent?.event?.id ?? null;
+
+/** The plugin for this channel and these keepers, zipped for posting. */
+function pluginZip({ api, name, channel, keepers, threshold, smallSats }) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const out = join(stateDir, "plugin");
+    const dir = execFileSync(process.execPath, [join(here, "../plugin/build.mjs"), "--api", api, "--name", name, "--out", out,
+        "--channel", channel, "--keepers", keepers.join(","), "--threshold", String(threshold), "--small-sats", String(smallSats)], { encoding: "utf8" }).trim();
+    const folder = dir.split("/").pop();
+    const zip = join(out, `${folder}.zip`);
+    execFileSync("zip", ["-qr", "-FS", zip, folder], { cwd: out });
+    return zip;
+}
+
+/** One onboarding pass: post the next steps, recording each decision only once its message is accepted. */
+async function onboardOnce(buzz, channel, state, ob) {
+    const events = await buzz.channelEvents(channel, Math.floor(Date.now() / 1000) - 30 * 86400);
+    let record = loadOnboarding() ?? { ...EMPTY, startedAt: Math.floor(Date.now() / 1000) };
+    const proposals = record.keepers
+        ? coordinate(events, { keepers: record.keepers, threshold: record.threshold, smallSats: ob.smallSats }).proposals : [];
+    // Names for the people a post may mention: volunteers so far and the founder.
+    const keys = [...new Set([ob.founder, ...events.filter((e) => e.kind === 7).map((e) => e.pubkey)])];
+    const names = await buzz.names(keys);
+    const { posts, record: next } = onboardingPlan(record, { events, bot: ob.bot, founder: ob.founder, needed: ob.needed, threshold: ob.threshold,
+        smallSats: ob.smallSats, state, proposals, name: (k) => names[k] ?? k.slice(0, 8) });
+    for (const post of posts) {
+        const files = post.plugin ? [pluginZip({ api: ob.api, name: state?.name ?? ob.name, channel, keepers: next.keepers, threshold: next.threshold, smallSats: ob.smallSats })] : [];
+        const sent = await buzz.send(channel, post.text, { mentions: post.mentions ?? [], files });
+        record = { ...record, posts: { ...record.posts, [post.key]: eventIdOf(sent) ?? true } };
+        if (post.key === "plugin") record = { ...record, keepers: next.keepers, threshold: next.threshold };
+        if (post.key.startsWith("treasury")) record = { ...record, treasuryReady: next.treasuryReady };
+        if (post.key === "done") record = { ...record, done: true };
+        writeAtomic(onboardingPath(), record);
+        log({ event: "onboarding", step: post.key });
+    }
+    return record;
+}
+
 /** One pass: fetch, plan, post in order; each message is recorded only once the relay accepts it. */
-async function tick(buzz, channel, api, lowTreasurySats, gov) {
-    const state = await fetchState(api);
-    if (gov) state.governance = await coordinateOnce(buzz, channel, state, gov);
+async function tick(buzz, channel, api, lowTreasurySats, gov, ob) {
+    // While onboarding, the host may not be up yet; the steps that need it wait for it.
+    const state = await fetchState(api).catch((e) => { if (!ob) throw e; return null; });
+    if (ob && !loadOnboarding()?.done) await onboardOnce(buzz, channel, state, ob);
+    const keepers = gov ?? (ob && loadOnboarding()?.keepers ? { ...ob.gov, keepers: loadOnboarding().keepers, threshold: loadOnboarding().threshold } : null);
+    if (!state) return 0;
+    if (keepers) state.governance = await coordinateOnce(buzz, channel, state, keepers);
     const { posts, record, newBudgets } = plan(state, loadRecord(), { lowTreasurySats });
     let current = record;
     saveRecord(current);
@@ -186,20 +242,25 @@ async function main() {
         const interval = Math.max(15, Number(arg("--interval", "60"))) * 1000;
         const low = Number(arg("--low-treasury-sats", "0"));
         const keepers = arg("--keepers");
-        const gov = keepers ? {
-            keepers: keepers.split(",").map(keeperKey).filter(Boolean),
+        const govBase = {
             threshold: Number(arg("--threshold", "2")),
             smallSats: Number(arg("--small-sats", "20000")),
             sinceDays: Number(arg("--since-days", "90")),
             governanceFile: arg("--governance-file", join(stateDir, "governance.json")),
             membersFile: arg("--members-file"),
             asOf: arg("--as-of") ? Number(arg("--as-of")) : null,
-        } : null;
+        };
+        const gov = keepers ? { ...govBase, keepers: keepers.split(",").map(keeperKey).filter(Boolean) } : null;
         if (gov && gov.keepers.length < gov.threshold) die("--keepers needs at least --threshold valid public keys", 2);
+        const ob = flag("--onboard") ? {
+            api: arg("--plugin-api", api), gov: govBase, bot: key.pubkey, founder: authorized(key).owner, name: arg("--name", "Hive"),
+            needed: Number(arg("--keepers-needed", "3")), threshold: govBase.threshold, smallSats: govBase.smallSats,
+        } : null;
+        if (ob && !(ob.needed >= ob.threshold && ob.threshold >= 1)) die("--keepers-needed must be at least --threshold", 2);
         let failures = 0;
         for (;;) {
             try {
-                await tick(buzz, channel, api, low, gov);
+                await tick(buzz, channel, api, low, gov, ob);
                 failures = 0;
             } catch (e) {
                 failures += 1;
