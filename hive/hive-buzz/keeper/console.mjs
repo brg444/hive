@@ -48,9 +48,39 @@ async function passkeySecret(credentialId) {
     return new Uint8Array(first);
 }
 
-function download(name, value) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2) + "\n"], { type: "application/json" }));
-    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+/**
+ * How this device saves a file the keeper picks a place for. The system's own save sheet reaches
+ * iCloud Drive and Google Drive with no account in this page, so the page stays offline:
+ * a save dialog on desktop Chrome and Edge, the share sheet's Save to Files on phones and Safari,
+ * and a plain download where neither exists.
+ */
+function saveMethod(file) {
+    if (typeof window.showSaveFilePicker === "function") return "picker";
+    try { if (navigator.canShare?.({ files: [file] })) return "share"; } catch { /* no file sharing */ }
+    return "download";
+}
+const SAVE_HINT = {
+    picker: "Choose where it goes, such as iCloud Drive or your Google Drive folder.",
+    share: "Choose Save to Files, then iCloud Drive or Google Drive. On Android, choose Drive.",
+    download: "It goes to your Downloads folder. Move it to iCloud Drive or Google Drive afterwards.",
+};
+
+/** Saves the file where the keeper chooses; resolves once it is saved, throws if they cancel. */
+async function saveFile(file) {
+    const method = saveMethod(file);
+    if (method === "picker") {
+        const handle = await window.showSaveFilePicker({ suggestedName: file.name, types: [{ description: "Keeper backup", accept: { "application/json": [".json"] } }] });
+        const writable = await handle.createWritable();
+        await writable.write(file);
+        await writable.close();
+        return;
+    }
+    if (method === "share") {
+        await navigator.share({ files: [file], title: "Hive keeper backup" });
+        return;
+    }
+    const url = URL.createObjectURL(file);
+    const a = Object.assign(document.createElement("a"), { href: url, download: file.name });
     document.body.append(a);
     a.click();
     a.remove();
@@ -79,14 +109,21 @@ function say(id, message, bad = true) {
     el.dataset.tone = bad ? "bad" : "good";
 }
 
-/** Asks for the backup passphrase twice and saves the backup file. */
-async function saveBackup(secret, form) {
+/**
+ * Encrypts the backup, then shows the step that saves it: saving needs a fresh tap, which the
+ * system's save sheet asks for, so it cannot follow the encryption on its own.
+ */
+async function prepareBackup(secret, form, after) {
     const a = form.elements.passphrase.value, b = form.elements.again.value;
     if (a !== b) throw new Error("The two passphrases differ.");
-    const file = await backup(secret, a);
-    download(`hive-keeper-backup-${file.publicKey.slice(0, 8)}.json`, file);
+    const contents = await backup(secret, a);
     form.reset();
+    prepared = { file: new File([JSON.stringify(contents, null, 2) + "\n"], `hive-keeper-backup-${contents.publicKey.slice(0, 8)}.json`, { type: "application/json" }), after };
+    $("save-hint").textContent = SAVE_HINT[saveMethod(prepared.file)];
+    say("save-msg", "");
+    show("save");
 }
+let prepared = null;
 
 let pending = null; // the new key between creating it and saving its backup
 
@@ -112,13 +149,23 @@ $("backup-form").addEventListener("submit", async (e) => {
     const button = e.target.querySelector("button[type=submit]");
     busy(button, true, "Encrypting…");
     try {
-        await saveBackup(pending, e.target);
-        pending = null;
-        show("key");
+        await prepareBackup(pending, e.target, () => { pending?.fill(0); pending = null; show("key"); });
     } catch (err) {
         say("backup-msg", err.message);
     } finally {
-        busy(button, false, "Save the backup");
+        busy(button, false, "Encrypt the backup");
+    }
+});
+
+$("save").addEventListener("click", async (e) => {
+    say("save-msg", "");
+    try {
+        await saveFile(prepared.file);
+        const { after } = prepared;
+        prepared = null;
+        after();
+    } catch (err) {
+        say("save-msg", err.name === "AbortError" || err.name === "NotAllowedError" ? "The backup was not saved. Save it before you go on." : err.message);
     }
 });
 
@@ -140,13 +187,12 @@ $("again-form").addEventListener("submit", async (e) => {
         const key = stored();
         const secret = await unlockWithPasskey(key, await passkeySecret(key.credentialId));
         busy(button, true, "Encrypting…");
-        await saveBackup(secret, e.target);
+        await prepareBackup(secret, e.target, () => { show("key"); say("again-msg", "Backup saved.", false); });
         secret.fill(0);
-        say("again-msg", "Backup saved.", false);
     } catch (err) {
         say("again-msg", err.name === "NotAllowedError" ? "The passkey was cancelled." : err.message);
     } finally {
-        busy(button, false, "Save another backup");
+        busy(button, false, "Encrypt another backup");
     }
 });
 

@@ -75,6 +75,8 @@ const inline = (file, names) => `const { ${names} } = (() => {\n${readFileSync(j
 const coordinator = inline("../bot/coordinator.mjs", "coordinate");
 // HiveBot's onboarding, the same steps the server bot posts.
 const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel");
+// What the Hive guide knows, and the instructions it starts with.
+const guide = readFileSync(join(here, "../shared/guide.mjs"), "utf8").replace(/^export\s+/gm, "");
 // Where members install the plugin from, for HiveBot to tell them: a Git repository and branch.
 const install = arg("--install");
 // The keeper console's address, where keepers create their treasury keys and sign payments.
@@ -85,6 +87,7 @@ const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__PROPOSAL__*/", () => proposal)
     .replace("/*__COORDINATOR__*/", () => coordinator)
     .replace("/*__ONBOARDING__*/", () => onboarding)
+    .replace("/*__GUIDE__*/", () => guide)
     .replace("/*__INSTALL__*/null", () => JSON.stringify(install ?? null))
     .replace("/*__CONSOLE__*/null", () => JSON.stringify(keeperConsole ?? null))
     .replace("/*__HIVE_CONFIG__*/null", () => JSON.stringify(config))

@@ -92,9 +92,17 @@
       <label for="b-again">The same passphrase again</label>
       <input id="b-again" name="again" type="password" autocomplete="new-password" minlength="12" required>
       <p class="note" style="margin-top:10px">At least 12 characters. Keep the file and the passphrase apart; together they open your key.</p>
-      <div class="actions"><button class="primary" type="submit">Save the backup</button></div>
+      <div class="actions"><button class="primary" type="submit">Encrypt the backup</button></div>
       <p class="msg" id="backup-msg" role="alert"></p>
     </form>
+  </section>
+
+  <section data-view="save" hidden>
+    <h1 tabindex="-1">Save your backup somewhere safe</h1>
+    <p>Your backup is encrypted with your passphrase. Keep it somewhere that outlives this device: iCloud Drive or Google Drive is a good place, and the passphrase belongs somewhere else, such as your password manager.</p>
+    <p class="note" id="save-hint"></p>
+    <div class="actions"><button class="primary" id="save" type="button">Save the backup file</button></div>
+    <p class="msg" id="save-msg" role="alert"></p>
   </section>
 
   <section data-view="key" hidden>
@@ -111,7 +119,7 @@
         <input id="a-pass" name="passphrase" type="password" autocomplete="new-password" minlength="12" required>
         <label for="a-again">The same passphrase again</label>
         <input id="a-again" name="again" type="password" autocomplete="new-password" minlength="12" required>
-        <div class="actions"><button class="quiet" type="submit">Save another backup</button></div>
+        <div class="actions"><button class="quiet" type="submit">Encrypt another backup</button></div>
         <p class="msg" id="again-msg" role="alert"></p>
       </form>
     </details>

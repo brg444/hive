@@ -88,6 +88,8 @@ export function onboardingPlan(record, cfg) {
         posts.push({ key: "keys", mentions: keepers, text: [
             `Keepers, your treasury keys next. Each of you creates one in the keeper console${consoleUrl ? ` at ${consoleUrl}` : ", which the Hive team shares with you"}. It stays on your own device, locked with your passkey, and signs only the payments you approve there yourself.`,
             "",
+            "The console then asks you to save an encrypted backup. Put the file in iCloud Drive or Google Drive, and its passphrase somewhere else, such as your password manager: together they are the only way back to your key if this device or your passkey is lost.",
+            "",
             "Then post the line the console gives you here, starting with “Hive keeper key:”.",
         ].join("\n") });
     }

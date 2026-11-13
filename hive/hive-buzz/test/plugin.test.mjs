@@ -372,9 +372,44 @@ test("HiveBot: an agent of the plugin's own type says hello once in the hive's c
     assert.equal(ack, 1);
     assert.deepEqual(reply.tags, [["h", channel], ["e", mention.id, "", "root"], ["e", mention.id, "", "reply"], ["p", ALICE]]);
     assert.match(reply.content, /No proposal is open\./);
+    assert.match(reply.content, /the community owner can add a guide: mention me with “add a guide”\.$/);
     let ignored = 0;
     await types[0].run({ trigger: { type: "wake" }, channelId: channel, agent: handle, config: {}, signal: new AbortController().signal, workingUntil() {}, ignored: () => { ignored += 1; } });
     assert.equal(ignored, 1, "only mentions are answered");
+
+    // The owner adds a guide: a Goose agent with the hive's instructions, for the owner to review.
+    const created = [];
+    handle.owner = ALICE;
+    handle.createAgent = async (input) => { created.push(input); return { requestId: "r1", saved: false }; };
+    const mentionRun = (content) => types[0].run({ trigger: { type: "mention", event: { id: String(published.length + 100).padStart(64, "0"), pubkey: ALICE, kind: 9, content, tags: [["h", channel]] } },
+        channelId: channel, agent: handle, config: {}, signal: new AbortController().signal, workingUntil() {}, acknowledged() {} });
+    await mentionRun("@HiveBot add a guide please");
+    assert.equal(created.length, 1);
+    assert.equal(created[0].type, "buzz.goose/goose");
+    assert.equal(created[0].name, "Hive guide");
+    assert.match(created[0].instructions, /call hive_guide/);
+    assert.match(published.at(-1).content, /^I've asked Buzz to create Hive guide/);
+
+    // With the guide running, questions go to it in the thread; status stays HiveBot's.
+    const woken = [];
+    running = [...running, { key: "guide-key", pubkey: "9a".repeat(32), name: "Hive guide", owner: ALICE, type: "buzz.goose/goose" }];
+    ctx.agents.wake = (key, wake) => woken.push({ key, wake });
+    const before = published.length;
+    await mentionRun("@HiveBot how do I back up my keeper key?");
+    assert.equal(woken.length, 1);
+    assert.equal(woken[0].key, "guide-key");
+    assert.equal(woken[0].wake.channel, channel);
+    assert.match(woken[0].wake.text, /how do I back up my keeper key\?/);
+    assert.deepEqual(published.slice(before).map((e) => e.kind), [7], "HiveBot only marks the question as seen");
+    await mentionRun("@HiveBot status");
+    assert.equal(woken.length, 1, "status is HiveBot's own");
+    assert.match(published.at(-1).content, /No proposal is open\.$/);
+
+    // The tools any agent here can use, the guide included.
+    const tool = (name) => seen.tools.find((t) => t.name === name);
+    assert.match(await tool("hive_guide").call(), /^This hive: Test Hive\. It has 2 keepers, any 2 of whom approve/);
+    assert.match(await tool("hive_guide").call(), /iCloud Drive or Google Drive/);
+    assert.equal(await tool("hive_proposals").call(), "No proposal has been posted in the hive's channel yet.");
     seen.cleanups.forEach((stop) => stop());
 });
 

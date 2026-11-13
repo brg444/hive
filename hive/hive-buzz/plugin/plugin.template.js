@@ -21,6 +21,8 @@ const LOOKBACK_DAYS = 90;
 
 /*__ONBOARDING__*/
 
+/*__GUIDE__*/
+
 // Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
 const INSTALL = /*__INSTALL__*/null;
 // The keeper console, where keepers create their treasury keys and sign payments, when built with --console.
@@ -317,9 +319,40 @@ export function apply(ctx) {
                 if (!posted) await handle.publish({ kind: 9, content: "Setup is already under way in this channel: react ✅ to my message above if you'll keep the treasury.", tags: replyTags(t.event, delivery.channelId) });
                 return;
             }
-            await handle.publish({ kind: 9, content: statusText(), tags: replyTags(t.event, delivery.channelId) });
+            if (ADD_GUIDE.test(t.event.content ?? "")) {
+                await handle.publish({ kind: 9, content: await addGuide(handle, t.event), tags: replyTags(t.event, delivery.channelId) });
+                return;
+            }
+            // Questions go to the guide, when the owner has one; HiveBot itself only states where the hive stands.
+            const guide = guideFor(handle.owner);
+            if (guide && !STATUS.test(t.event.content ?? "")) {
+                const root = replyTags(t.event, delivery.channelId)[1][1];
+                ctx.agents.wake(guide.key, { channel: delivery.channelId, root, text:
+                    `A member asked HiveBot in this thread: “${(t.event.content ?? "").slice(0, 2000)}”. Answer them here, using the hive tools.` });
+                await handle.publish({ kind: 7, content: "👀", tags: [["h", delivery.channelId], ["e", t.event.id], ["p", t.event.pubkey]] }).catch(() => {});
+                return;
+            }
+            await handle.publish({ kind: 9, content: guide ? statusText() : `${statusText()} For other questions, the community owner can add a guide: mention me with “add a guide”.`,
+                tags: replyTags(t.event, delivery.channelId) });
         },
     });
+    const STATUS = /\b(status|where|treasury|balance|budget)\b/i;
+    const ADD_GUIDE = /\badd\b.*\bguide\b/i;
+    /** The owner's Hive guide running on this computer: a Goose agent by that name. */
+    function guideFor(owner) {
+        if (typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.wake !== "function") return null;
+        return (ctx.agents.snapshot()?.running ?? []).find((a) => a.type === GOOSE_TYPE && a.name === GUIDE_NAME && (!owner || a.owner === owner)) ?? null;
+    }
+    /** Asks Buzz, for the owner to review, to create the guide with its instructions. */
+    async function addGuide(handle, event) {
+        if (event.pubkey !== handle.owner) return "Only the member who created me can add a guide.";
+        if (guideFor(handle.owner)) return `${GUIDE_NAME} is already here. Mention it, or me, with a question.`;
+        if (typeof handle.createAgent !== "function") {
+            return `This Buzz can't create agents for me. Create a Goose agent named ${GUIDE_NAME} on the Agents page, give it the Hive guide instructions from the Hive repository, and add it to this channel.`;
+        }
+        await handle.createAgent({ type: GOOSE_TYPE, name: GUIDE_NAME, instructions: GUIDE_INSTRUCTIONS });
+        return `I've asked Buzz to create ${GUIDE_NAME}, a Goose agent with the hive's instructions and tools. Review it on the Agents page and add it to this channel; from then on I'll pass questions to it.`;
+    }
     // Onboarding: the owner mentions HiveBot asking to set up, and HiveBot walks the channel through
     // keepers, the plugin, the treasury and the first proposal. Where it stands is read back from
     // its own tagged messages, so a restart, another computer or a reload picks up where it left off.
@@ -444,6 +477,46 @@ export function apply(ctx) {
         async call() {
             if (!snapshot.state) await load();
             return summarize(snapshot.state, snapshot.gov);
+        },
+    });
+    /** This hive's own settings, ahead of the general account of how a hive works. */
+    function hiveFacts() {
+        const { state, gov } = snapshot;
+        return [
+            `This hive: ${state?.name ?? HIVE_NAME}.`,
+            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and sign a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their treasury key. Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.` : "Its keepers are not set yet.",
+            KEEPER_CONSOLE ? `The keeper console is at ${KEEPER_CONSOLE}.` : null,
+            INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings.` : null,
+            state?.chipIn?.lightningAddress ? `Its Lightning address is ${state.chipIn.lightningAddress}.` : null,
+            state?.demo ? "Its treasury figures are sample data for trying Hive." : null,
+        ].filter(Boolean).join(" ");
+    }
+    ctx.agents.addTool({
+        name: "hive_guide",
+        description: `How the ${HIVE_NAME} hive works: proposals and approvals, allowances, keepers, keys and their backups, payments and chip-ins, with this hive's own settings. Read it before answering any question about the hive.`,
+        inputSchema: { type: "object", properties: {} },
+        async call() {
+            return `${hiveFacts()}\n\n${HOW_IT_WORKS}`;
+        },
+    });
+    ctx.agents.addTool({
+        name: "hive_proposals",
+        description: `Every proposal in the ${HIVE_NAME} hive's channel: its title, budget, period, who it is for and their daily allowance, purpose, where it stands, support, keepers' approvals, discussion deadline and what it has used.`,
+        inputSchema: { type: "object", properties: {} },
+        async call() {
+            if (!snapshot.state) await load();
+            const gov = snapshot.gov;
+            if (!gov) return "The hive's channel and keepers are not set up yet, so there are no proposals to read.";
+            if (!gov.proposals.length) return "No proposal has been posted in the hive's channel yet.";
+            return gov.proposals.map((p) => [
+                `"${p.title}" (${p.id}): ${STAGE[p.state] ?? p.state}.`,
+                `Budget ${sats(p.budgetSats)}${p.start ? `, ${day(p.start)} to ${day(p.end)}` : ""}${p.state === "running" ? `, ${sats(p.usedSats)} used, until ${day(p.ends)}` : ""}.`,
+                `For ${p.who === "everyone" ? "everyone" : p.who === "named" ? `${p.named.length} named members` : "the proposer"}${p.allowanceSats ? `, ${sats(p.allowanceSats)} a day each` : ""}.`,
+                `Purpose: ${p.purpose}`,
+                `${p.support} support, ${p.approvals.length} of ${gov.threshold} keepers approved${p.state === "open" ? `, discussion ${p.discussionEnds > nowS() ? `closes ${until(p.discussionEnds)}` : "closed"}` : ""}.`,
+                p.reason ? `Declined: ${p.reason}` : null,
+                p.report ? `Report: ${p.report.text}` : null,
+            ].filter(Boolean).join(" ")).join("\n");
         },
     });
 

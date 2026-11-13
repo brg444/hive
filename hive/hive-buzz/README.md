@@ -106,6 +106,18 @@ channel through the onboarding steps below, reading where it stands from its own
 so it keeps nothing on disk and picks up after a restart. `--install <repository>#<branch>` at
 build time tells members where to get the plugin.
 
+### The Hive guide
+
+For questions, HiveBot works with a guide: a Goose agent named Hive guide, on Buzz's own Goose
+harness with whichever model the owner set up for Goose. The owner mentions HiveBot with "add a
+guide", and HiveBot asks Buzz to create it with the guide's instructions from `shared/guide.mjs`,
+for the owner to review on the Agents page. From then on, a question to HiveBot wakes the guide in
+the same thread, while status and setup stay HiveBot's. The plugin gives every agent in the
+community three tools: `hive_guide` (how a hive works, with this hive's own settings),
+`hive_proposals` and `hive_status`. The guide's instructions have it read them before answering,
+state nothing they do not say, and never ask for or accept a key, backup or passphrase. HiveBot's
+own messages stay the hive's record; the guide only explains.
+
 ### Trying it with the demo
 
 `demo/make-state.mjs` writes a sample hive state, and the repo's `Demo` workflow publishes it on
@@ -122,7 +134,10 @@ sample data, marked as such, with addresses that no wallet accepts.
 
 `keeper/` is where keepers create their treasury key, for now on test networks only. The key is
 made on the keeper's own device, kept there encrypted under their passkey (WebAuthn's PRF
-extension), and backed up to a file encrypted with a passphrase they choose. The page has no
+extension), and backed up to a file encrypted with a passphrase they choose. The file goes through
+the system's own save sheet, so a keeper can put it in iCloud Drive or Google Drive without the
+page ever signing in anywhere: a save dialog on desktop Chrome and Edge, Save to Files from the
+share sheet on phones and Safari, and a plain download elsewhere. The page has no
 network access at all: its Content-Security-Policy refuses every connection, so the key cannot
 leave the device. It gives the keeper the line to post in the hive's channel, `Hive keeper key:
 <key>`, which ties the key to their Buzz identity. Signing payments comes next, in the same page.
