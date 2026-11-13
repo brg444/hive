@@ -9,10 +9,12 @@ import {
   type EscrowTerms,
   escrowArguments,
   escrowRefundTemplate,
-  type RefundPlan,
-  networkCeilings,
   lookupSpendCoins,
+  networkCeilings,
+  type Pair,
+  pairKeys,
   REFUND_MARGIN_SECONDS,
+  type RefundPlan,
   type SendPlan,
   sendMessages,
   sendTerms,
@@ -27,6 +29,7 @@ import { ensure, guard, hex, requireNotHalted, sha256Hex, unhex } from "@hive/ki
 import {
   canonicalJson,
   escrowTermsFromQuote,
+  type QuoteTerms,
   quoteTerms,
   requireValidSignedQuote,
   type SignedQuote,
@@ -34,9 +37,36 @@ import {
 } from "@hive/protocol";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import type { Steward } from "./config.js";
-import { MAX_VALIDITY_SECONDS, type Purpose, type SessionRequest, sameWithdrawal } from "./purpose.js";
+import {
+  KEEPER_MAX_VALIDITY_SECONDS,
+  MAX_VALIDITY_SECONDS,
+  type Purpose,
+  type SessionRequest,
+  sameWithdrawal,
+} from "./purpose.js";
 
-export { MAX_VALIDITY_SECONDS };
+export { KEEPER_MAX_VALIDITY_SECONDS, MAX_VALIDITY_SECONDS };
+
+/** What the checks need to know of the treasury: its pair keys and terms. A steward has them, and so does a keeper's console. */
+export type TreasuryView = Pick<Steward, "pairs" | "treasuryTerms">;
+
+/** The treasury as a keeper's console sees it: from the three keepers' keys, in the hive's order, and its terms. */
+export function keeperView(
+  keepers: readonly [string, string, string],
+  treasuryTerms: Steward["treasuryTerms"],
+): TreasuryView {
+  return { pairs: pairKeys(keepers) as Record<Pair, string>, treasuryTerms };
+}
+
+/**
+ * What a keeper confirmed in the console before signing a payment: the proposal it serves, what is
+ * left of that proposal's budget, and the provider's terms exactly as the console showed them.
+ */
+export interface PaymentApproval {
+  proposal: string;
+  remainingSats: number;
+  terms: QuoteTerms;
+}
 
 export interface Checked {
   messages: Uint8Array[];
@@ -98,6 +128,10 @@ export async function checkPurpose(
       return checkAllocation(steward, conn, session, purpose, now);
     case "withdrawal":
       return checkWithdrawal(steward, conn, session, purpose, now);
+    case "payment":
+      // A keeper's own confirmation approves it, and a service has nobody to confirm.
+      ensure(false, "KEEPER_ONLY", "a keeper approves this payment in the keeper console");
+      break;
     case "claim":
       return checkClaimRegistration(steward, conn, session, purpose.quote, purpose.claim, now);
     case "refund":
@@ -107,17 +141,22 @@ export async function checkPurpose(
   }
 }
 
-function treasuryOf(steward: Steward, conn: Connection) {
+function treasuryOf(steward: TreasuryView, conn: Connection) {
   return deriveAccount(conn, "treasury", treasuryArguments(steward.treasuryTerms));
 }
 
-/** The common rules of a treasury send: our coins, unspent, exactly balanced, briefly valid. */
+/**
+ * The common rules of a treasury send: our coins, unspent, exactly balanced, briefly valid. A
+ * keeper payment may stay valid longer, up to `maxValidity`, and its coins must then last until it
+ * ends without reaching their renewal window, since renewing a coin would spend it from under the plan.
+ */
 async function checkSend(
-  steward: Steward,
+  steward: TreasuryView,
   conn: Connection,
   session: SessionRequest,
   plan: SendPlan,
   now: number,
+  maxValidity = MAX_VALIDITY_SECONDS,
 ): Promise<{ attest: Uint8Array[]; coins: string[] }> {
   const treasury = treasuryOf(steward, conn);
   ensure(plan.account === "treasury" && plan.pair === session.pair, "PLAN_INVALID", "account or pair");
@@ -131,11 +170,7 @@ async function checkSend(
     "PLAN_INVALID",
     "change",
   );
-  ensure(
-    plan.validUntil > now + 60 && plan.validUntil <= now + MAX_VALIDITY_SECONDS,
-    "PLAN_INVALID",
-    "validity",
-  );
+  ensure(plan.validUntil > now + 60 && plan.validUntil <= now + maxValidity, "PLAN_INVALID", "validity");
   ensure(/^[0-9a-f]{64}$/.test(plan.templateId), "PLAN_INVALID", "template id");
   ensure(
     canonicalJson(plan.variables) ===
@@ -148,17 +183,18 @@ async function checkSend(
     plan.coins.every((coin) => coin.script === treasury.pkScript),
     "COIN_UNKNOWN",
   );
+  const heldUntil = maxValidity > MAX_VALIDITY_SECONDS ? plan.validUntil : now;
   await lookupSpendCoins(
     conn,
     plan.coins,
-    now + steward.treasuryTerms.renewalWindowSeconds + AUTHORIZATION_GRACE_SECONDS + 1,
+    heldUntil + steward.treasuryTerms.renewalWindowSeconds + AUTHORIZATION_GRACE_SECONDS + 1,
   );
   return { attest: sendMessages(plan, treasury.instance, conn.operator.checkpointTapscript), coins };
 }
 
 /** The registration message, once every attestation verifies under the pair's key. */
 function registration(
-  steward: Steward,
+  steward: TreasuryView,
   session: SessionRequest,
   plan: SendPlan,
   attest: Uint8Array[],
@@ -178,7 +214,7 @@ function registration(
 }
 
 function escrowFrom(
-  steward: Steward,
+  steward: TreasuryView,
   conn: Connection,
   quote: SignedQuote,
 ): { terms: EscrowTerms; account: ReturnType<typeof deriveAccount> } {
@@ -208,6 +244,47 @@ async function checkAllocation(
   const signed = guard("INVALID_QUOTE", () => requireValidSignedQuote(purpose.quote));
   const approved = steward.config.approvedRequests.find((t) => t.requestId === signed.body.requestId);
   ensure(approved, "UNAPPROVED_REQUEST");
+  return checkFunding(steward, conn, session, purpose, approved, now, MAX_VALIDITY_SECONDS);
+}
+
+/**
+ * The checks a keeper's console runs before it signs a payment: everything a steward checks before
+ * funding an escrow, against the terms the keeper confirmed rather than a steward's config, with
+ * the cap within what is left of the proposal's budget and up to two days for the second keeper.
+ * The console signs only the messages this returns, and keeps its reservations as a steward does:
+ * the coins and the quote until `until`, and the binding for good, so it never signs a second plan
+ * for the same request. Any two pairs share a keeper, so no request is funded twice.
+ */
+export async function checkPayment(
+  view: TreasuryView,
+  conn: Connection,
+  session: SessionRequest,
+  approval: PaymentApproval,
+  now: number,
+): Promise<Checked> {
+  const purpose = session.purpose;
+  ensure(purpose.kind === "payment", "UNKNOWN_PURPOSE", "not a payment");
+  ensure(/^[0-9a-f]{64}$/.test(session.id), "INVALID", "session id");
+  ensure(
+    Number.isSafeInteger(approval.remainingSats) && Number(approval.terms.capSats) <= approval.remainingSats,
+    "ABOVE_BUDGET",
+    `the proposal has ${approval.remainingSats} sats left`,
+  );
+  return checkFunding(view, conn, session, purpose, approval.terms, now, KEEPER_MAX_VALIDITY_SECONDS);
+}
+
+/** Funding an escrow from the treasury, on approved terms: the shared rules of an allocation and a keeper payment. */
+async function checkFunding(
+  steward: TreasuryView,
+  conn: Connection,
+  session: SessionRequest,
+  purpose: Extract<Purpose, { kind: "allocation" | "payment" }>,
+  approved: QuoteTerms,
+  now: number,
+  maxValidity: number,
+): Promise<Checked> {
+  const signed = guard("INVALID_QUOTE", () => requireValidSignedQuote(purpose.quote));
+  ensure(signed.body.requestId === approved.requestId, "UNAPPROVED_REQUEST");
   const quote = guard("UNAPPROVED_QUOTE", () =>
     validateQuoteForFunding(signed, { ...approved, nowSeconds: String(now) }),
   );
@@ -226,7 +303,7 @@ async function checkAllocation(
     "PLAN_INVALID",
     "the authorization outlives the quote",
   );
-  const { attest, coins } = await checkSend(steward, conn, session, plan, now);
+  const { attest, coins } = await checkSend(steward, conn, session, plan, now, maxValidity);
   // The coins' batch expiry bounds the escrow's: the refund must run before it.
   const indexed = await lookupSpendCoins(conn, plan.coins);
   for (const coin of indexed)

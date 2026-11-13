@@ -294,7 +294,7 @@ footer.bottom a { color: var(--honey); font-weight: 700; }
   <section class="page wrap" id="tab-keepers" hidden aria-labelledby="keepers-title">
     <div style="display:flex; flex-direction:column; gap:10px; max-width:700px">
       <h1 id="keepers-title" style="font-size:clamp(44px,6vw,72px)">Keepers</h1>
-      <p class="muted" style="margin:0; font-size:18px">Three keepers hold this hive. Any two of them can open a job or pay a withdrawal, and only for terms their administrators approved first. Each keeper's signer rebuilds every message itself before it signs.</p>
+      <p class="muted" style="margin:0; font-size:18px">Three keepers hold this hive. They approve work in the hive's Buzz channel, where two keepers' ✅ carry a proposal, and any two of them sign each payment themselves, with keys that stay on their own devices. Nothing signs on its own.</p>
     </div>
     <div class="cards" id="keepers"></div>
     <div class="cards">
@@ -302,7 +302,7 @@ footer.bottom a { color: var(--honey); font-weight: 700; }
       <div class="card">
         <h3>Who can do what</h3>
         <p style="margin:0">Any pair of keepers (1 + 2, 1 + 3 or 2 + 3) can sign a spend from the hive. One keeper alone can sign nothing, and a job's contract pays its provider only what the agent's receipts say.</p>
-        <p class="muted" style="margin:0">The delegatee renews the hive's coins before they expire and can send them nowhere but back into the hive.</p>
+        <p class="muted" style="margin:0">A renewal service renews the hive's coins before they expire, and can send them nowhere but back into the hive.</p>
       </div>
     </div>
   </section>
@@ -344,7 +344,7 @@ footer.bottom a { color: var(--honey); font-weight: 700; }
   <div class="wrap">
     <div>
       <b id="footer-name">hive</b>
-      <p>Held by three keepers. Any two can move it, every move is an output anyone can check, and no key ever signs a transaction.</p>
+      <p>Held by three keepers. Any two sign each payment, one alone can move nothing, and every move is an output anyone can check.</p>
     </div>
     <nav aria-label="Footer" style="display:flex; flex-wrap:wrap; gap:8px 28px">
       <a href="#audit">Audit every cell</a>

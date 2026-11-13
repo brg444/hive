@@ -4,6 +4,12 @@ import type { SignedQuote } from "@hive/protocol";
 /** An authorization lives at most this long; its coins stay reserved until it ends. */
 export const MAX_VALIDITY_SECONDS = 1800;
 
+/**
+ * A payment two keepers sign by hand, hours apart, lives up to two days, so the second keeper has
+ * time to open the console. Its coins stay reserved for as long, and must not need renewing meanwhile.
+ */
+export const KEEPER_MAX_VALIDITY_SECONDS = 48 * 3600;
+
 /** A treasury withdrawal a steward's administrator approved: exact destination, amount and expiry. */
 export interface WithdrawalTerms {
   label: string;
@@ -30,6 +36,10 @@ export const sameWithdrawal = (a: WithdrawalTerms, b: WithdrawalTerms): boolean 
  * A claim takes one: the request that registers the provider's claim. So does
  * a refund a pair registers after the deadline, should the escrow's refund
  * watch not act.
+ *
+ * A payment funds an escrow like an allocation, with the approval coming from the keepers
+ * themselves: each confirms it in the keeper console, so only a keeper's console signs one, and a
+ * steward service refuses it.
  */
 export type Purpose =
   | { kind: "allocation"; stage: "attest"; quote: SignedQuote; plan: SendPlan }
@@ -42,6 +52,8 @@ export type Purpose =
       plan: SendPlan;
       signatures: string[];
     }
+  | { kind: "payment"; stage: "attest"; quote: SignedQuote; plan: SendPlan }
+  | { kind: "payment"; stage: "register"; quote: SignedQuote; plan: SendPlan; signatures: string[] }
   | { kind: "claim"; quote: SignedQuote; claim: ClaimPlan }
   | { kind: "refund"; quote: SignedQuote; refund: RefundPlan };
 

@@ -70,6 +70,8 @@ h1 em { font-style: normal; color: var(--link); }
 .button { display: inline-flex; align-items: center; height: 48px; padding: 0 22px; border-radius: 999px; background: var(--ink); color: var(--honey); text-decoration: none; font-weight: 700; border: 2px solid var(--ink); }
 .button:hover { color: var(--honey); opacity: 0.9; }
 .button.ghost { background: transparent; color: var(--ink); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .button:not(.ghost) { color: var(--inverse); } }
+:root[data-theme="dark"] .button:not(.ghost) { color: var(--inverse); }
 .stats { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); max-width: 46em; }
 .tally { margin: 0; font-size: 17px; color: var(--ink-2); }
 .tally b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -224,6 +226,33 @@ h3.sub { margin: 52px 0 18px; font: 650 24px/1.2 var(--display); letter-spacing:
 .bz-reacts button { border: 1.5px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 10px; cursor: pointer; font: inherit; color: var(--ink); }
 @media (max-width: 860px) { .buzzframe { grid-template-columns: 1fr; } .bz-side { flex-direction: row; flex-wrap: wrap; } .bz-side .app { margin-top: 0; } .bz-main { grid-template-columns: 1fr; } .bz-col + .bz-col { border-left: 0; border-top: 1px solid var(--line); } }
 .stack a.small { color: var(--link); font-weight: 600; }
+.bz-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.bz-who b { font-weight: 700; }
+.bz-who small { font-size: 12px; color: var(--muted); }
+.bz-av { width: 40px; height: 40px; border-radius: 999px; background: var(--line); color: var(--ink); display: flex; align-items: center; justify-content: center; font: 700 14px var(--body); }
+.bz-av.bot { height: 46px; border-radius: 0; clip-path: var(--hex); background: var(--honey); color: #17140d; }
+.bz-msg code { font: 400 12.5px var(--mono); overflow-wrap: anywhere; }
+.bz-reacts span { border: 1.5px solid var(--line); background: var(--surface); border-radius: 999px; padding: 2px 9px; color: var(--ink); }
+.bz-compose { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border: 1.5px solid var(--line); border-radius: 14px; color: var(--muted); font-size: 14px; }
+.bz-compose span:first-child { flex: 1; min-width: 0; }
+.bz-propose { flex: none; width: 30px; height: 34px; clip-path: var(--hex); background: var(--honey); }
+.bz-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.bz-tabs span { padding: 4px 12px; border-radius: 999px; border: 1.5px solid var(--line); font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.bz-tabs .on { background: var(--honey); border-color: var(--honey); color: #17140d; }
+.bz-tabs sup { margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--honey); color: #17140d; font-size: 11px; vertical-align: 1px; }
+.bz-card { display: grid; gap: 10px; padding: 16px; border-radius: 16px; border: 1px solid var(--line); background: var(--bg); font-size: 14px; }
+.bz-card h4 { margin: 0; font: 650 17px/1.2 var(--display); }
+.bz-card dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; }
+.bz-card dt { color: var(--muted); }
+.bz-card dd { margin: 0; font-weight: 600; }
+.bz-meter { height: 8px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.bz-meter span { display: block; height: 100%; background: var(--honey); }
+.bz-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; color: var(--muted); font-size: 13px; }
+ol.setup { list-style: none; margin: 0 0 14px; padding: 0; counter-reset: s; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+ol.setup li { counter-increment: s; }
+ol.setup h3::before { content: counter(s); display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 30px; margin-right: 10px; clip-path: var(--hex); background: var(--honey); color: #17140d; font: 800 14px var(--display); vertical-align: 2px; }
+.panel a.button { align-self: flex-start; }
+.panel.dark a.button { background: var(--honey); color: #17140d; border-color: var(--honey); }
 
 /* ===== Product screens ===== */
 .preview-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 14px; }
@@ -400,8 +429,9 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
       <nav class="main" aria-label="Main">
         <a href="#how">How it works</a>
         <a href="#stack">Where it runs</a>
+        <a href="#start">Start a hive</a>
         <a href="#find">Find a hive</a>
-              </nav>
+      </nav>
     </div>
   </div>
 </header>
@@ -443,8 +473,8 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
       <div><b>Budgets locked up front</b><p>Each job's cap is in a Bitcoin contract before work starts.</p></div>
       <div><b>Pay per token</b><p>Signed receipts set exactly what the provider gets.</p></div>
       <div><b>Leftovers come back</b><p>On their own, even if nobody claims.</p></div>
-      <div><b>Run from Buzz</b><p>Propose, discuss and follow the money in your channel.</p></div>
-      <div><b>Keepers you confirm</b><p>Members approve them and can replace them later.</p></div>
+      <div><b>Run from Buzz</b><p>Propose, discuss and approve work in your channel.</p></div>
+      <div><b>Keepers sign every payment</b><p>Any two of three, by hand, with keys that stay on their own devices.</p></div>
       <div><b>A public ledger</b><p>Every sat is a transaction anyone can check.</p></div>
     </div>
   </section>
@@ -521,9 +551,57 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
       <p>No new app to learn. You talk in Buzz, providers serve on MeshLLM, and the money is Bitcoin.</p>
     </div>
     <div class="stack">
-      <div><h3>Buzz</h3><p>Your hive shows up in your community as a plugin. Follow the treasury, propose work and see every payout right in your channel.</p><span class="where">where you talk</span></div>
+      <div><h3>Buzz</h3><p>The Hive plugin adds proposal cards and a Propose button to your channel, with a Hive page for proposals, keepers and the treasury. HiveBot sets the hive up with you there.</p><span class="where">where you talk</span></div>
       <div><h3>MeshLLM</h3><p>Providers add one plugin, set a price and get paid per token. Share your GPU and you earn the same way.</p><span class="where">where the work runs</span></div>
       <div class="dark"><h3>Bitcoin</h3><p>Your treasury and every budget are Bitcoin under contract. Arkade moves sats in an instant, and Lightning works for paying in and cashing out.</p><span class="where">where the money lives</span></div>
+    </div>
+  </section>
+
+
+  <section class="band wrap" id="start">
+    <div class="section-head">
+      <h2>Set up a hive without leaving your channel</h2>
+      <p>Install the Hive plugin, add HiveBot to your channel and mention it with “set up”. It takes your community through each step right there, and every answer is a message or a reaction, so nobody copies a key or an ID by hand.</p>
+    </div>
+    <figure class="buzzframe" style="margin:0 0 28px" aria-label="A Buzz channel with the Hive plugin: HiveBot asks for keepers and confirms a keeper's key, and the Hive page shows a proposal waiting for keepers.">
+      <div class="bz-side" aria-hidden="true">
+        <b>Open Lab</b>
+        <span># general</span>
+        <span class="on"># hive</span>
+        <span># models</span>
+        <span class="app">Hive</span>
+      </div>
+      <div class="bz-main" aria-hidden="true">
+        <div class="bz-col">
+          <h3># hive</h3>
+          <div class="bz-msg"><span class="bz-av bot">H</span><div><div class="bz-who"><b>HiveBot</b><small>agent</small></div><p>First, keepers. Keepers hold the treasury's keys together: any 2 of them approve work and sign payments, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅. It needs 3.</p><div class="bz-reacts"><span>✅ 3</span></div></div></div>
+          <div class="bz-msg"><span class="bz-av">MK</span><div><div class="bz-who"><b>Maya</b></div><p><code>Hive keeper key: 02a1f3…9c4e</code></p></div></div>
+          <div class="bz-msg"><span class="bz-av bot">H</span><div><div class="bz-who"><b>HiveBot</b><small>agent</small></div><p>Got it, @Maya: your keeper key is in. 2 of 3 keepers have posted theirs.</p></div></div>
+          <div class="bz-compose"><span>Message # hive</span><span class="bz-propose" title="Propose"></span></div>
+        </div>
+        <div class="bz-col">
+          <h3>Hive</h3>
+          <div class="bz-tabs"><span>Overview</span><span class="on">Proposals</span><span>Keepers<sup>1</sup></span><span>Treasury</span></div>
+          <div class="bz-card">
+            <h4>Translate the docs into Spanish</h4>
+            <dl><dt>Budget</dt><dd class="num">20,000 sats</dd><dt>For</dt><dd>everyone, 500 sats a day</dd></dl>
+            <div class="bz-meter"><span style="width:50%"></span></div>
+            <div class="bz-foot"><span>👍 6 · ✅ 1 of 2 keepers</span><span>Waiting for a keeper</span></div>
+          </div>
+        </div>
+      </div>
+    </figure>
+    <ol class="roles setup">
+      <li class="role"><h3>Keepers step up</h3><p>Volunteers react ✅ to HiveBot's call, and the member who added HiveBot confirms them.</p></li>
+      <li class="role"><h3>Everyone adds the plugin</h3><p>In Buzz, open Settings → Plugins, choose Add from Git and enter github.com/brg444/hive with the branch “plugin”.</p></li>
+      <li class="role"><h3>Keepers make their keys</h3><p>Each keeper creates a key in the keeper console and posts the one line it gives them. HiveBot answers each one.</p></li>
+      <li class="role"><h3>The treasury opens</h3><p>Once every key is in, HiveBot posts the treasury's address, and members chip in from any Lightning or Arkade wallet.</p></li>
+      <li class="role"><h3>The first proposal</h3><p>Press Propose or post a message that starts with “Proposal:”. Members react 👍, and two keepers' ✅ approve it.</p></li>
+    </ol>
+    <div class="three" style="margin-top:28px">
+      <div class="panel honey"><h3>Keys stay with your keepers</h3><p>A keeper's key is made in the keeper console, on their own device, and locked with a passkey such as Touch ID or Face ID. The console has no network access at all. An encrypted backup goes to iCloud Drive or Google Drive, with its passphrase kept somewhere else.</p><a class="button small ghost" href="https://brg444.github.io/hive/keeper/">Open the keeper console</a><p class="note">For test networks during the beta.</p></div>
+      <div class="panel plain"><h3>Two keepers sign each payment</h3><p>Nothing signs on its own. Two of the three keepers sign every payment from the treasury themselves, in either order and hours apart if they need to, and one keeper alone can move nothing.</p></div>
+      <div class="panel dark"><h3>Questions, answered in the thread</h3><p>Mention HiveBot for where the hive stands. Ask it to add a guide, and a Hive guide agent answers questions about proposals, keepers and payments from the hive's own docs.</p></div>
     </div>
   </section>
 
@@ -573,9 +651,9 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
 
   <section class="band wrap" id="join">
     <div class="three">
-      <div class="panel plain"><h3>Start a hive</h3><p>Bring a shared treasury to your Buzz community. During the beta we set up each hive with its founders: post in the Hive community on Buzz.</p></div>
+      <div class="panel plain"><h3>Start a hive</h3><p>Bring a shared treasury to your Buzz community. HiveBot walks you through the setup in your channel, and during the beta we set up each treasury with its founders: post in the Hive community on Buzz.</p><p><a class="button small" href="#start">See how setup works</a></p></div>
       <div class="panel plain"><h3>Become a provider</h3><p>Run an open model on MeshLLM with the payment plugin, set your price, and get paid per token by every hive that admits your node.</p><p><a class="button small" href="https://github.com/brg444/hive/tree/main/hive/pay-arkade">Set up the plugin</a></p></div>
-      <div class="panel dark"><h3>Already a member?</h3><p>Your hive lives in its Buzz community: propose work, follow budgets and see every payout in the hive's channel.</p></div>
+      <div class="panel dark"><h3>Already a member?</h3><p>Add the Hive plugin from Git to see your hive's proposals, keepers and treasury in its channel, and press Propose to put work to the hive.</p><p><a class="button small" href="https://github.com/brg444/hive/tree/plugin">Get the plugin</a></p></div>
     </div>
   </section>
 

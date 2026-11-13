@@ -11,5 +11,14 @@ export {
   writeStewardConfig,
 } from "./config.js";
 export { signWithPair } from "./pair.js";
-export { type Checked, checkPurpose, MAX_VALIDITY_SECONDS } from "./policy.js";
+export {
+  type Checked,
+  checkPayment,
+  checkPurpose,
+  KEEPER_MAX_VALIDITY_SECONDS,
+  keeperView,
+  MAX_VALIDITY_SECONDS,
+  type PaymentApproval,
+  type TreasuryView,
+} from "./policy.js";
 export type { Purpose, SessionRequest, StewardDescription, StewardRequest } from "./purpose.js";
