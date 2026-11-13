@@ -21,6 +21,11 @@ import * as musig2 from "@scure/btc-signer/musig2.js";
  */
 
 export const NONCE_BATCH_TAG = "hive/keeper-nonces/v1";
+export const DESK_TAG = "hive-desk/v1";
+
+/** The digest a keeper signs to ask the signing desk for something: start or cancel a payment. */
+export const deskAuthDigest = (hive: string, action: string, jobId: string, at: number): Uint8Array =>
+  unhex(sha256Hex(`${DESK_TAG}|${hive}|${action}|${jobId}|${at}`));
 
 /** One shared nonce, as the coordinator holds it. */
 export interface SharedNonce {

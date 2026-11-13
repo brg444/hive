@@ -87,8 +87,14 @@ for (const [name, allowed] of Object.entries(ALLOWED)) {
         const where = relative(repositoryRoot, file);
         if (specifier.startsWith(".")) {
           const target = resolve(file, "..", specifier);
-          // JSON contract artifacts are data, shared from the repository's contracts directory.
-          if (target.endsWith(".json") && relative(repositoryRoot, target).startsWith("contracts/")) continue;
+          // JSON contract artifacts are data, shared from the repository's contracts directories,
+          // the pay-arkade escrow's among them, which keepers derive to check a funding request.
+          const at = relative(repositoryRoot, target);
+          if (
+            target.endsWith(".json") &&
+            (at.startsWith("contracts/") || at.startsWith("hive/pay-arkade/contracts/"))
+          )
+            continue;
           assert.ok(target.startsWith(`${source}/`), `${where} reaches outside its package: ${specifier}`);
           continue;
         }

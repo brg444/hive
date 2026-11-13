@@ -10,6 +10,22 @@ export {
   type WithdrawalTerms,
   writeStewardConfig,
 } from "./config.js";
+export {
+  assignShared,
+  DESK_TAG,
+  deskAuthDigest,
+  NONCE_BATCH_TAG,
+  type NonceBatch,
+  newSession,
+  nonceBatch,
+  type PairSession,
+  record,
+  type SecretNonce,
+  type SharedNonce,
+  signOver,
+  signShared,
+  verifyNonceBatch,
+} from "./keeper.js";
 export { signWithPair } from "./pair.js";
 export {
   type Checked,
@@ -21,4 +37,10 @@ export {
   type PaymentApproval,
   type TreasuryView,
 } from "./policy.js";
-export type { Purpose, SessionRequest, StewardDescription, StewardRequest } from "./purpose.js";
+export type {
+  FundingRequest,
+  Purpose,
+  SessionRequest,
+  StewardDescription,
+  StewardRequest,
+} from "./purpose.js";

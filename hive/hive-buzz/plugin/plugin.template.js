@@ -80,7 +80,9 @@ function allowancesFor(gov, viewer) {
 function configFrom(state) {
     const c = CONFIG ?? (state?.governance?.channelId ? state.governance : null);
     if (!c?.channelId) return null;
-    return { channelId: c.channelId, keepers: c.keepers ?? [], threshold: c.threshold ?? 2, smallSats: c.smallSats ?? 20000 };
+    return { channelId: c.channelId, keepers: c.keepers ?? [], threshold: c.threshold ?? 2, smallSats: c.smallSats ?? 20000,
+        // A test hive discusses every proposal for the same short time.
+        ...(Number.isSafeInteger(c.discussionSeconds) ? { discussionSeconds: c.discussionSeconds } : {}) };
 }
 
 /**
@@ -192,6 +194,8 @@ export function apply(ctx) {
             if (res.status !== 200) throw new Error(`the hive's host answered ${res.status}`);
             const state = JSON.parse(res.body);
             if (state?.v !== 1) throw new Error("the hive's host speaks another version");
+            // A new hive has no treasury until its keepers' keys are in.
+            state.treasury ??= { address: null, balanceSats: null };
             publish({ ...snapshot, state, error: null, loadedAt: Date.now() });
         } catch (e) {
             publish({ ...snapshot, error: String(e?.message ?? e) });
@@ -213,6 +217,29 @@ export function apply(ctx) {
         };
     });
 
+    // The hive's host has no Buzz key of its own, so each member's plugin forwards the channel's
+    // signed events to it: the host checks every signature and works out proposals and members
+    // itself. Only events it has not been sent are sent, a few seconds after they arrive.
+    const forwarded = new Set();
+    let forwardTimer = null;
+    let forwarding = true;
+    function forward(events) {
+        if (!forwarding) return;
+        clearTimeout(forwardTimer);
+        forwardTimer = setTimeout(async () => {
+            const fresh = events.filter((e) => e.sig && e.id && !forwarded.has(e.id));
+            if (!fresh.length) return;
+            try {
+                const res = await ctx.host.request({ url: `${HIVE_API}/hive/v1/channel`, method: "POST", headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ events: fresh.map(({ id, pubkey, created_at, kind, tags, content, sig }) => ({ id, pubkey, created_at, kind, tags, content, sig })) }),
+                    timeoutMs: 30_000 });
+                // A host that does not take the channel says so once; this plugin then stops asking.
+                if (res.status === 404) { forwarding = false; return; }
+                if (res.status === 200) for (const e of fresh) forwarded.add(e.id);
+            } catch { /* tried again with the next event */ }
+        }, 3_000 + Math.floor(Math.random() * 4_000));
+    }
+
     // The hive's channel, read through the community connection Buzz already has: proposals,
     // reactions and deletions from the last few months, kept live as new ones arrive.
     ctx.effect(() => {
@@ -223,6 +250,7 @@ export function apply(ctx) {
             const events = (view?.snapshot().events ?? []).filter((e) => e.delivery !== "failed");
             channelEvents = view ? events : null;
             publish(snapshot);
+            if (view) forward(events);
         };
         const detach = () => {
             stopView?.();
@@ -535,7 +563,7 @@ export function apply(ctx) {
         const { state, gov } = snapshot;
         return [
             `This hive: ${state?.name ?? HIVE_NAME}.`,
-            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and sign a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their treasury key. Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.` : "Its keepers are not set yet.",
+            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and sign a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their treasury key. ${gov.discussionSeconds ? `Discussion runs ${Math.round(gov.discussionSeconds / 60)} minutes on this test hive.` : `Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.`}` : "Its keepers are not set yet.",
             KEEPER_CONSOLE ? `The keeper console is at ${KEEPER_CONSOLE}.` : null,
             INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings. That repository is also Hive's source and documentation.` : null,
             state?.chipIn?.lightningAddress ? `Its Lightning address is ${state.chipIn.lightningAddress}.` : null,
@@ -739,7 +767,7 @@ export function apply(ctx) {
         const approvals = [...reactors(message, APPROVE)].filter((k) => keepers.includes(k)).length;
         const stage = record?.state ?? "open";
         const postedAt = record?.postedAt ?? message.createdAt;
-        const ends = record?.discussionEnds ?? postedAt + discussionSeconds(p.budgetSats, gov?.smallSats ?? 20000);
+        const ends = record?.discussionEnds ?? postedAt + (gov?.discussionSeconds ?? discussionSeconds(p.budgetSats, gov?.smallSats ?? 20000));
         const forText = p.who === "everyone" ? "Everyone in the hive" : p.who === "named" ? `${p.named.length || "Named"} member${p.named.length === 1 ? "" : "s"}` : "The proposer";
         const period = p.start ? `${day(p.start)} – ${day(p.end)}` : record?.starts ? `${day(record.starts)} – ${day(record.ends)}` : "30 days from approval";
         const extra = [["Work", p.work], ["Provider", p.provider], ["Report", p.report]].filter(([, v]) => v);
@@ -859,7 +887,7 @@ export function apply(ctx) {
         const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
         const { text, problem } = proposalFromForm(f);
         const budget = Number(String(f.budget).replace(/[,\s_]/g, ""));
-        const hours = budget > 0 ? discussionSeconds(budget, gov?.smallSats ?? 20000) / 3600 : null;
+        const hours = budget > 0 ? (gov?.discussionSeconds ?? discussionSeconds(budget, gov?.smallSats ?? 20000)) / 3600 : null;
         const submit = (e) => {
             e?.preventDefault?.();
             setTried(true);
@@ -907,7 +935,7 @@ export function apply(ctx) {
                     more ? null : h("button", { type: "button", style: { ...btn.quiet, ...small }, onClick: () => setMore(true) }, "Add work, provider and report")),
                 h("span", { style: { ...small, ...(tried && problem ? { color: C.bad } : muted) }, role: tried && problem ? "alert" : undefined },
                     failed ?? (tried && problem ? problem
-                        : `${hours ? `Discussion runs ${hours} hours, then ` : ""}${gov?.threshold ?? 2} keepers' ✅ approve it.${f.who === "named" ? " Mention the members before you send." : ""}`))));
+                        : `${hours ? `Discussion runs ${hours >= 1 ? `${Math.round(hours)} hours` : `${Math.round(hours * 60)} minutes`}, then ` : ""}${gov?.threshold ?? 2} keepers' ✅ approve it.${f.who === "named" ? " Mention the members before you send." : ""}`))));
     }
 
     function ChannelStatus(props) {
@@ -959,7 +987,9 @@ export function apply(ctx) {
         const chip = state.chipIn ?? {};
         return h(Card, { title: "Chip in" },
             chip.lightningAddress ? h(Well, { label: "Lightning address", value: chip.lightningAddress, copy: chip.lightningAddress }) : null,
-            h(Well, { label: "Treasury address", value: short(state.treasury.address, 14, 8), copy: state.treasury.address }),
+            state.treasury.address
+                ? h(Well, { label: "Treasury address", value: short(state.treasury.address, 14, 8), copy: state.treasury.address })
+                : h(Empty, null, "The treasury is built once every keeper's key is in, and its address shows here."),
             h("p", { style: { ...p0, ...muted, ...small } },
                 "Pay from any Lightning or Arkade wallet. Chip-ins are donations toward the hive's purpose, and every one lands in the treasury as Bitcoin."));
     }
@@ -1027,8 +1057,22 @@ export function apply(ctx) {
                 : h("ul", { style: list }, shown.map((p, i) => h(ProposalRow, { key: p.id, p, gov, me, first: i === 0 }))));
     }
 
+    /** Where keepers sign: the keeper console, opened on this hive's signing desk. */
+    function consoleLink(state) {
+        const desk = state?.keepersDesk?.desk;
+        const page = state?.keepersDesk?.console ?? KEEPER_CONSOLE;
+        return desk && page ? `${page}${page.includes("?") ? "&" : "?"}desk=${encodeURIComponent(desk)}` : null;
+    }
+
     function Funding({ state }) {
+        const link = consoleLink(state);
         return h(Card, { title: "Jobs to fund", aside: state.funding.length ? h(Pill, { tone: "honey" }, `${state.funding.length} waiting`) : null },
+            state.funding.length && link
+                ? h("div", { style: { marginBottom: "var(--space-4)" } },
+                    h(Well, { label: "Sign in the keeper console", value: link, copy: link }),
+                    h("p", { style: { ...p0, ...muted, ...small, marginTop: "var(--space-2)" } },
+                        "Open it in your browser and unlock it with your passkey. It checks each job against the escrow's own terms before you sign, and any two keepers' signatures send the payment."))
+                : null,
             state.funding.length === 0
                 ? h(Empty, null, "No job is waiting for funding.")
                 : h("ul", { style: list }, state.funding.map((j, i) => h("li", { key: j.jobId, style: { ...item, gap: "var(--space-3)", ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
@@ -1039,7 +1083,9 @@ export function apply(ctx) {
                         h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: sats(j.capSats), copy: String(j.capSats), mono: false })),
                         h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
                     h("p", { style: { ...p0, ...muted, ...small } },
-                        `For provider ${short(j.providerPk)}. Send it in one payment from the treasury; anything else comes back after the deadline.${j.minCoinExpiry ? ` The coins you send must be valid until ${day(j.minCoinExpiry)}, so renew the wallet first if it has not renewed in a few weeks.` : ""}`)))));
+                        link
+                            ? `For provider ${short(j.providerPk)}. Whatever the job does not use comes back to the treasury after the deadline.`
+                            : `For provider ${short(j.providerPk)}. Send it in one payment from the treasury; anything else comes back after the deadline.${j.minCoinExpiry ? ` The coins you send must be valid until ${day(j.minCoinExpiry)}, so renew the wallet first if it has not renewed in a few weeks.` : ""}`)))));
     }
 
     function Keepers({ gov }) {

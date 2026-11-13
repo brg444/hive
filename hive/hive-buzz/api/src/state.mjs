@@ -35,6 +35,7 @@ export function jobsFromLog(text, now = Math.floor(Date.now() / 1000)) {
                 status: "awaiting_funding", escrowAddress: r.address, capSats: r.cap_sats, deadline: r.deadline,
                 minCoinExpiry: r.min_coin_expiry ?? null, model: r.model, priceMsatPerMtok: r.price_msat_per_mtok,
                 providerPeer: r.provider_peer, providerPk: r.provider_pk, requestedAt: e.at,
+                ...(r.params ? { escrowParams: r.params } : {}),
             });
         } else if (e.event === "job_open") {
             Object.assign(job(e.job_id), { status: "open", openedAt: e.at });
@@ -129,7 +130,7 @@ export function agentFromStatus(status) {
     return nodeId ? { nodeId, invite: token } : null;
 }
 
-export function hiveState({ name, chipIn, treasury, jobs, contributions, proposals = [], agent = null, governance = null, now = Math.floor(Date.now() / 1000) }) {
+export function hiveState({ name, chipIn, treasury, jobs, contributions, proposals = [], agent = null, governance = null, keepersDesk = null, now = Math.floor(Date.now() / 1000) }) {
     return {
         v: 1,
         name,
@@ -140,6 +141,8 @@ export function hiveState({ name, chipIn, treasury, jobs, contributions, proposa
         treasury,
         // Keepers act on these: move exactly capSats to escrowAddress from a coin expiring after minCoinExpiry.
         funding: jobs.filter((j) => j.status === "awaiting_funding"),
+        // Where keepers sign: the hive's signing desk and the keeper console that talks to it.
+        keepersDesk,
         jobs,
         providers: providersFromJobs(jobs),
         payouts: jobs.filter((j) => j.status === "claimed").map((j) => ({ at: j.closedAt, jobId: j.jobId, providerPk: j.providerPk, sats: j.paidSats, txid: j.txid })),
@@ -148,6 +151,8 @@ export function hiveState({ name, chipIn, treasury, jobs, contributions, proposa
         // Proposals as the community decided them in the channel, with keepers and members' nodes; null until the bot coordinates.
         governance: governance ? {
             channelId: governance.channelId, keepers: governance.keepers, threshold: governance.threshold, smallSats: governance.smallSats,
+            ...(governance.keeperKeys ? { keeperKeys: governance.keeperKeys } : {}),
+            ...(governance.discussionSeconds !== undefined ? { discussionSeconds: governance.discussionSeconds } : {}),
             updatedAt: governance.updatedAt, members: governance.members ?? {},
             // The agent's log is fresher than the bot's last pass, so usage comes from it when it has more.
             proposals: (governance.proposals ?? []).map((p) => {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https: http://127.0.0.1:* http://localhost:*; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer">
 <title>Hive keeper console</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1.8 21 7v10l-9 5.2L3 17V7z' fill='%23FFC53D'/%3E%3C/svg%3E">
@@ -33,6 +33,17 @@
   h1 { font-size: 28px; line-height: 1.15; letter-spacing: -0.015em; font-weight: 650; margin: 0 0 12px; outline: none; }
   p { margin: 0 0 14px; color: var(--ink-2); }
   .note { font-size: 14px; color: var(--muted); }
+  .list { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 10px; }
+  .list li { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; display: grid; gap: 4px; }
+  .list li b { font-weight: 650; }
+  .list .row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 16px 0; font-size: 15px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .checks { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; font-size: 15px; }
+  .checks li::before { content: "✓"; color: var(--good); font-weight: 700; margin-right: 8px; }
+  .checks li[data-ok="false"]::before { content: "✗"; color: var(--bad); }
+  input[type=url] { width: 100%; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
   .test { display: flex; gap: 10px; align-items: flex-start; background: var(--honey-tint); color: var(--honey-ink); border-radius: 16px; padding: 12px 14px; font-size: 14px; margin-bottom: 20px; }
   .test svg { flex: none; margin-top: 3px; }
   .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 20px; }
@@ -75,7 +86,7 @@
       <li>You save an encrypted backup with a passphrase you choose.</li>
       <li>You post one line in the hive's channel, so the hive knows the key is yours.</li>
     </ol>
-    <p class="note">The key never leaves this device. This page has no network access at all.</p>
+    <p class="note">The key never leaves this device. The page talks only to your hive's signing desk and the Arkade Operator, and sends them signatures, never the key.</p>
     <div class="actions">
       <button class="primary" id="create" type="button">Create my key</button>
       <button class="link" id="to-restore" type="button">I have a backup</button>
@@ -123,7 +134,45 @@
         <p class="msg" id="again-msg" role="alert"></p>
       </form>
     </details>
+    <hr>
+    <form id="desk-form">
+      <h2 style="font-size:20px;margin:0 0 8px">Sign your hive's payments</h2>
+      <p>Open your hive's signing desk to see the jobs waiting for funding. The address comes from your hive's page in Buzz.</p>
+      <label for="desk-url">Signing desk</label>
+      <input id="desk-url" name="desk" type="url" placeholder="https://hive.example.org" required>
+      <div class="actions"><button class="primary" type="submit">Unlock and open</button></div>
+      <p class="msg" id="desk-msg" role="alert"></p>
+    </form>
     <div class="actions"><button class="link" id="remove" type="button">Remove the key from this browser</button></div>
+  </section>
+
+  <section data-view="payments" hidden>
+    <h1 tabindex="-1" id="hive-name">Payments</h1>
+    <p id="hive-summary"></p>
+    <div id="listing-card" hidden>
+      <div class="line"><span id="listing-text" style="flex:1"></span><button class="quiet" id="sign-listing" type="button">Sign the listing</button></div>
+    </div>
+    <ul class="list" id="payment-list"></ul>
+    <p class="note" id="payments-empty" hidden>No job is waiting for the keepers right now.</p>
+    <p class="msg" id="payments-msg" role="alert"></p>
+    <div class="actions">
+      <button class="quiet" id="refresh" type="button">Refresh</button>
+      <button class="link" id="lock" type="button">Lock the console</button>
+    </div>
+  </section>
+
+  <section data-view="payment" hidden>
+    <h1 tabindex="-1">Fund a job</h1>
+    <p id="payment-lead"></p>
+    <dl class="facts" id="payment-facts"></dl>
+    <ul class="checks" id="payment-checks"></ul>
+    <p class="note">Two keepers sign each payment. Your console rebuilds the escrow from the job's terms and checks every coin with the Operator before it signs anything.</p>
+    <div class="actions">
+      <button class="primary" id="act" type="button">Check and sign</button>
+      <button class="quiet" id="cancel-payment" type="button" hidden>Cancel this payment</button>
+      <button class="link" id="back" type="button">Back</button>
+    </div>
+    <p class="msg" id="payment-msg" role="alert"></p>
   </section>
 
   <section data-view="restore" hidden>

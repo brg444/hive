@@ -9,6 +9,7 @@ import {
   type EscrowTerms,
   escrowArguments,
   escrowRefundTemplate,
+  jobEscrow,
   lookupSpendCoins,
   networkCeilings,
   type Pair,
@@ -38,6 +39,7 @@ import {
 import { schnorr } from "@noble/curves/secp256k1.js";
 import type { Steward } from "./config.js";
 import {
+  type FundingRequest,
   KEEPER_MAX_VALIDITY_SECONDS,
   MAX_VALIDITY_SECONDS,
   type Purpose,
@@ -55,17 +57,18 @@ export function keeperView(
   keepers: readonly [string, string, string],
   treasuryTerms: Steward["treasuryTerms"],
 ): TreasuryView {
-  return { pairs: pairKeys(keepers) as Record<Pair, string>, treasuryTerms };
+  // The pair keys come from the keepers' own keys, never from whoever passed the terms along.
+  const pairs = pairKeys(keepers) as Record<Pair, string>;
+  return { pairs, treasuryTerms: { ...treasuryTerms, pairs } };
 }
 
 /**
- * What a keeper confirmed in the console before signing a payment: the proposal it serves, what is
- * left of that proposal's budget, and the provider's terms exactly as the console showed them.
+ * What a keeper confirmed in the console before signing a payment: the funding request exactly as
+ * the console showed it, and what was left of the hive's approved budget when they did.
  */
 export interface PaymentApproval {
-  proposal: string;
+  request: FundingRequest;
   remainingSats: number;
-  terms: QuoteTerms;
 }
 
 export interface Checked {
@@ -248,12 +251,13 @@ async function checkAllocation(
 }
 
 /**
- * The checks a keeper's console runs before it signs a payment: everything a steward checks before
- * funding an escrow, against the terms the keeper confirmed rather than a steward's config, with
- * the cap within what is left of the proposal's budget and up to two days for the second keeper.
+ * The checks a keeper's console runs before it signs a payment: the escrow is the one the job's
+ * terms build, returning to this treasury; the plan moves exactly the cap into it from coins that
+ * last as long as the job needs; the cap fits what is left of the hive's approved budget; and the
+ * authorization lives at most 23 hours, for the second keeper, and ends before the job's deadline.
  * The console signs only the messages this returns, and keeps its reservations as a steward does:
- * the coins and the quote until `until`, and the binding for good, so it never signs a second plan
- * for the same request. Any two pairs share a keeper, so no request is funded twice.
+ * the coins until `until`, and the binding for good, so it never signs a second plan for the same
+ * job. Any two pairs share a keeper, so no job is funded twice.
  */
 export async function checkPayment(
   view: TreasuryView,
@@ -265,12 +269,56 @@ export async function checkPayment(
   const purpose = session.purpose;
   ensure(purpose.kind === "payment", "UNKNOWN_PURPOSE", "not a payment");
   ensure(/^[0-9a-f]{64}$/.test(session.id), "INVALID", "session id");
+  const request = purpose.request;
+  ensure(sameJson(request, approval.request), "UNAPPROVED_PAYMENT", "not the request the keeper confirmed");
+  const escrow = guard("ESCROW_MISMATCH", () => jobEscrow(conn, request.params));
+  const treasury = treasuryOf(view, conn);
   ensure(
-    Number.isSafeInteger(approval.remainingSats) && Number(approval.terms.capSats) <= approval.remainingSats,
-    "ABOVE_BUDGET",
-    `the proposal has ${approval.remainingSats} sats left`,
+    request.params.treasuryProgram === treasury.pkScript.slice(4),
+    "NOT_OUR_TREASURY",
+    "the escrow returns its funds elsewhere",
   );
-  return checkFunding(view, conn, session, purpose, approval.terms, now, KEEPER_MAX_VALIDITY_SECONDS);
+  ensure(
+    escrow.address === request.address.trim().toLowerCase() &&
+      request.params.jobId === request.jobId &&
+      request.params.providerPk === request.providerPk &&
+      request.params.deadline === request.deadline,
+    "ESCROW_MISMATCH",
+    "the address is not the escrow the job's terms build",
+  );
+  const cap = request.capSats;
+  ensure(Number.isSafeInteger(cap) && cap >= conn.operator.dust, "PLAN_INVALID", "cap");
+  ensure(
+    Number.isSafeInteger(approval.remainingSats) && cap <= approval.remainingSats,
+    "ABOVE_BUDGET",
+    `the hive's approved work has ${approval.remainingSats} sats left`,
+  );
+  const ceilings = networkCeilings(conn.deployment.network);
+  ensure(!ceilings || cap <= ceilings.escrowSats, "ABOVE_CEILING");
+  const plan = purpose.plan;
+  ensure(plan.destination === escrow.pkScript && plan.amount === cap, "PLAN_INVALID", "escrow or cap");
+  ensure(now < request.deadline, "PAYMENT_LATE", "the job's deadline has passed");
+  ensure(plan.validUntil <= request.deadline, "PLAN_INVALID", "the authorization outlives the job");
+  const { attest, coins } = await checkSend(view, conn, session, plan, now, KEEPER_MAX_VALIDITY_SECONDS);
+  // Without a renewal service, the escrow lives as long as the coins that fund it.
+  if (request.minCoinExpiry !== undefined) {
+    ensure(Number.isSafeInteger(request.minCoinExpiry), "PLAN_INVALID", "minimum coin expiry");
+    for (const coin of await lookupSpendCoins(conn, plan.coins))
+      ensure(coin.expiresAt >= request.minCoinExpiry, "COIN_EXPIRES_TOO_SOON", `${coin.txid}:${coin.vout}`);
+  }
+  // A job is funded once.
+  const funded = await conn.arkd.coins({ scripts: [escrow.pkScript] });
+  ensure(funded.length === 0, "ESCROW_FUNDED");
+  const messages =
+    purpose.stage === "attest" ? attest : [registration(view, session, plan, attest, purpose.signatures)];
+  const holder = planHolder(plan);
+  return {
+    messages,
+    holder,
+    coins,
+    until: plan.validUntil,
+    binds: { key: `job:${request.jobId}`, value: holder, code: "JOB_ALREADY_FUNDED" },
+  };
 }
 
 /** Funding an escrow from the treasury, on approved terms: the shared rules of an allocation and a keeper payment. */
@@ -278,7 +326,7 @@ async function checkFunding(
   steward: TreasuryView,
   conn: Connection,
   session: SessionRequest,
-  purpose: Extract<Purpose, { kind: "allocation" | "payment" }>,
+  purpose: Extract<Purpose, { kind: "allocation" }>,
   approved: QuoteTerms,
   now: number,
   maxValidity: number,

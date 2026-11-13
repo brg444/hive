@@ -1,7 +1,8 @@
 // Build a hive's Buzz plugin folder: manifest.json + plugin.js, stamped with the hive's host.
 //
 //   node plugin/build.mjs --api https://hive.example.org --name "Example Hive" [--id example.hive] [--out dist]
-//       [--channel <the hive's channel UUID> --keepers <npub or hex, comma-separated> [--threshold 2] [--small-sats 20000]]
+//       [--channel <the hive's channel UUID> --keepers <npub or hex, comma-separated> [--threshold 2] [--small-sats 20000]
+//        [--discussion-minutes <n>, for a test hive]]
 //       [--install <https Git repository>#<branch>] [--console <keeper console HTTPS address>]
 //       [--docs <the repository's docs, as one Markdown file on the --api origin>]
 //
@@ -51,7 +52,10 @@ if (arg("--channel") || arg("--keepers")) {
     const keepers = (arg("--keepers") ?? fail("--channel needs --keepers")).split(",").filter(Boolean).map(keeperKey);
     const threshold = Number(arg("--threshold", "2"));
     if (!Number.isInteger(threshold) || threshold < 1 || threshold > keepers.length) fail("--threshold must be between 1 and the number of keepers");
-    config = { channelId: channelId.toLowerCase(), keepers, threshold, smallSats: Number(arg("--small-sats", "20000")) };
+    const minutes = arg("--discussion-minutes");
+    if (minutes !== undefined && !(Number(minutes) > 0)) fail("--discussion-minutes must be a positive number");
+    config = { channelId: channelId.toLowerCase(), keepers, threshold, smallSats: Number(arg("--small-sats", "20000")),
+        ...(minutes !== undefined ? { discussionSeconds: Math.round(Number(minutes) * 60) } : {}) };
 }
 // Buzz's rules for plugin ids and names (docs/plugin-authoring-guide.md).
 if (!/^[a-z][a-z0-9.-]*$/.test(id) || id.length > 80 || /\.\.|-\.|\.-|\.$/.test(id)) fail(`invalid plugin id ${id}`);

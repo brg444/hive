@@ -29,6 +29,7 @@ import {
 import { ensure, fail, hex, readJsonIfPresent, withLock, writeJson } from "@hive/kit";
 import type { SignedQuote } from "@hive/protocol";
 import {
+  type FundingRequest,
   type Purpose,
   type SessionRequest,
   type StewardEndpoint,
@@ -58,7 +59,10 @@ export const treasuryAccountOf = (t: Pick<Treasury, "conn" | "terms">) =>
 export interface SpendJournal {
   schema: "hive-spend/v4";
   label: string;
-  purpose: { kind: "allocation"; quote: SignedQuote } | { kind: "withdrawal"; withdrawal: WithdrawalTerms };
+  purpose:
+    | { kind: "allocation"; quote: SignedQuote }
+    | { kind: "withdrawal"; withdrawal: WithdrawalTerms }
+    | { kind: "payment"; request: FundingRequest };
   plan: SendPlan;
   sessions: { attest: string; register: string };
   attestations?: string[];
@@ -78,6 +82,10 @@ export interface SpendJournal {
 
 function purposeFor(journal: SpendJournal, stage: "attest" | "register"): Purpose {
   const signatures = journal.attestations ?? [];
+  if (journal.purpose.kind === "payment")
+    return stage === "attest"
+      ? { kind: "payment", stage, request: journal.purpose.request, plan: journal.plan }
+      : { kind: "payment", stage, request: journal.purpose.request, plan: journal.plan, signatures };
   if (journal.purpose.kind === "allocation")
     return stage === "attest"
       ? { kind: "allocation", stage, quote: journal.purpose.quote, plan: journal.plan }
@@ -85,6 +93,52 @@ function purposeFor(journal: SpendJournal, stage: "attest" | "register"): Purpos
   return stage === "attest"
     ? { kind: "withdrawal", stage, withdrawal: journal.purpose.withdrawal, plan: journal.plan }
     : { kind: "withdrawal", stage, withdrawal: journal.purpose.withdrawal, plan: journal.plan, signatures };
+}
+
+/** The delegatee's request a pair signs to register the send, once its attestations are in. */
+export function registrationMessage(treasury: Pick<Treasury, "terms">, journal: SpendJournal): Uint8Array {
+  return pendingRegistration(treasury, journal).message;
+}
+
+function pendingRegistration(treasury: Pick<Treasury, "terms">, journal: SpendJournal) {
+  ensure(journal.attestations, "WRONG_ROUND", "the send is not attested yet");
+  const { variables, outpoints } = signedSend(journal.plan, journal.attestations);
+  return spendRequestFor(
+    journal.plan.templateId,
+    variables,
+    outpoints,
+    journal.plan.validUntil,
+    treasury.terms.pairs[journal.plan.pair!],
+  );
+}
+
+/**
+ * Records the pair's signature on the registration: the journal then holds the signed request, the
+ * spend and the txid every route builds, and is ready to execute. The caller saves it.
+ */
+export function registerSigned(
+  treasury: Pick<Treasury, "conn" | "terms">,
+  journal: SpendJournal,
+  signature: string,
+  routes?: RouteName[],
+): SpendJournal {
+  const pending = pendingRegistration(treasury, journal);
+  const account = treasuryAccountOf(treasury);
+  journal.request = pending.request(signature);
+  journal.spendId = pending.id;
+  journal.status = "registered";
+  journal.spend = sendSpend(journal.plan, account.instance, journal.attestations!);
+  journal.arkTxid = buildSpend(journal.spend, treasury.conn.operator.checkpointTapscript).txid;
+  journal.execution = executionState(
+    {
+      txid: journal.arkTxid,
+      spend: journal.spend,
+      request: journal.request,
+      validUntil: journal.plan.validUntil,
+    },
+    routes ?? treasury.conn.router.routes,
+  );
+  return journal;
 }
 
 /** Plan a send of exactly `amount` to `destination`, authorized by `pair`, valid for `validSeconds`. */
@@ -175,6 +229,9 @@ async function driveTreasurySpendLocked(
     save();
     return journal;
   }
+  // A keepers' payment is signed by hand, through the signing desk, which records each signature.
+  if (journal.purpose.kind === "payment" && (journal.status === "planned" || journal.status === "attested"))
+    return journal;
   if (journal.status === "planned") {
     const messages = sendMessages(journal.plan, account.instance, treasury.conn.operator.checkpointTapscript);
     journal.attestations = await signWithPair(
@@ -187,34 +244,13 @@ async function driveTreasurySpendLocked(
     save();
   }
   if (journal.status === "attested") {
-    const { variables, outpoints } = signedSend(journal.plan, journal.attestations!);
-    const pending = spendRequestFor(
-      journal.plan.templateId,
-      variables,
-      outpoints,
-      journal.plan.validUntil,
-      treasury.terms.pairs[pair],
-    );
     const [signature] = await signWithPair(
       treasury.stewards,
       treasury.stewardKeys,
       session(journal.sessions.register, "register"),
-      [pending.message],
+      [registrationMessage(treasury, journal)],
     );
-    journal.request = pending.request(signature!);
-    journal.spendId = pending.id;
-    journal.status = "registered";
-    journal.spend = sendSpend(journal.plan, account.instance, journal.attestations!);
-    journal.arkTxid = buildSpend(journal.spend, treasury.conn.operator.checkpointTapscript).txid;
-    journal.execution = executionState(
-      {
-        txid: journal.arkTxid,
-        spend: journal.spend,
-        request: journal.request,
-        validUntil: journal.plan.validUntil,
-      },
-      options.routes ?? treasury.conn.router.routes,
-    );
+    registerSigned(treasury, journal, signature!, options.routes);
     save();
   }
   if (!journal.spend) {

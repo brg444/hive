@@ -4,6 +4,7 @@ import type { SessionRequest, StewardDescription } from "./purpose.js";
 
 export { signWithPair } from "./pair.js";
 export {
+  type FundingRequest,
   MAX_VALIDITY_SECONDS,
   type Purpose,
   type SessionRequest,

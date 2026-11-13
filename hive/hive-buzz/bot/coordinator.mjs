@@ -22,10 +22,11 @@ function target(e) {
  * Where every proposal stands at `now`.
  *
  * events: the channel's kind 9 messages, kind 7 reactions and kind 5 deletions, in any order.
- * cfg: { keepers: [pubkey], threshold, smallSats, now, usage: { [proposalId]: usedSats } }
+ * cfg: { keepers: [pubkey], threshold, smallSats, now, usage: { [proposalId]: usedSats }, discussionSeconds }
+ *   discussionSeconds: one discussion length for every proposal, for a test hive; 48 or 24 hours otherwise.
  */
 export function coordinate(events, cfg) {
-    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {} } = cfg;
+    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {}, discussionSeconds: fixed } = cfg;
     const keeperSet = new Set(keepers);
     const deleted = new Set(events.filter((e) => e.kind === 5).flatMap((e) => tagValues(e, "e")));
     const live = events.filter((e) => !deleted.has(e.id)).sort((a, b) => a.created_at - b.created_at);
@@ -65,7 +66,7 @@ export function coordinate(events, cfg) {
 
     const out = [];
     for (const p of proposals.values()) {
-        const discussionEnds = p.postedAt + discussionSeconds(p.budgetSats, smallSats);
+        const discussionEnds = p.postedAt + (fixed ?? discussionSeconds(p.budgetSats, smallSats));
         const approvalTimes = [...p.approvals.values()].sort((a, b) => a - b);
         const approvedAt = approvalTimes.length >= threshold ? Math.max(discussionEnds, approvalTimes[threshold - 1]) : null;
         const starts = approvedAt === null ? null : Math.max(approvedAt, p.start ?? approvedAt);

@@ -21,17 +21,6 @@ export {
   requestContribution,
 } from "./intake.js";
 export {
-  ACTIVATION_FILE,
-  type EscrowActivation,
-  fundingJournals,
-  PURCHASE_FILE,
-  type PurchaseRecord,
-  purchase,
-  readPurchase,
-  reservedCoins,
-} from "./purchase.js";
-export { executeRefund, type RegisteredRefund, refundEscrow, refundFallbackAt } from "./refund.js";
-export {
   currentHiveListings,
   type FoundHiveListing,
   fetchHiveListings,
@@ -43,11 +32,24 @@ export {
   publishHiveListing,
   readHiveListingEvent,
 } from "./listings.js";
+export {
+  ACTIVATION_FILE,
+  type EscrowActivation,
+  fundingJournals,
+  PURCHASE_FILE,
+  type PurchaseRecord,
+  purchase,
+  readPurchase,
+  reservedCoins,
+} from "./purchase.js";
+export { executeRefund, type RegisteredRefund, refundEscrow, refundFallbackAt } from "./refund.js";
 export { nostrTransport, type RequestQuoteOptions, requestQuote, type TransportFactory } from "./rfq.js";
 export {
   driveTreasurySpend,
   newSpendJournal,
   planTreasurySend,
+  registerSigned,
+  registrationMessage,
   type SpendJournal,
   type Treasury,
   treasuryAccountOf,

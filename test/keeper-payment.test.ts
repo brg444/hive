@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { type TestContext, test } from "node:test";
-import { sendMessages } from "@hive/ark";
+import { jobEscrow, sendMessages } from "@hive/ark";
 import { planTreasurySend } from "@hive/hive";
-import { faultCode, hex } from "@hive/kit";
-import { quoteTerms } from "@hive/protocol";
+import { faultCode, hex, unhex } from "@hive/kit";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { loadSteward } from "../packages/steward/src/config.js";
 import {
@@ -22,53 +21,70 @@ import {
   keeperView,
   type PaymentApproval,
 } from "../packages/steward/src/policy.js";
-import type { SessionRequest } from "../packages/steward/src/purpose.js";
+import type { FundingRequest, SessionRequest } from "../packages/steward/src/purpose.js";
 import { hiveFixture } from "./support/hive-v4.js";
 
 const now = () => Math.floor(Date.now() / 1000);
 const hasCode = (code: string) => (error: unknown) => faultCode(error) === code;
 const hours = (n: number) => n * 3600;
-const unhex = (s: string) => Uint8Array.from(Buffer.from(s, "hex"));
+const xonly = () => hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()));
 
-/** A treasury with coins, a provider's quote whose deadlines leave room for a day-long signature, and its watched escrow. */
+/**
+ * A treasury with coins, and a job its agent asks the keepers to fund: a pay-arkade escrow built from
+ * the job's terms, returning to this treasury, with a deadline that leaves room for a day-long signature.
+ */
 async function paymentFixture(
   t: TestContext,
-  options: { renewalWindowSeconds?: number; quoteHours?: number; timeoutHours?: number } = {},
+  options: { renewalWindowSeconds?: number; deadlineHours?: number; minCoinExpiry?: number } = {},
 ) {
   const hive = await hiveFixture(t, { renewalWindowSeconds: options.renewalWindowSeconds });
   hive.fake.mint(hive.account.pkScript, 30_000);
-  const { quote, escrow: terms } = await hive.quote({
-    quoteExpiresAt: String(now() + hours(options.quoteHours ?? 36)),
-    timeoutAt: String(now() + hours(options.timeoutHours ?? 40)),
-  });
-  const escrow = await hive.escrow(terms);
-  const view = keeperView(hive.stewardKeys, hive.treasury.terms);
-  const approval: PaymentApproval = {
-    proposal: "translate-docs",
-    remainingSats: 50_000,
-    terms: quoteTerms(quote.body),
+  const job = (overrides: Partial<FundingRequest["params"]> = {}): FundingRequest => {
+    const params = {
+      agentPk: xonly(),
+      providerPk: xonly(),
+      treasuryProgram: hive.account.pkScript.slice(4),
+      deadline: now() + hours(options.deadlineHours ?? 40),
+      jobId: hex(randomBytes(32)),
+      ...overrides,
+    };
+    return {
+      jobId: params.jobId,
+      address: jobEscrow(hive.conn, params).address,
+      capSats: 20_000,
+      deadline: params.deadline,
+      model: "qwen3-8b",
+      priceMsatPerMtok: 2_000_000,
+      providerPk: params.providerPk,
+      params,
+      ...(options.minCoinExpiry !== undefined ? { minCoinExpiry: options.minCoinExpiry } : {}),
+    };
   };
-  const plan = (validSeconds: number) =>
+  const request = job();
+  const view = keeperView(hive.stewardKeys, hive.treasury.terms);
+  const approval: PaymentApproval = { request, remainingSats: 50_000 };
+  const plan = (validSeconds: number, to = request) =>
     planTreasurySend(hive.treasury, {
       pair: "01",
-      amount: 20_000,
-      destination: escrow.pkScript,
+      amount: to.capSats,
+      destination: jobEscrow(hive.conn, to.params).pkScript,
       validSeconds,
     });
   const session = (
-    purpose: { stage: "attest" } | { stage: "register"; signatures: string[] },
+    stage: { stage: "attest" } | { stage: "register"; signatures: string[] },
     sendPlan: Awaited<ReturnType<typeof plan>>,
+    to = request,
   ): SessionRequest => ({
     id: hex(randomBytes(32)),
     pair: "01",
-    purpose: { kind: "payment", quote, plan: sendPlan, ...purpose } as SessionRequest["purpose"],
+    purpose: { kind: "payment", request: to, plan: sendPlan, ...stage } as SessionRequest["purpose"],
   });
-  return { hive, quote, escrow, view, approval, plan, session };
+  return { hive, request, job, view, approval, plan, session };
 }
 
-test("two keepers sign a payment hours apart, each from the terms they confirmed, with no steward config", async (t) => {
+test("two keepers fund a job hours apart, each checking the escrow returns to their treasury", async (t) => {
   const { hive, view, approval, plan, session } = await paymentFixture(t);
-  const sendPlan = await plan(hours(30));
+  const sendPlan = await plan(hours(20));
   const keys = hive.stewardKeys;
   const [first, second] = [hive.stewardSecrets[0]!, hive.stewardSecrets[1]!];
 
@@ -80,7 +96,7 @@ test("two keepers sign a payment hours apart, each from the terms they confirmed
     sendMessages(sendPlan, hive.account.instance, hive.conn.operator.checkpointTapscript).map(hex),
   );
   assert.equal(checked.until, sendPlan.validUntil);
-  assert.deepEqual(checked.binds?.key, `request:${approval.terms.requestId}`);
+  assert.equal(checked.binds?.key, `job:${approval.request.jobId}`);
   const secondNonces = nonceBatch(second, 8);
   const attest = newSession(keys, "01", checked.messages);
   assignShared(attest, keys[1], (n) => secondNonces.batch.nonces.slice(0, n));
@@ -114,32 +130,60 @@ test("a steward service refuses a keeper payment: nobody there confirmed it", as
   );
 });
 
-test("a keeper payment is refused above the proposal's remaining budget or on terms the keeper did not see", async (t) => {
-  const { hive, view, approval, plan, session } = await paymentFixture(t);
-  const request = session({ stage: "attest" }, await plan(600));
-  await assert.rejects(
-    checkPayment(view, hive.conn, request, { ...approval, remainingSats: 19_999 }, now()),
-    hasCode("ABOVE_BUDGET"),
-  );
-  const shown = { ...approval.terms, outputRateMsatPerMillionTokens: "1" };
-  await assert.rejects(
-    checkPayment(view, hive.conn, request, { ...approval, terms: shown }, now()),
-    hasCode("QUOTE_TERMS_MISMATCH"),
-  );
-  const other = await hive.quote();
-  await assert.rejects(
-    checkPayment(view, hive.conn, request, { ...approval, terms: quoteTerms(other.quote.body) }, now()),
-    hasCode("UNAPPROVED_REQUEST"),
-  );
+test("a payment is refused when the escrow is not the one its terms build, or returns elsewhere", async (t) => {
+  const { hive, request, job, view, approval, plan, session } = await paymentFixture(t);
+  const check = async (to: FundingRequest) => {
+    const sendPlan = await plan(
+      600,
+      to.params.treasuryProgram === request.params.treasuryProgram ? to : request,
+    );
+    return checkPayment(
+      view,
+      hive.conn,
+      session({ stage: "attest" }, sendPlan, to),
+      { ...approval, request: to },
+      now(),
+    );
+  };
+  // An address someone swapped in, though the terms are fine.
+  await assert.rejects(check({ ...request, address: job().address }), hasCode("ESCROW_MISMATCH"));
+  // A provider named in the request that the escrow does not pay.
+  await assert.rejects(check({ ...request, providerPk: xonly() }), hasCode("ESCROW_MISMATCH"));
+  // An escrow whose unclaimed funds go to another treasury.
+  await assert.rejects(check(job({ treasuryProgram: xonly() })), hasCode("NOT_OUR_TREASURY"));
 });
 
-test("a keeper payment lives two days at most, and a steward's allocation still half an hour", async (t) => {
-  const { hive, view, approval, plan, session, quote, escrow } = await paymentFixture(t, {
-    quoteHours: 50,
-    timeoutHours: 60,
-  });
+test("a payment is refused above the remaining budget, on a request the keeper did not see, or late", async (t) => {
+  const { hive, request, view, approval, plan, session } = await paymentFixture(t);
+  const attest = session({ stage: "attest" }, await plan(600));
+  await assert.rejects(
+    checkPayment(view, hive.conn, attest, { ...approval, remainingSats: 19_999 }, now()),
+    hasCode("ABOVE_BUDGET"),
+  );
+  await assert.rejects(
+    checkPayment(view, hive.conn, attest, { ...approval, request: { ...request, model: "other" } }, now()),
+    hasCode("UNAPPROVED_PAYMENT"),
+  );
+  await assert.rejects(
+    checkPayment(view, hive.conn, attest, approval, request.deadline + 1),
+    hasCode("PAYMENT_LATE"),
+  );
+  // Once the escrow holds a coin, the job is funded and nobody signs again.
+  hive.fake.mint(jobEscrow(hive.conn, request.params).pkScript, 20_000);
+  await assert.rejects(checkPayment(view, hive.conn, attest, approval, now()), hasCode("ESCROW_FUNDED"));
+});
+
+test("a payment lives 23 hours at most and ends before the job's deadline; an allocation still half an hour", async (t) => {
+  const { hive, view, approval, plan, session } = await paymentFixture(t, { deadlineHours: 60 });
   const tooLong = session({ stage: "attest" }, await plan(KEEPER_MAX_VALIDITY_SECONDS + 600));
   await assert.rejects(checkPayment(view, hive.conn, tooLong, approval, now()), hasCode("PLAN_INVALID"));
+  const short = await paymentFixture(t, { deadlineHours: 1 });
+  const pastDeadline = short.session({ stage: "attest" }, await short.plan(hours(2)));
+  await assert.rejects(
+    checkPayment(short.view, short.hive.conn, pastDeadline, short.approval, now()),
+    hasCode("PLAN_INVALID"),
+  );
+  const { quote, escrow } = await hive.quote();
   const allocation: SessionRequest = {
     id: hex(randomBytes(32)),
     pair: "01",
@@ -150,7 +194,7 @@ test("a keeper payment lives two days at most, and a steward's allocation still 
       plan: await planTreasurySend(hive.treasury, {
         pair: "01",
         amount: 20_000,
-        destination: escrow.pkScript,
+        destination: (await hive.escrow(escrow)).pkScript,
         validSeconds: hours(2),
       }),
     },
@@ -161,14 +205,36 @@ test("a keeper payment lives two days at most, and a steward's allocation still 
   );
 });
 
-test("a long-lived payment refuses coins that would need renewing before it ends", async (t) => {
-  const { hive, view, approval, plan, session } = await paymentFixture(t, {
-    renewalWindowSeconds: hours(20),
-  });
-  // Coins last two days: signed within the hour, renewal is no concern; held for 30 hours, it is.
-  await checkPayment(view, hive.conn, session({ stage: "attest" }, await plan(1800)), approval, now());
+test("a long-lived payment refuses coins that would need renewing, or that die before the job needs", async (t) => {
+  const renewing = await paymentFixture(t, { renewalWindowSeconds: hours(30) });
+  // Coins last two days: signed within the hour, renewal is no concern; held for 20 hours, it is.
+  await checkPayment(
+    renewing.view,
+    renewing.hive.conn,
+    renewing.session({ stage: "attest" }, await renewing.plan(1800)),
+    renewing.approval,
+    now(),
+  );
   await assert.rejects(
-    checkPayment(view, hive.conn, session({ stage: "attest" }, await plan(hours(30))), approval, now()),
+    checkPayment(
+      renewing.view,
+      renewing.hive.conn,
+      renewing.session({ stage: "attest" }, await renewing.plan(hours(20))),
+      renewing.approval,
+      now(),
+    ),
+    hasCode("COIN_EXPIRES_TOO_SOON"),
+  );
+  // With no renewal service for the escrow, the provider names how long the funding coin must last.
+  const unrenewed = await paymentFixture(t, { minCoinExpiry: now() + hours(72) });
+  await assert.rejects(
+    checkPayment(
+      unrenewed.view,
+      unrenewed.hive.conn,
+      unrenewed.session({ stage: "attest" }, await unrenewed.plan(1800)),
+      unrenewed.approval,
+      now(),
+    ),
     hasCode("COIN_EXPIRES_TOO_SOON"),
   );
 });

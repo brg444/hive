@@ -206,7 +206,9 @@ impl App {
         }
         let mut request = json!({"event": "fund", "job_id": quote.job_id, "address": quote.escrow_address, "cap_sats": quote.cap_sats,
             "deadline": quote.deadline, "model": quote.model, "price_msat_per_mtok": quote.price_msat_per_mtok,
-            "provider_peer": peer, "provider_pk": quote.provider_pk});
+            "provider_peer": peer, "provider_pk": quote.provider_pk,
+            // Every term the escrow is built from, so each keeper can rebuild the address before signing.
+            "params": quote.params()});
         if quote.delegate_pk.is_some() {
             // The delegate service renews the escrow once it is funded, so any coin will do.
             request["renewal"] = json!({"delegate": self.cfg.delegate, "delegate_pk": quote.delegate_pk});

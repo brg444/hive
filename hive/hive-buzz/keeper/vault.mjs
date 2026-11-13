@@ -69,6 +69,31 @@ async function open(aesKey, box) {
     return secret;
 }
 
+/** An AES-GCM key for the nonces the console keeps between signing sessions, from the same passkey. */
+export async function nonceKeyFromPrf(prf) {
+    const base = await crypto.subtle.importKey("raw", prf, "HKDF", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: te.encode("hive keeper nonces v1") },
+        base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+/** The secret halves of shared nonces, encrypted for this device's storage; `label` binds them to one hive. */
+export async function sealNonces(aesKey, label, secrets) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: te.encode(label) }, aesKey, te.encode(JSON.stringify(secrets)));
+    return { v: 1, iv: b64(iv), ciphertext: b64(new Uint8Array(data)) };
+}
+
+export async function openNonces(aesKey, label, box) {
+    if (!box) return [];
+    try {
+        const data = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(box.iv), additionalData: te.encode(label) }, aesKey, unb64(box.ciphertext));
+        return JSON.parse(new TextDecoder().decode(data));
+    } catch {
+        // Nonces this passkey cannot open are useless here: the desk's copies just go unanswered.
+        return [];
+    }
+}
+
 /** What the console keeps on the device: the key, encrypted under the passkey that created it. */
 export async function lockWithPasskey(secret, prf, credentialId) {
     return { v: 1, kind: "hive-keeper-key", credentialId, created: new Date().toISOString(), ...(await seal(await keyFromPrf(prf), secret)) };

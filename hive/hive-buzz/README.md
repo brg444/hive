@@ -5,13 +5,13 @@ it, and the small read-only service that reports the treasury. The plugin shows 
 no keys. It reads proposals, support and approvals straight from the hive's channel, so they work
 as soon as it is installed. Proposing,
 supporting and approving are ordinary Buzz messages and reactions, signed by whoever sends them.
-Chipping in and funding jobs happen in each person's own wallet.
+Members chip in from their own wallets, and keepers sign each payment in the keeper console.
 
 - **Members** propose work from the hive's channel, see each proposal drawn as a card with its
   budget, period and live 👍 and ✅ counts, and find their own allowances on the hive's page.
 - **Keepers** approve with ✅ or decline with ❌ and a reply. They hear once when a proposal's
   discussion closes without their decision, and once for each job waiting for funding, with the
-  exact amount, the escrow address and the earliest coin expiry the provider accepts.
+  exact amount, the escrow address and a link to sign it in the keeper console.
 - **Agents** in the community get a `hive_status` tool that answers from the same data.
 
 ## hive-api
@@ -31,6 +31,27 @@ Run it behind TLS on the hive's host: Buzz lets a plugin call only the exact HTT
 manifest declares. To try the plugin on one machine, `--tls-cert` and `--tls-key` make hive-api
 serve HTTPS itself with a locally trusted certificate (`mkcert localhost`). The Hive site can serve the same document later; the plugin needs nothing
 else.
+
+A hive's host has no Buzz key of its own, since a hosted community admits only its members' apps.
+With `--channel`, the plugin in each member's app forwards the channel's signed events to
+`POST /hive/v1/channel`, and hive-api keeps those whose signatures hold: a forwarded event cannot be
+forged, only left out, and one open app is enough. From them it works out the proposals, the keepers
+and their treasury keys, and writes the governance to `--governance` and the agent's members file
+to `--members-file`, once a minute and whenever something new arrives.
+
+```bash
+node api/src/server.mjs --name "Hive" --agent-log <pay-arkade buyer log> --operator https://arkade.computer \
+  --channel <channel ID> --bot <HiveBot's public key> --governance <file> --members-file <file> \
+  --model <model id> [--treasury <ark1... address>] [--discussion-minutes <n>] \
+  [--desk https://<host>/desk --console https://<host>/keeper/]
+```
+
+`--bot` takes the keepers HiveBot recorded during setup, in the order it confirmed them, which is
+the order the treasury is built in; `--keepers` names them instead. A new hive runs without
+`--treasury` until its keepers' keys are in and its treasury is built, and is restarted with it.
+`--discussion-minutes` gives every proposal one short discussion, for a test hive. `--desk` and
+`--console` put the signing desk and the keeper console in the state, so the plugin links keepers
+straight to the payments waiting for them.
 
 The agent log also carries members' usage, which the state adds up per proposal without naming
 members. Given `--agent-console http://127.0.0.1:3131` (the agent node's console, on the same host),
@@ -137,26 +158,34 @@ sample data, marked as such, with addresses that no wallet accepts.
 
 ## The keeper console
 
-`keeper/` is where keepers create their treasury key, for now on test networks only. The key is
+`keeper/` is where keepers create their treasury key and sign the hive's payments. The key is
 made on the keeper's own device, kept there encrypted under their passkey (WebAuthn's PRF
 extension), and backed up to a file encrypted with a passphrase they choose. The file goes through
 the system's own save sheet, so a keeper can put it in iCloud Drive or Google Drive without the
 page ever signing in anywhere: a save dialog on desktop Chrome and Edge, Save to Files from the
-share sheet on phones and Safari, and a plain download elsewhere. The page has no
-network access at all: its Content-Security-Policy refuses every connection, so the key cannot
-leave the device. It gives the keeper the line to post in the hive's channel, `Hive keeper key:
-<key>`, which ties the key to their Buzz identity. Signing payments comes next, in the same page.
+share sheet on phones and Safari, and a plain download elsewhere. It gives the keeper the line to
+post in the hive's channel, `Hive keeper key: <key>`, which ties the key to their Buzz identity.
+
+To sign, a keeper opens the hive's signing desk (`pnpm ops desk`) in the console and unlocks the key
+with their passkey for one sitting. The console shares nonces for later signatures, keeping their
+secret halves on the device under the same passkey and deleting each before the signature that uses
+it. For each job waiting, it rebuilds the escrow from the job's terms with the hive's own code,
+checks that it gives back to this hive's treasury, that the amount fits what approved work has left
+and that every coin is the treasury's and lasts long enough, then signs only the messages it computed
+itself. The page talks to the desk and the Arkade Operator only, and sends them signatures and public
+nonces, never the key.
 
 ```bash
-node keeper/build.mjs dist/keeper          # index.html and console.js, the curve library bundled in
+node keeper/build.mjs dist/keeper [--mainnet]   # index.html and console.js, the hive's checks bundled in
 ```
 
-The repo's `Demo` workflow publishes it on GitHub Pages at `/keeper/`, and builds the demo plugin
-with `--console` pointing there. A passkey belongs to one web address, so keys made there stay
-with that address; mainnet keys will be made on a console of their own. `test/keeper.test.mjs`
-covers the key handling, and `node test/keeper-browser.mjs` runs the page in Chromium with a virtual
-passkey: creating a key, saving its backup, keeping it across a reload and restoring it on another
-device.
+The repo's `Demo` workflow publishes it on GitHub Pages at `/keeper/`, for test networks; a hive's
+host serves the `--mainnet` build for real funds. A passkey belongs to one web address, so keys made
+on one console stay with it. `test/keeper.test.mjs` covers the key handling, and
+`node test/keeper-browser.mjs` runs the page in Chromium with a virtual passkey: creating a key,
+saving its backup, keeping it across a reload and restoring it on another device. The repository's
+`test/keeper-console-e2e.ts` has two keepers sign a payment in their consoles, and
+`test/rehearsal.ts` runs a whole hive on regtest.
 
 ## The hive's bot
 

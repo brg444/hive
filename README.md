@@ -75,10 +75,14 @@ treasury. A host holds no key: while it is down its hives take no
 contributions and open no jobs, and deadline refunds still happen. A hive
 that wants its own server runs the same code alone.
 
-Today `pnpm ops init` creates all three keepers' keys in the operator's
-checkout. Moving each keeper's key and signing into the keeper's own wallet,
-in the browser or a connected one, is the next step, and the site's signing
-actions wait for it.
+A hive's keepers hold their own keys. Each makes theirs in the keeper console
+on their own device, locked with a passkey, and posts its public key in the
+hive's channel; `pnpm ops init --keepers` builds the treasury from the three
+keys and keeps none of them. Each payment then waits at the hive's signing desk
+(`pnpm ops desk`) until two keepers have checked and signed it in their
+consoles, hours apart if they like. Without `--keepers`, `pnpm ops init` still
+makes all three keys in the operator's checkout, for the gates and for trying
+Hive alone.
 
 ## Getting started
 
@@ -122,7 +126,7 @@ under `.local/ops/<hive>/` and its keys under `.secrets/`, both ignored by git.
 
 | Command | Does |
 | --- | --- |
-| `pnpm ops init <hive> --network <regtest\|mutinynet>` | Creates the keepers' keys, the treasury and the Lightning address |
+| `pnpm ops init <hive> --network <regtest\|mutinynet> [--keepers <k1,k2,k3>]` | Builds the treasury and the Lightning address, from the keepers' own keys or from three made here |
 | `pnpm ops listing <hive> --name <name> [--purpose <text>]` | Writes the hive's listing, signed by its three keepers |
 | `pnpm ops publish <hive> --relay <url>` | Publishes that listing to Nostr relays, so other sites and providers can find the hive |
 | `pnpm ops hives --network <regtest\|mutinynet> --relay <url>` | Lists the hives those relays carry, keeping only listings whose keys build the treasury they name |
@@ -130,11 +134,13 @@ under `.local/ops/<hive>/` and its keys under `.secrets/`, both ignored by git.
 | `pnpm ops approve <hive> <label> --provider … --cap … --minutes …` | Approves one purchase's exact terms for every party |
 | `pnpm ops buy <hive> <label>` | Gets the quote, arranges the refund and funds the escrow |
 | `pnpm ops serve <hive>` / `pnpm ops host <hive> …` | Serves one hive, or several under one directory, with the claim desk at `/api/claim` |
+| `pnpm ops desk <hive> --agent-log <log> [--governance <file>]` | Runs the signing desk, where keepers' consoles sign each payment |
 | `pnpm ops status <hive>` | Prints the hive's balance, jobs and warnings |
 | `pnpm ops halt [--hive <hive>] <reason>` / `pnpm ops resume …` | Stops or restarts new jobs and contributions, for one hive or all of them |
 
 [Running Hive](docs/running.md) lists every command and what a test
-network needs.
+network needs, and [the live test](docs/live-test.md) walks a new hive from
+setup to a paid job.
 
 ## Networks
 
@@ -162,9 +168,9 @@ and an explicit opt-in (`BUZZ_MAINNET=enabled`).
 | `app/` | The server, the directory (`hives.html`), a hive's page (`page.html`) and its typefaces |
 | `contracts/v4/` | The treasury, escrow, wallet and boarding contracts |
 | `gates/` | The lifecycle, refusals and renewal gates |
-| `tools/` | `ops.ts`, the local site (`dev.ts`), the audit, the test vector generators and the MeshLLM scripts |
+| `tools/` | `ops.ts`, the signing desk (`desk.ts`), the local site (`dev.ts`), the audit, the test vector generators and the MeshLLM scripts |
 | `test/` | Integration and architecture tests over an in-memory network |
-| `docs/` | How the system works, how to run it, and the agent's API |
+| `docs/` | How the system works, how to run it, the live test, and the agent's API |
 | `hive/pay-arkade/` | The MeshLLM payment plugin, its escrow contract and its gates |
 | `hive/hive-buzz/` | The Buzz plugin, the hive's read-only service and its bot |
 

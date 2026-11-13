@@ -32,8 +32,10 @@ export BUZZ_ARKD_URL=http://localhost:7070 BUZZ_DELEGATEE_URL=http://localhost:7
 export BUZZ_EMULATOR_URL=http://localhost:7073
 ```
 
+The Operator must state its delays in seconds: an exit delay of 512 or more.
 On Mutinynet the services are pinned in the code, and every run needs
-`BUZZ_MUTINYNET=approved`. Mainnet is refused.
+`BUZZ_MUTINYNET=approved`. Mainnet is refused until a delegatee is pinned for
+it; [the live test](live-test.md) says what that takes.
 
 ## Operating a hive
 
@@ -42,8 +44,9 @@ keys under `.secrets/`, both ignored by git.
 
 | Command | Does |
 | --- | --- |
-| `pnpm ops init <hive> --network <regtest\|mutinynet> [--lnurl <url>]` | Creates the keys, the treasury and the Lightning address |
-| `pnpm ops listing <hive> --name <name> [--purpose <text>] [--relay <url> …]` | Writes the hive's signed listing, and publishes it when relays are given |
+| `pnpm ops init <hive> --network <regtest\|mutinynet> [--keepers <k1,k2,k3>] [--lnurl <url>]` | Builds the treasury and the Lightning address; with `--keepers`, from the keepers' own keys, keeping none |
+| `pnpm ops listing <hive> --name <name> [--purpose <text>] [--relay <url> …]` | Writes the hive's signed listing, and publishes it when relays are given; a keepers' hive's keepers sign it in their consoles |
+| `pnpm ops desk <hive> --agent-log <log> [--governance <file>] [--port <n>] [--origin <url> …]` | Runs the signing desk: keepers' consoles check and sign each payment there, and it hands each signed one to the delegatee |
 | `pnpm ops publish <hive> --relay <url> [--relay <url> …]` | Publishes the newest listing to Nostr relays |
 | `pnpm ops hives --network <regtest\|mutinynet> --relay <url> […]` | Lists the hives those relays carry whose keys build the treasury they name |
 | `pnpm ops provider-add <hive> <provider> --model … --input-rate … --output-rate … --relay …` | Creates a provider: payout wallet, card and solver configuration |

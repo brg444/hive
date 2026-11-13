@@ -73,11 +73,11 @@ function fakeHost(apiBase, viewer = null, events = null) {
         },
         host: {
             // Like Buzz: only the declared origin, a string body back.
-            request: async ({ url, timeoutMs }) => {
+            request: async ({ url, method, headers, body, timeoutMs }) => {
                 assert.ok(url.startsWith(ORIGIN + "/"), `undeclared origin ${url}`);
                 assert.ok(!timeoutMs || timeoutMs <= 180_000);
-                seen.requests.push(url);
-                const res = await fetch(apiBase + url.slice(ORIGIN.length));
+                seen.requests.push(method && method !== "GET" ? `${method} ${url}` : url);
+                const res = await fetch(apiBase + url.slice(ORIGIN.length), { method: method ?? "GET", headers, body });
                 return { status: res.status, headers: {}, body: await res.text() };
             },
         },
@@ -509,5 +509,88 @@ test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with �
     const count = events.length;
     await pass();
     assert.equal(events.length, count, "nothing more once the setup is done");
+    seen.cleanups.forEach((stop) => stop());
+});
+
+test("each member's plugin forwards the channel's signed events, and the host works out the hive from them", async () => {
+    const { schnorr } = await import("@noble/curves/secp256k1");
+    const { sha256 } = await import("@noble/hashes/sha2");
+    const { bytesToHex } = await import("@noble/hashes/utils");
+    const { formatProposal } = await import("../shared/proposal.mjs");
+    const channel = "5a0c1e2d-0000-4000-8000-00000000c0de";
+    const keys = [1, 2, 3].map(() => schnorr.utils.randomPrivateKey());
+    const pub = (k) => bytesToHex(schnorr.getPublicKey(k));
+    const [K0, K1, ALICE] = keys.map(pub);
+    const now = Math.floor(Date.now() / 1000);
+    const sign = (key, kind, content, at, tags = []) => {
+        const e = { pubkey: pub(key), created_at: at, kind, tags: [["h", channel], ...tags], content };
+        e.id = bytesToHex(sha256(new TextEncoder().encode(JSON.stringify([0, e.pubkey, e.created_at, e.kind, e.tags, e.content]))));
+        e.sig = bytesToHex(schnorr.sign(e.id, key));
+        return e;
+    };
+    const proposal = sign(keys[2], 9, formatProposal({ title: "Docs in Spanish", budgetSats: 15000, start: null, end: null, who: "everyone", allowanceSats: 500,
+        purpose: "Translate the docs.", work: "", provider: "", report: "" }), now - 600);
+    const events = [
+        proposal,
+        sign(keys[0], 7, "✅", now - 300, [["e", proposal.id]]),
+        sign(keys[1], 7, "✅", now - 200, [["e", proposal.id]]),
+        sign(keys[2], 9, `Hive node: ${"ef".repeat(32)}`, now - 100),
+        sign(keys[0], 9, `Hive keeper key: 02${"11".repeat(32)}`, now - 90),
+        // Pending on this device, not yet signed by the relay's view: never forwarded.
+        { id: "f".repeat(64), pubkey: ALICE, created_at: now, kind: 9, tags: [["h", channel]], content: "draft", delivery: "pending" },
+    ];
+    const gov = join(work, `gov-${Math.random()}.json`);
+    const members = join(work, `members-${Math.random()}.json`);
+    const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3",
+        "--operator", "http://127.0.0.1:9", "--channel", channel, "--keepers", `${K0},${K1}`, "--governance", gov, "--members-file", members, "--discussion-minutes", "5"]);
+    const { seen } = await activate(api, ALICE, events, ["--channel", channel, "--keepers", `${K0},${K1}`]);
+    for (let i = 0; i < 40 && !seen.requests.some((r) => r.startsWith("POST ")); i++) await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 500));
+    assert.ok(seen.requests.includes(`POST ${ORIGIN}/hive/v1/channel`), "the plugin forwarded the channel");
+    const governance = JSON.parse(readFileSync(gov, "utf8"));
+    const p = governance.proposals.find((x) => x.title === "Docs in Spanish");
+    assert.equal(p.state, "running", "approved after the test hive's five-minute discussion");
+    assert.deepEqual(governance.keeperKeys, [`02${"11".repeat(32)}`, null]);
+    assert.deepEqual(JSON.parse(readFileSync(members, "utf8")).members, { ["ef".repeat(32)]: { name: ALICE.slice(0, 12), proposal: p.id, allowance_sats_per_day: 500 } });
+    // A forged or edited event is refused; the draft never left the device.
+    const forged = { ...events[1], id: "ab".repeat(32), content: "❌" };
+    const res = await fetch(`${api}/hive/v1/channel`, { method: "POST", body: JSON.stringify({ events: [forged] }) });
+    assert.deepEqual(await res.json(), { added: 0, refused: 1, events: 5, proposals: null });
+    seen.cleanups.forEach((stop) => stop());
+});
+
+test("a new hive's host runs before its treasury, learns the keepers from HiveBot's record, and every plugin forwards to it", async () => {
+    const { schnorr } = await import("@noble/curves/secp256k1");
+    const { sha256 } = await import("@noble/hashes/sha2");
+    const { bytesToHex } = await import("@noble/hashes/utils");
+    const channel = "6b1d2e3f-0000-4000-8000-0000000000aa";
+    const [bot, k0, k1, k2] = [1, 2, 3, 4].map(() => schnorr.utils.randomPrivateKey());
+    const pub = (k) => bytesToHex(schnorr.getPublicKey(k));
+    const now = Math.floor(Date.now() / 1000);
+    const sign = (key, kind, content, at, tags = []) => {
+        const e = { pubkey: pub(key), created_at: at, kind, tags: [["h", channel], ...tags], content };
+        e.id = bytesToHex(sha256(new TextEncoder().encode(JSON.stringify([0, e.pubkey, e.created_at, e.kind, e.tags, e.content]))));
+        e.sig = bytesToHex(schnorr.sign(e.id, key));
+        return e;
+    };
+    const keys = [k0, k1, k2].map((_, i) => `0${2 + (i % 2)}${String(i + 1).repeat(64)}`);
+    const events = [
+        sign(bot, 9, "Keepers are set.", now - 900, [["hive", "plugin"], ["p", pub(k0)], ["p", pub(k1)], ["p", pub(k2)]]),
+        ...[k0, k1, k2].map((k, i) => sign(k, 9, `Hive keeper key: ${keys[i]}`, now - 800 + i)),
+    ];
+    const gov = join(work, `gov-${Math.random()}.json`);
+    const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--operator", "http://127.0.0.1:9",
+        "--channel", channel, "--bot", pub(bot), "--governance", gov, "--discussion-minutes", "10"]);
+    const before = await (await fetch(`${api}/hive/v1/state`)).json();
+    assert.equal(before.treasury, null, "no treasury yet");
+    assert.equal(before.governance.channelId, channel, "the channel is named before anything is forwarded");
+    // A plugin built with no channel of its own learns it from the host, and forwards it.
+    const { seen } = await activate(api, pub(k0), events);
+    for (let i = 0; i < 40 && !seen.requests.some((r) => r.startsWith("POST ")); i++) await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 500));
+    const governance = JSON.parse(readFileSync(gov, "utf8"));
+    assert.deepEqual(governance.keepers, [pub(k0), pub(k1), pub(k2)], "the keepers HiveBot recorded, in its order");
+    assert.deepEqual(governance.keeperKeys, keys, "each keeper's treasury key, in the same order");
+    assert.equal(governance.discussionSeconds, 600);
     seen.cleanups.forEach((stop) => stop());
 });

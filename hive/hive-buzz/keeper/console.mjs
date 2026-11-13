@@ -1,7 +1,9 @@
-// The keeper console's first part: a keeper creates their treasury key here, locked with a passkey,
-// backs it up, and gets the line to post in the hive's channel. The page has no network access at
-// all (its Content-Security-Policy says connect-src 'none'), so the key cannot leave the device.
+// The keeper console: a keeper creates their treasury key here, locked with a passkey, backs it up,
+// and gets the line to post in the hive's channel; later, they open their hive's signing desk here
+// and sign its payments. The key never leaves the page: it talks only to the desk and the Arkade
+// Operator, and sends them signatures and public nonces.
 import { backup, keeperLine, lockWithPasskey, newSecret, PRF_SALT, restore, unlockWithPasskey } from "./vault.mjs";
+import { savedDesk, sats, short, Sitting, when } from "./payments.mjs";
 
 const STORE = "hive-keeper/v1";
 const $ = (id) => document.getElementById(id);
@@ -224,6 +226,139 @@ $("remove").addEventListener("click", () => {
     if (!confirm("Remove the key from this browser? Without your backup file it cannot be recovered.")) return;
     localStorage.removeItem(STORE);
     show("start");
+});
+
+// ---- Payments --------------------------------------------------------------------------------
+let sitting = null;
+let current = null; // the payment on screen
+
+function lockConsole(message) {
+    sitting?.lock();
+    sitting = null;
+    show("key");
+    if (message) say("desk-msg", message, false);
+}
+
+$("desk-url").value = savedDesk();
+$("desk-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    say("desk-msg", "");
+    const button = e.target.querySelector("button[type=submit]");
+    busy(button, true, "Waiting for your passkey…");
+    try {
+        const key = stored();
+        const prf = await passkeySecret(key.credentialId);
+        const secret = await unlockWithPasskey(key, prf);
+        busy(button, true, "Opening the desk…");
+        sitting = await Sitting.open($("desk-url").value, secret, prf);
+        sitting.onLock = () => { if (sitting) lockConsole("The console locked itself after ten idle minutes."); };
+        await showPayments();
+    } catch (err) {
+        say("desk-msg", err.name === "NotAllowedError" ? "The passkey was cancelled." : err.message);
+    } finally {
+        busy(button, false, "Unlock and open");
+    }
+});
+
+function el(tag, { dataset, ...props } = {}, ...children) {
+    const node = Object.assign(document.createElement(tag), props);
+    Object.assign(node.dataset, dataset ?? {});
+    for (const c of children) if (c !== null && c !== undefined) node.append(c);
+    return node;
+}
+
+async function showPayments() {
+    say("payments-msg", "");
+    const view = await sitting.overview();
+    $("hive-name").textContent = `${sitting.hive.hive}: payments`;
+    const { budget } = view;
+    $("hive-summary").textContent = `Approved work has ${sats(budget.remainingSats)} left for new jobs: ${sats(budget.approvedLeftSats)} across ${budget.proposals.length} running proposal${budget.proposals.length === 1 ? "" : "s"}, less ${sats(budget.lockedSats)} already in open jobs.`;
+    const listing = view.listing;
+    const myIndex = sitting.hive.keepers.indexOf(sitting.me);
+    $("listing-card").hidden = !(listing && !listing.signatures[myIndex]);
+    if (listing) $("listing-text").textContent = `The hive's listing waits for your signature: “${listing.body.name}”, ${listing.body.purpose || "no purpose given"}, treasury ${short(listing.body.treasuryScript.slice(4))}.`;
+    const list = $("payment-list");
+    list.replaceChildren();
+    for (const entry of view.payments) {
+        const r = entry.job.request;
+        const role = sitting.role(entry);
+        const open = el("button", { className: role.action ? "primary" : "quiet", type: "button", textContent: role.action ? role.label : "Details" });
+        open.addEventListener("click", () => showPayment(entry, view.budget));
+        list.append(el("li", {},
+            el("div", { className: "row" }, el("b", { textContent: `${sats(r.capSats)} for ${r.model}` }), open),
+            el("span", { className: "note", textContent: `${role.action ? "" : `${role.label}. `}Provider ${short(r.providerPk)}, deadline ${when(r.deadline)}.` })));
+    }
+    $("payments-empty").hidden = view.payments.length > 0;
+    show("payments");
+}
+
+function showPayment(entry, budget) {
+    current = entry;
+    const r = entry.job.request;
+    const role = sitting.role(entry);
+    const facts = sitting.facts(r);
+    $("payment-lead").textContent = role.action
+        ? "The hive's agent asks the keepers to fund this job. Check the details, then sign; your console checks the rest itself."
+        : `${role.label}.`;
+    const rows = [
+        ["Amount", `${sats(r.capSats)}, the job's cap`],
+        ["Model", r.model],
+        ["Price", `${sats(Math.round(r.priceMsatPerMtok / 1000))} per million tokens`],
+        ["Provider", r.providerPk],
+        ["Deadline", `${when(r.deadline)}: whatever the job does not use comes back after it`],
+        ["Escrow", r.address],
+        ["Budget", `${sats(budget.remainingSats)} left in approved work`],
+    ];
+    $("payment-facts").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", { textContent: k }), el("dd", { textContent: v })]));
+    const checks = [
+        [facts.escrowMatches, "The address is the escrow the job's terms build."],
+        [facts.returnsHere, "Unused funds go back to this hive's treasury."],
+        [r.capSats <= budget.remainingSats, "The amount fits what approved work has left."],
+        [r.deadline > Date.now() / 1000 + 120, "The deadline leaves time to sign."],
+    ];
+    $("payment-checks").replaceChildren(...checks.map(([ok, text]) => el("li", { textContent: text, dataset: { ok: String(Boolean(ok)) } })));
+    $("act").hidden = !role.action;
+    $("act").textContent = role.label;
+    $("act").disabled = !checks.every(([ok]) => ok);
+    $("cancel-payment").hidden = !role.cancel;
+    say("payment-msg", checks.every(([ok]) => ok) ? "" : "Something here does not add up. Do not sign; tell the other keepers in the hive's channel.");
+    show("payment");
+}
+
+$("act").addEventListener("click", async (e) => {
+    say("payment-msg", "");
+    busy(e.target, true, "Checking and signing…");
+    try {
+        const out = await sitting.act(current);
+        const status = out?.payment?.status;
+        say("payment-msg", status === "submitted" ? "Signed. Both keepers have signed, and the payment is on its way to the escrow."
+            : out?.payment?.first === sitting.me ? "Signed. The other keeper signs next; you sign once more after them."
+            : "Signed. The other keeper finishes it.", false);
+        e.target.hidden = true;
+    } catch (err) {
+        busy(e.target, false, "Check and sign");
+        say("payment-msg", `${err.message}${err.code ? ` (${err.code})` : ""} Nothing was signed that could move funds.`);
+    }
+});
+$("cancel-payment").addEventListener("click", async () => {
+    try {
+        await sitting.cancel(current.job.request.jobId);
+        await showPayments();
+    } catch (err) {
+        say("payment-msg", err.message);
+    }
+});
+$("back").addEventListener("click", () => showPayments().catch((err) => say("payments-msg", err.message)));
+$("refresh").addEventListener("click", () => showPayments().catch((err) => say("payments-msg", err.message)));
+$("lock").addEventListener("click", () => lockConsole("Locked."));
+$("sign-listing").addEventListener("click", async () => {
+    try {
+        const { pending } = await sitting.overview().then((v) => ({ pending: v.listing }));
+        await sitting.signListing(pending);
+        await showPayments();
+    } catch (err) {
+        say("payments-msg", err.message);
+    }
 });
 
 if (!window.PublicKeyCredential) {

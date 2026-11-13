@@ -4,6 +4,7 @@ export * from "./contract.js";
 export * from "./covenant.js";
 export * from "./deployment.js";
 export * from "./encoding.js";
+export * from "./job-escrow.js";
 export * from "./musig.js";
 export * from "./psbt.js";
 export * from "./services.js";

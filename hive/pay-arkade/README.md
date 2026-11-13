@@ -162,8 +162,10 @@ A buyer also takes `--treasury-program` (required: where every return goes), `--
 `--period-secs` (each job's size and life), `--max-price-msat-per-mtok`, `--funding-queue` (one
 JSON line per job for the keepers to fund) and `--expire-grace-secs`.
 
-The buyer never holds treasury keys. It writes each agreed job to the funding queue; the keepers
-move exactly the cap to the escrow address; both plugins see the coin and open the job.
+The buyer never holds treasury keys. It writes each agreed job to the funding queue and its log,
+with every term the escrow is built from, so each keeper's console can rebuild the address and see
+that it gives back to their own treasury before signing. Two keepers sign the payment of exactly the
+cap through the hive's signing desk; both plugins see the coin and open the job.
 
 ## The hive's members
 
