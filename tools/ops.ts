@@ -207,12 +207,14 @@ export interface OpsContext {
 
 /** How long before a coin's batch expiry the delegatee renews it, and the most a renewal may cost. */
 export const RENEWAL_DEFAULTS: Record<
-  "regtest" | "mutinynet",
+  "regtest" | "mutinynet" | "bitcoin",
   { windowSeconds: number; maxFeeSats: number }
 > = {
   // The local stack's batches live about an hour.
   regtest: { windowSeconds: 1200, maxFeeSats: 2000 },
   mutinynet: { windowSeconds: 86_400, maxFeeSats: 500 },
+  // Mainnet batches last weeks, and the Operator charges nothing to renew a coin near its expiry.
+  bitcoin: { windowSeconds: 2 * 86_400, maxFeeSats: 500 },
 };
 
 /** Provider and purchase labels; a hive's name is a hive id (`HIVE_ID`). */
@@ -325,7 +327,12 @@ export async function initHive(
   const saved = readJsonIfPresent<HiveRecord>(paths.local("hive.json"));
   if (saved) return saved;
   const deployment = options.deployment ?? deploymentFor(options.network);
-  ensure(deployment.network !== "bitcoin", "NO_DELEGATEE", "v4 needs a pinned delegatee");
+  // Real funds are only ever the keepers' own: no steward key for mainnet is made or kept here.
+  ensure(
+    deployment.network !== "bitcoin" || options.keepers,
+    "KEEPERS_SIGN",
+    "a mainnet hive is built from its keepers' own keys: pass --keepers",
+  );
   const conn = await connect(deployment, ctx.fetch);
   const defaults = RENEWAL_DEFAULTS[deployment.network];
   const seed = stateExists(paths.secret("seed.json"))
@@ -457,6 +464,8 @@ export async function addProvider(
         workload: key(),
         payout: key(),
       });
+  // A provider on mainnet holds its own keys, through pay-arkade's install-provider.sh.
+  ensure(record.network !== "bitcoin", "PROVIDER_KEYS", "on mainnet a provider holds its own keys");
   const defaults = RENEWAL_DEFAULTS[record.network as "regtest" | "mutinynet"];
   if (!stateExists(paths.secret("providers", provider, "payout.json")))
     writePayoutConfig(paths.secret("providers", provider, "payout.json"), {
@@ -985,7 +994,6 @@ export async function findHives(
   ctx: OpsContext = {},
 ): Promise<{ found: number; hives: FoundHiveListing[] }> {
   const deployment = options.deployment ?? deploymentFor(network);
-  ensure(deployment.network !== "bitcoin", "NO_DELEGATEE", "v4 needs a pinned delegatee");
   const conn = await connect(deployment, ctx.fetch);
   const found = await fetchHiveListings(relays, deployment.network, {
     ...(options.maxWaitMs ? { maxWaitMs: options.maxWaitMs } : {}),

@@ -79,13 +79,52 @@ export function executionOrder(): RouteName[] {
   return order as RouteName[];
 }
 
+/**
+ * Ark Labs' mainnet Operator, read on November 13, 2026, with the delegatee the hive's own server
+ * runs (`tools/delegatee.sh` with `DELEGATEE_NETWORK=bitcoin`). The Operator's key and exit delay and
+ * the Emulator's key are pinned here; the delegatee's address and its delegate key come from the
+ * server that runs it, through `BUZZ_DELEGATEE_URL` and `BUZZ_DELEGATE_KEY`. No Emulator address is
+ * named: payments go through the delegatee, never executed here. Real funds need
+ * `BUZZ_MAINNET=enabled` as well.
+ */
+export const MAINNET_PINS = {
+  operatorKey: "038202bebddeb1f7442803897a85eaf3ce9254d07df0172fc3725ab5f0d097779c",
+  emulatorKey: "0239c196415da47b26456a101daaa12ba9e445bfe153197f1e2b750bf40e52092e",
+  exitDelaySeconds: 605_184,
+} as const;
+
+export function mainnetDeployment(
+  delegateeUrl = process.env.BUZZ_DELEGATEE_URL,
+  delegateKey = process.env.BUZZ_DELEGATE_KEY,
+): Deployment {
+  ensure(mainnetEnabled(), "MAINNET_DISABLED", "set BUZZ_MAINNET=enabled to use real funds");
+  ensure(
+    delegateeUrl && delegateKey,
+    "NO_DELEGATEE",
+    "set BUZZ_DELEGATEE_URL and BUZZ_DELEGATE_KEY to the delegatee this hive's server runs",
+  );
+  ensure(
+    /^0[23][0-9a-f]{64}$/.test(delegateKey),
+    "INVALID",
+    "BUZZ_DELEGATE_KEY is the delegatee's compressed delegate key",
+  );
+  ensure(
+    /^https:\/\//.test(delegateeUrl) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(delegateeUrl),
+    "INVALID",
+    "the delegatee's address",
+  );
+  return {
+    network: "bitcoin",
+    arkdUrl: "https://arkade.computer",
+    delegateeUrl: delegateeUrl.replace(/\/+$/, ""),
+    pins: { ...MAINNET_PINS, delegateKey },
+  };
+}
+
 export function deploymentFor(network: string): Deployment {
   if (network === "regtest") return regtestDeployment();
   if (network === "mutinynet") return MUTINYNET;
-  if (network === "bitcoin") {
-    ensure(mainnetEnabled(), "MAINNET_DISABLED", "set BUZZ_MAINNET=enabled to use real funds");
-    return fail("NO_DELEGATEE", "no delegatee is pinned for mainnet; v4 cannot run there yet");
-  }
+  if (network === "bitcoin") return mainnetDeployment();
   return fail("UNSUPPORTED_NETWORK", network);
 }
 

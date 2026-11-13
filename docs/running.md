@@ -34,8 +34,10 @@ export BUZZ_EMULATOR_URL=http://localhost:7073
 
 The Operator must state its delays in seconds: an exit delay of 512 or more.
 On Mutinynet the services are pinned in the code, and every run needs
-`BUZZ_MUTINYNET=approved`. Mainnet is refused until a delegatee is pinned for
-it; [the live test](live-test.md) says what that takes.
+`BUZZ_MUTINYNET=approved`. Mainnet needs `BUZZ_MAINNET=enabled` and the
+delegatee the hive's server runs (`DELEGATEE_NETWORK=bitcoin tools/delegatee.sh`),
+named by `BUZZ_DELEGATEE_URL` and `BUZZ_DELEGATE_KEY`; it takes only a keepers'
+hive. [The live test](live-test.md) walks through it.
 
 ## Operating a hive
 

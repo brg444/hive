@@ -11,21 +11,39 @@ keepers' consoles in a real browser with passkeys, the signing desk, the delegat
 nodes and hive-api, and checks where every sat lands. The live test adds what a rehearsal cannot
 show: people, their own devices, Buzz itself and mainnet.
 
-## Two decisions before the day
+## Mainnet, and the delegatee the server runs
 
-Both are Alex's to make, and nothing in the repository makes them for him.
+Decided on November 13, 2026: the live test runs on mainnet, and the hive's own server runs the
+delegatee. The Arkade wallet's delegate service only submits renewals a coin's owner has already
+signed, while a v4 treasury needs a delegatee that renews it unattended and carries out the keepers'
+signed payments, which is what arkade-os/delegatee does.
 
-1. **Mainnet for the run.** Hive refuses mainnet unless `BUZZ_MAINNET=enabled` is set, and the hard
-   ceilings stay in force: 50,000 sats per escrow, 100,000 per chip-in, 1,000,000 in the treasury.
-   Set it on the hive's host for the run, and unset it afterwards.
-2. **The delegatee.** Keepers' payments go through the delegatee, and v4 has no mainnet delegatee
-   pinned, so `pnpm ops init --network bitcoin` stops with `NO_DELEGATEE`. The hive's host runs
-   arkade-os/delegatee itself (`tools/delegatee.sh`, at the commit it pins) against the mainnet
-   Operator and Emulator, and its keys become the mainnet deployment's pins in
-   `packages/ark/src/deployment.ts`: the Operator key, the Emulator key, the delegate key and the
-   exit delay. The Emulator's address stays in the host's environment, out of the repository.
+Mainnet stays behind an opt-in: every command that touches it needs `BUZZ_MAINNET=enabled`, set on
+the hive's server for the run and unset afterwards. The hard ceilings stay in force: 50,000 sats per
+escrow, 100,000 per chip-in, 1,000,000 in the treasury. The tools build only a keepers' hive there,
+and refuse to make or keep a key for real funds.
 
-Mutinynet is skipped, as decided on November 11.
+Start the delegatee on the server, beside a Postgres database:
+
+```bash
+DELEGATEE_NETWORK=bitcoin DELEGATEE_DATABASE_URL='postgres://…/delegatee' \
+DELEGATEE_EMULATOR_URL=<the mainnet Emulator> DELEGATEE_ADMIN_AUTH=file \
+DELEGATEE_ADMIN_USERS_FILE=<admin users> tools/delegatee.sh
+```
+
+It talks to the Operator at arkade.computer, keeps its delegate key in
+`.secrets/bitcoin/delegate-key`, and names that key as `delegatePubkey` in its `/v1/info`. Put it
+behind the server's TLS proxy, then point the hive's tools at it:
+
+```bash
+export BUZZ_MAINNET=enabled BUZZ_DELEGATEE_URL=https://<host>/delegatee
+export BUZZ_DELEGATE_KEY=<delegatePubkey from its /v1/info>
+```
+
+The Operator's key and exit delay and the Emulator's key are pinned in
+`packages/ark/src/deployment.ts`, so a delegatee that served another Operator or Emulator is
+refused. The Emulator's address stays in the server's environment, out of the repository. Mutinynet
+is skipped, as decided on November 11.
 
 ## Who takes part
 

@@ -11,8 +11,9 @@ returns in full at its deadline without anyone signing.
 The repository holds the whole system: the contracts that hold the money, the
 keepers' signing workers, the provider's metering and claim daemon, the
 buyer's receipt proxy, the server and site that host the hives, and the tools
-that run and audit them. It runs on regtest and on Mutinynet; mainnet is not
-enabled yet (see [Networks](#networks)).
+that run and audit them. It runs on regtest and on Mutinynet, and on mainnet
+for a keepers' hive whose server runs its own delegatee, behind an explicit
+opt-in (see [Networks](#networks)).
 
 The `hive/` folder holds the pilot that brings a hive to where its members
 already work. `hive/pay-arkade` is a MeshLLM plugin through which a provider is
@@ -148,10 +149,13 @@ setup to a paid job.
 | --- | --- | --- |
 | Regtest | A local test stack | The services listed in [running Hive](docs/running.md) |
 | Mutinynet | Ark Labs' public test network | `BUZZ_MUTINYNET=approved` for each run |
-| Bitcoin | Not enabled | Pinned mainnet services; until then Hive refuses mainnet |
+| Bitcoin | Ark Labs' Operator at arkade.computer | `BUZZ_MAINNET=enabled`, and the delegatee the hive's server runs: `BUZZ_DELEGATEE_URL` and `BUZZ_DELEGATE_KEY` |
 
-Mainnet also keeps hard ceilings on escrows, contributions and treasury size,
-and an explicit opt-in (`BUZZ_MAINNET=enabled`).
+On mainnet the Operator's and the Emulator's keys are pinned in the code, and
+the delegate key is pinned by the server that runs the delegatee. Only a
+keepers' hive runs there: no keeper key for real funds is made or kept by the
+tools. Mainnet also keeps hard ceilings on escrows, contributions and
+treasury size.
 
 ## Repository
 
