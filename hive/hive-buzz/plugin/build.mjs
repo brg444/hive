@@ -75,7 +75,7 @@ const inline = (file, names) => `const { ${names} } = (() => {\n${readFileSync(j
     .replace(/^import .*$/gm, "").replace(/^export\s+/gm, "")}\nreturn { ${names} };\n})();`;
 const coordinator = inline("../bot/coordinator.mjs", "coordinate");
 // HiveBot's onboarding, the same steps the server bot posts.
-const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel");
+const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel, keepersKeys");
 // What the Hive guide knows, and the instructions it starts with.
 const guide = readFileSync(join(here, "../shared/guide.mjs"), "utf8").replace(/^export\s+/gm, "");
 // Where members install the plugin from, for HiveBot to tell them: a Git repository and branch.

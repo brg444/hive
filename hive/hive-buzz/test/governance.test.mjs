@@ -1,7 +1,7 @@
 // Proposals as Buzz messages, and the coordinator that reads them with their reactions and replies.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatProposal, parseNodeClaim, parseProposal, proposalFromForm } from "../shared/proposal.mjs";
+import { formatProposal, parseKeeperKey, parseNodeClaim, parseProposal, proposalFromForm } from "../shared/proposal.mjs";
 import { coordinate, membersFile, proposalId } from "../bot/coordinator.mjs";
 import { plan } from "../bot/announce.mjs";
 
@@ -38,6 +38,10 @@ test("a proposal round-trips through its message text, and other messages are no
     assert.equal(parseProposal("Proposal: x\nBudget: lots\nPurpose: y"), null);
     assert.equal(parseNodeClaim(`Hive node: ${"ab".repeat(32)}`), "ab".repeat(32));
     assert.equal(parseNodeClaim("Hive node: tooshort"), null);
+    const key = `02${"ab".repeat(32)}`;
+    for (const pasted of [`Hive keeper key: ${key}`, `\`Hive keeper key: ${key}\``, `**Hive keeper key:** ${key}\n`, `hive keeper key:${key.toUpperCase()}`])
+        assert.equal(parseKeeperKey(pasted), key, pasted);
+    assert.equal(parseKeeperKey(`My Hive keeper key: ${key}`), null, "only the line itself");
 });
 
 test("keepers' ✅ approve a proposal once discussion closes, and its budget runs through its period", () => {

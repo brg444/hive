@@ -98,7 +98,9 @@ export function parseNodeClaim(text) {
  * the keeper console gives them. Sent from their Buzz identity, it ties the key to the person.
  */
 export function parseKeeperKey(text) {
-    const m = /^\s*hive keeper key\s*:\s*(0[23][0-9a-f]{64})\s*$/i.exec(text ?? "");
+    // Pasting can wrap the line in Markdown, such as `code` or **bold**: that is dropped first.
+    const plain = String(text ?? "").replace(/[`*_]/g, "");
+    const m = /^\s*hive keeper key\s*:\s*(0[23][0-9a-f]{64})\s*$/i.exec(plain);
     return m ? m[1].toLowerCase() : null;
 }
 

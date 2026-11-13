@@ -486,9 +486,20 @@ test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with âœ
     assert.match(plugin.content, /Add from Git, with https:\/\/github\.com\/example\/hive and the branch plugin\./);
     assert.match(fromBot("keys").content, /in the keeper console at https:\/\/keepers\.example\.org\./);
     assert.ok(fromBot("propose") && !fromBot("treasury"), "the treasury waits for the keepers' keys");
-    add(KA, 9, `Hive keeper key: 02${"a".repeat(64)}`, []);
+    const keyA = add(KA, 9, `Hive keeper key: 02${"a".repeat(64)}`, []);
+    await pass();
+    // Each key is answered in its thread, once.
+    const ackA = events.find((e) => e.pubkey === BOT && e.tags.some((t) => t[0] === "hive" && t[1] === "key-ack" && t[2] === keyA.id));
+    assert.equal(ackA.content, "Got it, @Ari: your keeper key is in. 1 of 2 keepers have posted theirs.");
+    assert.ok(ackA.tags.some((t) => t[0] === "e" && t[1] === keyA.id), "in the key's thread");
+    const outsider = add(OWNER, 9, `Hive keeper key: 02${"0".repeat(64)}`, []);
     add(KB, 9, `Hive keeper key: 03${"b".repeat(64)}`, []);
     await pass();
+    await pass();
+    const acks = events.filter((e) => e.pubkey === BOT && e.tags.some((t) => t[0] === "hive" && t[1] === "key-ack"));
+    assert.equal(acks.length, 3, "one answer per post, never twice");
+    assert.match(acks.find((e) => e.tags.some((t) => t[2] === outsider.id)).content, /only this hive's keepers post treasury keys here, so this one doesn't count\./);
+    assert.match(acks.at(-1).content, /2 of 2 keepers have posted theirs, so every key is in\.$/);
     assert.match(fromBot("keys-in").content, /^All 2 keys are in, from @Ari and @b2b2b2b2\./);
     assert.ok(fromBot("treasury"));
 

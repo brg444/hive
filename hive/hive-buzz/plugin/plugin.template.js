@@ -441,6 +441,42 @@ export function apply(ctx) {
             for (const channelId of tagged("call")) {
                 if (!done.has(channelId)) await onboardIn(bot, handle, channelId).catch(() => {});
             }
+            // Keys: the hive's own channel, and every channel this bot set up.
+            const channels = new Set([...tagged("call"), ...(snapshot.gov?.channelId ? [snapshot.gov.channelId] : [])]);
+            for (const channelId of channels) await acknowledgeKeys(bot, handle, channelId, mine).catch(() => {});
+        }
+    }
+
+    /**
+     * Answers each "Hive keeper key:" post once, in its thread: whether it counts and how many keepers
+     * have theirs in. The answers carry the post they answer, so the bot reads back what it has done.
+     */
+    async function acknowledgeKeys(bot, handle, channelId, mine) {
+        const since = nowS() - 30 * 86400;
+        const events = await handle.query([{ kinds: [9], "#h": [channelId], since, limit: 500 }]);
+        const answered = new Set(mine.flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "key-ack").map((t) => t[2])));
+        const posts = events.filter((e) => e.pubkey !== bot.pubkey && parseKeeperKey(e.content) && !answered.has(e.id)).sort((a, b) => a.created_at - b.created_at);
+        if (!posts.length) return;
+        // Keepers: those this bot's setup confirmed in the channel, else the hive's own.
+        const record = recordFromChannel(events, bot.pubkey, 2);
+        const gov = snapshot.gov;
+        const keepers = record.keepers ?? (gov?.channelId === channelId ? gov.keepers : null);
+        const names = await profileNames(handle, [...new Set(posts.map((e) => e.pubkey))]);
+        for (const post of posts) {
+            const name = `@${names[post.pubkey] ?? post.pubkey.slice(0, 8)}`;
+            let text;
+            if (!keepers) {
+                text = `${name}, this channel has no keepers yet, so the key doesn't count. Keepers are set during setup: the community owner mentions me with “set up”.`;
+            } else if (!keepers.includes(post.pubkey)) {
+                text = `${name}, only this hive's keepers post treasury keys here, so this one doesn't count.`;
+            } else {
+                const upTo = events.filter((e) => e.created_at <= post.created_at);
+                const keys = keepersKeys(upTo, keepers);
+                const earlier = keepersKeys(upTo.filter((e) => e.id !== post.id), keepers)[post.pubkey];
+                const count = Object.keys(keys).length;
+                text = `Got it, ${name}: your keeper key is in${earlier && earlier !== keys[post.pubkey] ? ", replacing the one you posted before" : ""}. ${count} of ${keepers.length} keepers have posted theirs${count === keepers.length ? ", so every key is in." : "."}`;
+            }
+            await handle.publish({ kind: 9, content: text, tags: [...replyTags(post, channelId), ["hive", "key-ack", post.id]] });
         }
     }
 
