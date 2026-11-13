@@ -2,7 +2,7 @@
 // proposal stands. Everything it decides comes from signed Buzz events: a proposal is a member's
 // message, support is members' 👍, approval is two keepers' ✅, a decline is a keeper's ❌ with the
 // reason they reply in the thread. Pure, so it can be tested without a relay.
-import { discussionSeconds, parseKeeperKey, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
+import { discussionSeconds, parseAgentKey, parseKeeperKey, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
 
 const DAY = 86400;
 const SUPPORT = new Set(["👍", "+", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤️", "🙌"]);
@@ -11,6 +11,13 @@ const DECLINE = new Set(["❌", "✖️"]);
 const DEFAULT_PERIOD = 30 * DAY;
 
 export const proposalId = (eventId) => `p-${eventId.slice(0, 8)}`;
+
+/** The events their own authors deleted: a deletion counts only for its author's own events. */
+export function deletedIds(events) {
+    const author = new Map(events.map((e) => [e.id, e.pubkey]));
+    return new Set(events.filter((e) => e.kind === 5)
+        .flatMap((d) => (d.tags ?? []).filter((t) => t[0] === "e" && author.get(t[1]) === d.pubkey).map((t) => t[1])));
+}
 const tagValues = (e, name) => (e.tags ?? []).filter((t) => t[0] === name).map((t) => t[1]);
 /** The message a reply or reaction points at: its root `e` tag, else the last one. */
 function target(e) {
@@ -22,25 +29,34 @@ function target(e) {
  * Where every proposal stands at `now`.
  *
  * events: the channel's kind 9 messages, kind 7 reactions and kind 5 deletions, in any order.
- * cfg: { keepers: [pubkey], threshold, smallSats, now, usage: { [proposalId]: usedSats }, discussionSeconds }
+ * cfg: { keepers: [pubkey], threshold, smallSats, now, usage: { [proposalId]: usedSats }, discussionSeconds, bot }
  *   discussionSeconds: one discussion length for every proposal, for a test hive; 48 or 24 hours otherwise.
+ *   bot: HiveBot's key, when the events may come from outside the channel (forwarded to a host): a
+ *     member's node then counts only once HiveBot, which reads the channel itself, acknowledged it.
  */
 export function coordinate(events, cfg) {
-    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {}, discussionSeconds: fixed } = cfg;
+    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {}, discussionSeconds: fixed, bot = null } = cfg;
     const keeperSet = new Set(keepers);
-    const deleted = new Set(events.filter((e) => e.kind === 5).flatMap((e) => tagValues(e, "e")));
+    const deleted = deletedIds(events);
     const live = events.filter((e) => !deleted.has(e.id)).sort((a, b) => a.created_at - b.created_at);
+    // The node claims HiveBot acknowledged, when it vouches for them.
+    const acked = new Set(live.filter((e) => e.kind === 9 && e.pubkey === bot)
+        .flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "node-ack").map((t) => t[2])));
 
     const nodes = {};
     const keys = {};
+    let agent = null;
     const proposals = new Map();
     for (const e of live) {
         if (e.kind !== 9) continue;
         const node = parseNodeClaim(e.content);
-        if (node) { nodes[e.pubkey] = { node, at: e.created_at }; continue; }
+        if (node) { if (!bot || acked.has(e.id)) nodes[e.pubkey] = { node, at: e.created_at, eventId: e.id }; continue; }
         // A keeper's treasury key counts only from that keeper; a later post replaces an earlier one.
         const key = parseKeeperKey(e.content);
         if (key) { if (keeperSet.has(e.pubkey)) keys[e.pubkey] = { key, at: e.created_at, eventId: e.id }; continue; }
+        // The community's own agent node, named by a keeper; the latest naming stands.
+        const agentKey = parseAgentKey(e.content);
+        if (agentKey) { if (keeperSet.has(e.pubkey)) agent = { key: agentKey, by: e.pubkey, at: e.created_at }; continue; }
         if (target(e)) continue; // replies are read below
         const p = parseProposal(e.content, tagValues(e, "p"));
         if (!p) continue;
@@ -90,7 +106,7 @@ export function coordinate(events, cfg) {
         });
     }
     out.sort((a, b) => b.postedAt - a.postedAt);
-    return { proposals: out, nodes, keys };
+    return { proposals: out, nodes, keys, agent };
 }
 
 /**

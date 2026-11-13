@@ -136,10 +136,15 @@ export class Escrow {
         }));
         const open = coins.filter((c) => !c.spent);
         const times = open.map((c) => c.expiresAt).filter((t): t is number => t !== null);
+        // Anyone can send dust to a public address: the job's funding is its largest coin, and only
+        // that coin decides whether the job is funded.
+        const funding = open.reduce<(typeof open)[number] | null>((best, c) => (!best || c.value > best.value ? c : best), null);
         return {
             coins,
             open: open.length,
             lockedSats: open.reduce((n, c) => n + c.value, 0),
+            fundingSats: funding?.value ?? 0,
+            fundingCoin: funding ? `${funding.txid}:${funding.vout}` : null,
             // The soonest expiry among unspent coins; null when none states a time.
             expiresAt: times.length ? Math.min(...times) : null,
         };
@@ -153,7 +158,7 @@ export class Escrow {
         const providerPk = hex.encode(await this.identity.xOnlyPublicKey());
         if (providerPk !== params.providerPk.toLowerCase()) throw new Error("this worker's key is not the job's provider key");
         const contract = this.contract(params);
-        const coin = await this.onlyCoin(contract.pkScript);
+        const coin = await this.fundingCoin(contract.pkScript);
         const locked = BigInt(coin.value);
         if (amountSats < DUST) throw new Error("amount below dust; let the job expire");
         // Renewal fees can leave less locked than the receipt owes: the provider then takes it all.
@@ -201,23 +206,35 @@ export class Escrow {
         return key.length === 33 ? key.slice(1) : key;
     }
 
-    /** After the deadline anyone may return an unclaimed escrow whole to the treasury. */
+    /**
+     * After the deadline anyone may return an unclaimed escrow whole to the treasury: every coin at
+     * the address, each in its own spend, so a stray coin someone sent can never hold the funding back.
+     */
     async expire(params: EscrowParams) {
         const contract = this.contract(params);
-        const coin = await this.onlyCoin(contract.pkScript);
-        const { txid } = await contract.functions
-            .expire()
-            .from(coin)
-            .to(treasuryPkScript(params.treasuryProgram), BigInt(coin.value))
-            .send();
-        return { txid, returnedSats: coin.value };
+        const { vtxos } = await this.indexer.getVtxos({ scripts: [hex.encode(contract.pkScript)], spendableOnly: true });
+        if (vtxos.length === 0) throw new Error("escrow holds no coin");
+        const ordered = [...vtxos].sort((a, b) => b.value - a.value);
+        const txids: string[] = [];
+        let returned = 0;
+        for (const coin of ordered) {
+            if (coin.value < Number(DUST) && txids.length) continue; // dust beside the funding is not worth a spend
+            const { txid } = await contract.functions
+                .expire()
+                .from(coin)
+                .to(treasuryPkScript(params.treasuryProgram), BigInt(coin.value))
+                .send();
+            txids.push(txid);
+            returned += coin.value;
+        }
+        return { txid: txids[0], txids, returnedSats: returned };
     }
 
-    async onlyCoin(pkScript: Uint8Array) {
+    /** The job's funding: the escrow's largest coin. Stray coins someone else sent are smaller, and stay put. */
+    async fundingCoin(pkScript: Uint8Array) {
         const { vtxos } = await this.indexer.getVtxos({ scripts: [hex.encode(pkScript)], spendableOnly: true });
         if (vtxos.length === 0) throw new Error("escrow holds no coin");
-        if (vtxos.length > 1) throw new Error("escrow holds more than one coin; a job is funded once");
-        return vtxos[0];
+        return [...vtxos].sort((a, b) => b.value - a.value)[0];
     }
 
     private defaultScript(pubKey: Uint8Array) {

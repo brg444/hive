@@ -167,6 +167,24 @@ with every term the escrow is built from, so each keeper's console can rebuild t
 that it gives back to their own treasury before signing. Two keepers sign the payment of exactly the
 cap through the hive's signing desk; both plugins see the coin and open the job.
 
+## A community's own agent node
+
+The Hive service runs each hive's agent node by default. A community can run it on a MeshLLM node of
+its own instead: the node runs the plugin as buyer as usual, a keeper names it in the hive's channel
+with `Hive agent: <its key>` (the `pubkey` its worker's `ping` answers), and the worker links it to
+the service:
+
+```bash
+pay-arkade-worker --key-file <the buyer's key> --hive-link https://<service>/c/<channel ID> \
+    --log <the buyer's --log> --members-file <the buyer's --members-file>
+```
+
+Every fifteen seconds it sends the service what the buyer logged since last time, so the hive's page,
+its keepers' desk and the members' usage follow the jobs, and fetches the members file back, so the
+node serves the members the hive's proposals allow. Each request is signed with the agent's key over
+a digest only this link uses, never a receipt's, and the service takes nothing a key other than the
+one its keeper named has signed.
+
 ## The hive's members
 
 A hive's members use its budget from their own nodes, with no key and no wallet. A member's node runs

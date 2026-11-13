@@ -2,7 +2,7 @@
 // the Operator and the job's own terms, then sign it, and nothing else. The checks and the signing
 // are the hive's own code (packages/steward), bundled into the console, so the console decides for
 // itself; the signing desk only carries messages between keepers.
-import { Arkd, deriveAccount, jobEscrow, sendMessages, treasuryArguments } from "../../../packages/ark/src/index.ts";
+import { Arkd, deriveAccount, jobEscrow, MAINNET_PINS, sendMessages, treasuryArguments } from "../../../packages/ark/src/index.ts";
 import { checkPayment, keeperView } from "../../../packages/steward/src/policy.ts";
 import { deskAuthDigest, nonceBatch, signOver, signShared } from "../../../packages/steward/src/keeper.ts";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
@@ -16,14 +16,25 @@ const unhex = (s) => Uint8Array.from(s.match(/../g) ?? [], (b) => parseInt(b, 16
  * because the delegatee serves no browser. A desk that relayed other keys would describe another
  * treasury, whose address the console compares with the hive's before anything is signed.
  */
+/** The console built for real funds (`build.mjs --mainnet`) knows mainnet's Operator itself. */
+export const MAINNET = typeof __HIVE_MAINNET__ !== "undefined" && __HIVE_MAINNET__ === true;
+const MAINNET_ARKD = "https://arkade.computer";
+
 export async function connection(desk, hive) {
-    const arkd = new Arkd(hive.deployment.arkdUrl);
+    // The mainnet console reads the Operator at its own address and holds it to the pinned keys,
+    // whatever the desk says: a dishonest host cannot slip in an Operator or an Emulator of its own.
+    if (MAINNET && hive.network !== "bitcoin") throw new Error("This console signs for mainnet hives only.");
+    if (!MAINNET && hive.network === "bitcoin") throw new Error("This is the test networks' console: open your hive's desk in the mainnet console.");
+    const arkd = new Arkd(MAINNET ? MAINNET_ARKD : hive.deployment.arkdUrl);
     const operator = await arkd.info();
     if (operator.network !== hive.network) throw new Error(`The Operator is on ${operator.network}, the hive on ${hive.network}.`);
+    if (MAINNET && (operator.signerPubkey !== MAINNET_PINS.operatorKey || operator.unilateralExitDelay !== MAINNET_PINS.exitDelaySeconds))
+        throw new Error("The Operator does not match the keys this console was built with.");
     const res = await fetch(`${desk}/desk/v1/delegatee`);
     if (!res.ok) throw new Error("The hive's desk did not relay the delegatee's keys.");
     const info = await res.json();
     if (info.serverPubkey !== operator.signerPubkey) throw new Error("The delegatee serves another Operator.");
+    if (MAINNET && info.emulatorPubkey !== MAINNET_PINS.emulatorKey) throw new Error("The delegatee names an Emulator this console does not know.");
     return {
         deployment: { network: hive.network },
         operator,
@@ -74,10 +85,11 @@ export function signListing(secret, listingId) {
  * Checks one session of a payment and returns its messages, recomputed here: the console never
  * signs a message it was handed. Throws, with the check's code, when anything is off.
  */
-export async function checkSession(conn, hive, session, remainingSats) {
+export async function checkSession(conn, hive, session, shown, remainingSats) {
     const view = keeperView(hive.keepers, hive.treasury.terms);
     const treasury = hive.treasury.script;
-    const checked = await checkPayment(view, conn, session, { request: session.purpose.request, remainingSats }, Math.floor(Date.now() / 1000));
+    // The keeper approves the request the console showed them; the session must carry exactly it.
+    const checked = await checkPayment(view, conn, session, { request: shown, remainingSats }, Math.floor(Date.now() / 1000));
     // The treasury these keys build must be the hive's, as its channel and listing name it.
     const plan = session.purpose.plan;
     if (!plan.coins.every((c) => c.script === treasury)) throw Object.assign(new Error("These coins are not the hive's treasury."), { code: "NOT_OUR_TREASURY" });

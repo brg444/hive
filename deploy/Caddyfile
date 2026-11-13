@@ -1,0 +1,30 @@
+# The shared Hive service behind TLS. Caddy obtains both certificates itself.
+#
+# The keeper console has an origin of its own, apart from the service: a page there runs no code
+# but the console's, so nothing the service serves can reach a keeper's unlocked key or the nonces
+# kept in that origin's storage.
+{$HIVE_HOST} {
+	encode gzip
+	# The delegatee's public port, for the hive's tools and the members' MeshLLM nodes. Its admin
+	# port stays on the host.
+	handle_path /delegatee/* {
+		reverse_proxy 127.0.0.1:7090
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
+
+{$KEEPER_HOST} {
+	root * /srv/hive/keeper
+	file_server
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Cross-Origin-Opener-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Cache-Control "no-cache"
+	}
+}

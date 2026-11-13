@@ -227,3 +227,20 @@ test("each keeper signs the hive's listing in their console, and the third signa
   assert.equal(loadListing(ctx.hive).listingId, pending.listingId);
   assert.equal(ctx.server.desk.listing(), null);
 });
+
+test("keepers acting at the same moment wait their turn at the desk, and one payment is started", async (t) => {
+  const ctx = await setup(t);
+  const { desk } = ctx.server;
+  const consoles = [0, 1, 2].map((i) => consoleOf(i, ctx));
+  await Promise.all(consoles.map((c) => c.share()));
+  assert.deepEqual(
+    ctx.keepers.map((k) => desk.describe().nonces[k]),
+    [16, 16, 16],
+  );
+  const jobId = ctx.params.jobId;
+  const outcomes = await Promise.all([
+    code(desk.start(jobId, ctx.auth(0, "start", jobId), ctx.keepers[1])),
+    code(desk.start(jobId, ctx.auth(2, "start", jobId), ctx.keepers[1])),
+  ]);
+  assert.deepEqual(outcomes.sort(), ["PAYMENT_STARTED", "ok"]);
+});

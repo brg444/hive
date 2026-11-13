@@ -1,0 +1,19 @@
+[Unit]
+Description=Hive delegatee (arkade-os/delegatee)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=hive
+WorkingDirectory=/opt/hive
+EnvironmentFile=/etc/hive/hive.env
+ExecStart=/opt/hive/tools/delegatee.sh
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/hive/.local /opt/hive/.secrets
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

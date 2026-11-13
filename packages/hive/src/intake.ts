@@ -13,7 +13,7 @@ import {
   writeOnce,
   writePrivateOnce,
 } from "@hive/kit";
-import { decodeInvoice, type InvoiceNetwork, type HiveNetwork } from "@hive/protocol";
+import { decodeInvoice, type HiveNetwork, type InvoiceNetwork } from "@hive/protocol";
 
 /**
  * The hive's Lightning address on lnurl-server (ArkLabsHQ/lnurl-server 0.3.x).

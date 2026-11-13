@@ -50,6 +50,8 @@ export function jobsFromLog(text, now = Math.floor(Date.now() / 1000)) {
             Object.assign(job(e.job_id), { status: "returned", returnedSats: e.returned_sats, txid: e.txid ?? null, closedAt: e.at });
         } else if (e.event === "received" && m.kind === "decline") {
             const j = job(m.job_id);
+            // Only the job's own provider declines it; any other mesh peer's word is ignored.
+            if (j.providerPeer && e.from !== j.providerPeer) continue;
             if (j.status === "offered" || j.status === "awaiting_funding") Object.assign(j, { status: "declined", note: m.reason });
         }
     }

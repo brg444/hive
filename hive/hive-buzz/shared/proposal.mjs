@@ -105,6 +105,17 @@ export function parseKeeperKey(text) {
 }
 
 /** How long discussion stays open: 48 hours, or 24 under the small-proposal threshold. */
+/**
+ * A keeper naming the MeshLLM node that runs the hive's agent, when the community runs its own:
+ * `Hive agent: <the agent's x-only key>`, the key its pay-arkade plugin prints. Formatting the
+ * line as code is fine; anything else is not a claim.
+ */
+export function parseAgentKey(text) {
+    const plain = String(text ?? "").replace(/[`*_]/g, "");
+    const m = /^\s*hive agent\s*:\s*([0-9a-f]{64})\s*$/i.exec(plain);
+    return m ? m[1].toLowerCase() : null;
+}
+
 export function discussionSeconds(budgetSats, smallSats) {
     return budgetSats < smallSats ? DAY : 2 * DAY;
 }

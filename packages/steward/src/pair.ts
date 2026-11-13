@@ -1,4 +1,4 @@
-import { combine, pairMembers, pairSigners, type Pair, pairKeys } from "@hive/ark";
+import { combine, type Pair, pairKeys, pairMembers, pairSigners } from "@hive/ark";
 import { ensure, hex } from "@hive/kit";
 import type { StewardEndpoint } from "./client.js";
 import type { SessionRequest } from "./purpose.js";

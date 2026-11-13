@@ -31,11 +31,11 @@ import {
   ensure,
   Fault,
   faultCode,
+  lockedQueue,
   readJsonBody,
   readJsonIfPresent,
   sendJson,
   unhex,
-  withLock,
   writeJson,
 } from "@hive/kit";
 import {
@@ -71,6 +71,8 @@ const DEADLINE_MARGIN_SECONDS = 600;
 /** A job the hive's agent asked the keepers to fund, and where it stands now. */
 export interface AgentJob {
   request: FundingRequest;
+  /** The provider's mesh peer: the only one whose word about the job counts. */
+  peer: string;
   status: "awaiting_funding" | "open" | "claimed" | "returned" | "declined" | "lapsed";
   usedSats: number;
   requestedAt: number;
@@ -105,7 +107,13 @@ export function agentJobs(log: string, now = Math.floor(Date.now() / 1000)): Age
           ? { minCoinExpiry: Number(r.min_coin_expiry) }
           : {}),
       };
-      jobs.set(request.jobId, { request, status: "awaiting_funding", usedSats: 0, requestedAt: at });
+      jobs.set(request.jobId, {
+        request,
+        peer: String(r.provider_peer ?? ""),
+        status: "awaiting_funding",
+        usedSats: 0,
+        requestedAt: at,
+      });
       continue;
     }
     const job = jobs.get(
@@ -116,7 +124,11 @@ export function agentJobs(log: string, now = Math.floor(Date.now() / 1000)): Age
     else if (e.event === "receipt_signed") job.usedSats = Math.max(job.usedSats, Number(e.amount_sats ?? 0));
     else if (e.event === "job_closed" && e.txid) job.status = "claimed";
     else if (e.event === "expired") job.status = "returned";
-    else if (e.event === "received" && (e.message as Record<string, unknown>)?.kind === "decline")
+    else if (
+      e.event === "received" &&
+      (e.message as Record<string, unknown>)?.kind === "decline" &&
+      e.from === job.peer
+    )
       job.status = job.status === "awaiting_funding" ? "declined" : job.status;
   }
   for (const job of jobs.values())
@@ -204,6 +216,8 @@ export class Desk {
   readonly paths: ReturnType<typeof opsPaths>;
   readonly record: HiveRecord;
   #drives = new Map<string, Promise<void>>();
+  /** The desk's work, one action at a time: keepers signing at once wait their turn here. */
+  readonly #queue: <T>(action: () => Promise<T>) => Promise<T>;
 
   constructor(
     readonly hive: string,
@@ -213,6 +227,7 @@ export class Desk {
     this.record = loadHive(hive);
     ensure(this.record.keepersHold, "INVALID", `${hive}'s keys are not its keepers' own; it needs no desk`);
     this.paths = opsPaths(hive);
+    this.#queue = lockedQueue(this.file("desk.lock"));
   }
 
   get keepers(): [string, string, string] {
@@ -228,7 +243,7 @@ export class Desk {
   }
 
   private lock<T>(action: () => Promise<T>): Promise<T> {
-    return withLock(this.file("desk.lock"), action);
+    return this.#queue(action);
   }
 
   jobs(): AgentJob[] {
@@ -552,7 +567,8 @@ export class Desk {
         }
       }
       this.save(payment);
-      if (payment.status === "submitted") this.drive(jobId);
+      // Driven after this answer: it waits its turn behind this action and settles every error itself.
+      if (payment.status === "submitted") void this.drive(jobId);
       return payment;
     });
   }
@@ -597,6 +613,8 @@ export class Desk {
     const running = this.#drives.get(jobId);
     if (running) return running;
     const run = (async () => {
+      let status: DeskPayment["status"];
+      let detail: string | undefined;
       try {
         const journal = await driveTreasurySpend(
           this.treasury,
@@ -606,95 +624,147 @@ export class Desk {
             timeoutMs: 60_000,
           },
         );
-        await this.lock(async () => {
-          const payment = this.payment(jobId)!;
-          payment.status = journal.status === "done" ? "done" : "expired";
-          this.save(payment);
-        });
+        status = journal.status === "done" ? "done" : "expired";
       } catch (error) {
+        // Still on its way: the next tick drives it again.
         if (faultCode(error) === "SPEND_PENDING") return;
-        await this.lock(async () => {
-          const payment = this.payment(jobId)!;
-          payment.status = "failed";
-          payment.detail = faultCode(error) ?? String(error);
-          this.save(payment);
-        });
-      } finally {
-        this.#drives.delete(jobId);
+        status = "failed";
+        detail = faultCode(error) ?? String(error);
       }
-    })();
+      await this.settle(jobId, status, detail);
+    })()
+      .catch(() => {
+        // Never thrown to the caller: the payment stays submitted, and the next tick drives it again.
+      })
+      .finally(() => this.#drives.delete(jobId));
     this.#drives.set(jobId, run);
     return run;
   }
 
-  /** One pass over open payments: late ones expire, submitted ones are driven on. */
-  async tick() {
-    for (const payment of this.activePayments()) {
-      if (payment.status === "submitted") await this.drive(payment.jobId);
-      else await this.lock(async () => this.expireIfLate(this.payment(payment.jobId)!));
+  /** Writes how a payment ended, trying again a few times while another process holds the desk. */
+  private async settle(jobId: string, status: DeskPayment["status"], detail?: string) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.lock(async () => {
+          const payment = this.payment(jobId);
+          if (payment?.status !== "submitted") return;
+          payment.status = status;
+          if (detail !== undefined) payment.detail = detail;
+          this.save(payment);
+        });
+        return;
+      } catch (error) {
+        if (attempt >= 4) throw error;
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
     }
   }
+
+  async tick() {
+    // One payment's trouble never holds up the others.
+    for (const payment of this.activePayments()) {
+      if (payment.status === "submitted") await this.drive(payment.jobId);
+      else
+        await this.lock(async () => {
+          const current = this.payment(payment.jobId);
+          if (current) this.expireIfLate(current);
+        }).catch(() => {});
+    }
+  }
+}
+
+/** Serves the desk over HTTP for keepers' consoles; the host's TLS proxy puts it on HTTPS. */
+/**
+ * The desk's routes, below `/desk/v1/`: `parts` is the path after that prefix. Shared by the desk's
+ * own server and the Hive service, which serves one desk per hive.
+ */
+export async function deskRoute(
+  desk: Desk,
+  method: string,
+  parts: string[],
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const [what, jobId = "", action] = parts;
+  if (method === "GET" && what === "hive") return desk.describe();
+  // The delegatee serves no browser: its keys reach the console through the desk, and the console
+  // checks the treasury they build against the hive's.
+  if (method === "GET" && what === "delegatee") return desk.treasury.conn.delegatee.info();
+  if (method === "POST" && what === "nonces") return desk.addNonces(body.batch as NonceBatch);
+  if (method === "GET" && what === "payments" && !jobId) return desk.overview();
+  if (method === "GET" && what === "listing") return { pending: desk.listing() };
+  if (method === "POST" && what === "listing")
+    return desk.signListing(String(body.keeper), String(body.signature));
+  if (method === "GET" && what === "payments") {
+    const payment = desk.payment(jobId);
+    ensure(payment, "NO_PAYMENT");
+    return { payment, sessions: desk.sessions(payment) };
+  }
+  if (method === "POST" && what === "payments" && action === "start") {
+    const payment = await desk.start(jobId, body.auth as DeskAuth, body.partner as string | undefined);
+    return { payment, sessions: desk.sessions(payment) };
+  }
+  if (method === "POST" && what === "payments" && action === "sign") {
+    const payment = await desk.sign(jobId, body as never);
+    return { payment, sessions: desk.sessions(payment) };
+  }
+  if (method === "POST" && what === "payments" && action === "cancel")
+    return { payment: await desk.cancel(jobId, body.auth as DeskAuth) };
+  throw new Fault("NOT_FOUND");
+}
+
+/** A fault as an HTTP status: unknown things are 404, our own mistakes 500, the rest the caller's. */
+export function faultStatus(error: unknown): { status: number; body: { error: string; detail: string } } {
+  const code = faultCode(error) ?? "INTERNAL";
+  const status = ["NOT_FOUND", "NO_PAYMENT", "NO_HIVE"].includes(code)
+    ? 404
+    : code === "INTERNAL"
+      ? 500
+      : 400;
+  return { status, body: { error: code, detail: error instanceof Error ? error.message : String(error) } };
+}
+
+/** CORS for keepers' consoles, which call the desk from their own page. */
+export function consoleCors(
+  req: IncomingMessage,
+  res: ServerResponse,
+  origins: string[] | undefined,
+): boolean {
+  const origin = req.headers.origin;
+  const allowed = !origin || !origins?.length || origins.includes(origin) ? (origin ?? "*") : null;
+  if (allowed === null) {
+    sendJson(res, 403, { error: "ORIGIN" });
+    return false;
+  }
+  res.setHeader("access-control-allow-origin", allowed);
+  res.setHeader("vary", "origin");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-methods": "GET, POST",
+      "access-control-allow-headers": "content-type",
+      "access-control-max-age": "600",
+    });
+    res.end();
+    return false;
+  }
+  return true;
 }
 
 /** Serves the desk over HTTP for keepers' consoles; the host's TLS proxy puts it on HTTPS. */
 export async function startDesk(hive: string, options: DeskOptions, ctx: OpsContext = {}) {
   const treasury = await treasuryOf(loadHive(hive), ctx);
   const desk = new Desk(hive, treasury, options);
-  const allowed = (origin: string | undefined) =>
-    !origin || !options.origins?.length || options.origins.includes(origin) ? (origin ?? "*") : null;
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const origin = allowed(req.headers.origin);
-    if (origin === null) return sendJson(res, 403, { error: "ORIGIN" });
-    res.setHeader("access-control-allow-origin", origin);
-    res.setHeader("vary", "origin");
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        "access-control-allow-methods": "GET, POST",
-        "access-control-allow-headers": "content-type",
-        "access-control-max-age": "600",
-      });
-      return res.end();
-    }
+    if (!consoleCors(req, res, options.origins)) return;
     try {
       const url = new URL(req.url ?? "/", "http://desk");
       const parts = url.pathname.split("/").filter(Boolean);
       ensure(parts[0] === "desk" && parts[1] === "v1", "NOT_FOUND");
       const body =
         req.method === "POST" ? ((await readJsonBody(req, 256 * 1024)) as Record<string, unknown>) : {};
-      if (req.method === "GET" && parts[2] === "hive") return sendJson(res, 200, desk.describe());
-      // The delegatee serves no browser: its keys reach the console through the desk, and the
-      // console checks the treasury they build against the hive's.
-      if (req.method === "GET" && parts[2] === "delegatee")
-        return sendJson(res, 200, await treasury.conn.delegatee.info());
-      if (req.method === "POST" && parts[2] === "nonces")
-        return sendJson(res, 200, await desk.addNonces(body.batch as NonceBatch));
-      if (req.method === "GET" && parts[2] === "payments" && !parts[3])
-        return sendJson(res, 200, desk.overview());
-      if (req.method === "GET" && parts[2] === "listing")
-        return sendJson(res, 200, { pending: desk.listing() });
-      if (req.method === "POST" && parts[2] === "listing")
-        return sendJson(res, 200, await desk.signListing(String(body.keeper), String(body.signature)));
-      const jobId = parts[3] ?? "";
-      if (req.method === "GET" && parts[2] === "payments") {
-        const payment = desk.payment(jobId);
-        ensure(payment, "NO_PAYMENT");
-        return sendJson(res, 200, { payment, sessions: desk.sessions(payment) });
-      }
-      if (req.method === "POST" && parts[2] === "payments" && parts[4] === "start") {
-        const payment = await desk.start(jobId, body.auth as DeskAuth, body.partner as string | undefined);
-        return sendJson(res, 200, { payment, sessions: desk.sessions(payment) });
-      }
-      if (req.method === "POST" && parts[2] === "payments" && parts[4] === "sign") {
-        const payment = await desk.sign(jobId, body as never);
-        return sendJson(res, 200, { payment, sessions: desk.sessions(payment) });
-      }
-      if (req.method === "POST" && parts[2] === "payments" && parts[4] === "cancel")
-        return sendJson(res, 200, { payment: await desk.cancel(jobId, body.auth as DeskAuth) });
-      throw new Fault("NOT_FOUND");
+      sendJson(res, 200, await deskRoute(desk, req.method ?? "GET", parts.slice(2), body));
     } catch (error) {
-      const code = faultCode(error) ?? "INTERNAL";
-      const status = code === "NOT_FOUND" || code === "NO_PAYMENT" ? 404 : code === "INTERNAL" ? 500 : 400;
-      sendJson(res, status, { error: code, detail: error instanceof Error ? error.message : String(error) });
+      const { status, body } = faultStatus(error);
+      sendJson(res, status, body);
     }
   });
   await new Promise<void>((ready, reject) => {

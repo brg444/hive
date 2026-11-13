@@ -19,7 +19,9 @@ const YES = new Set(["✅", "✔️", "☑️"]);
 const tagValues = (e, name) => (e.tags ?? []).filter((t) => t[0] === name).map((t) => t[1]);
 /** Who reacted ✅ to `eventId`, in the order they first did, with removed reactions left out. */
 export function yesVotes(events, eventId, { exclude = [], until = Infinity } = {}) {
-    const deleted = new Set(events.filter((e) => e.kind === 5).flatMap((e) => tagValues(e, "e")));
+    // A deletion counts only for its author's own events.
+    const author = new Map(events.map((e) => [e.id, e.pubkey]));
+    const deleted = new Set(events.filter((e) => e.kind === 5).flatMap((d) => tagValues(d, "e").filter((id) => author.get(id) === d.pubkey)));
     const first = new Map();
     for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
         if (e.kind !== 7 || deleted.has(e.id) || !YES.has(e.content.trim()) || e.created_at > until) continue;

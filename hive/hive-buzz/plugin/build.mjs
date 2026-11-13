@@ -20,7 +20,11 @@ import { bech32 } from "@scure/base";
 
 const argv = process.argv.slice(2);
 const arg = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
-const api = arg("--api");
+// --service builds one plugin for every hive on a shared Hive service: each finds its hive at
+// <service>/c/<channel ID>. --api builds a plugin for one hive's own host.
+const service = arg("--service");
+const api = arg("--api") ?? service;
+if (arg("--api") && service) { console.error("build: --api or --service, not both"); process.exit(1); }
 const name = arg("--name", "Hive");
 const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "hive";
 const id = arg("--id", `${slug}.hive`);
@@ -28,7 +32,7 @@ const out = join(arg("--out", "dist"), id);
 
 const fail = (m) => { console.error(`build: ${m}`); process.exit(1); };
 let origin;
-try { origin = new URL(api); } catch { fail("--api must be the hive host's HTTPS address"); }
+try { origin = new URL(api); } catch { fail("--api (or --service) must be the hive host's HTTPS address"); }
 if (origin.protocol !== "https:" || origin.username || origin.password || origin.search || origin.hash || api.endsWith("/")
     || api !== origin.origin + origin.pathname.replace(/\/+$/, "").replace(/^\/$/, "")) {
     fail("--api must be an HTTPS address with no query, credentials or trailing slash, such as https://hive.example.org or https://example.github.io/hive/demo");
@@ -104,7 +108,8 @@ const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__CONSOLE__*/null", () => JSON.stringify(keeperConsole ?? null))
     .replace("/*__DOCS__*/null", () => JSON.stringify(docs ?? null))
     .replace("/*__HIVE_CONFIG__*/null", () => JSON.stringify(config))
-    .replace("__HIVE_API__", api)
+    .replace("/*__SERVICE__*/null", () => JSON.stringify(service ?? null))
+    .replace("__HIVE_API__", service ? "" : api)
     .replace("__PLUGIN_ID__", id)
     .replace("__HIVE_NAME__", JSON.stringify(name).slice(1, -1));
 if (/__[A-Z_]+__/.test(js)) fail("unfilled placeholder");

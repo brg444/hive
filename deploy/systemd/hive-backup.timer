@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up the Hive host every six hours
+
+[Timer]
+OnCalendar=00/6:17
+Persistent=true
+
+[Install]
+WantedBy=timers.target

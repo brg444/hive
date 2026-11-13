@@ -1,4 +1,4 @@
-import { type Deployment, type Pair, PAIRS, pairKeys, type TreasuryTerms } from "@hive/ark";
+import { type Deployment, PAIRS, type Pair, pairKeys, type TreasuryTerms } from "@hive/ark";
 import {
   ensure,
   guard,

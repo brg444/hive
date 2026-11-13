@@ -168,7 +168,10 @@ test("a payment is refused above the remaining budget, on a request the keeper d
     checkPayment(view, hive.conn, attest, approval, request.deadline + 1),
     hasCode("PAYMENT_LATE"),
   );
-  // Once the escrow holds a coin, the job is funded and nobody signs again.
+  // Dust someone sent to the escrow's public address does not stop the payment.
+  hive.fake.mint(jobEscrow(hive.conn, request.params).pkScript, 330);
+  await checkPayment(view, hive.conn, attest, approval, now());
+  // Once the escrow holds the cap, the job is funded and nobody signs again.
   hive.fake.mint(jobEscrow(hive.conn, request.params).pkScript, 20_000);
   await assert.rejects(checkPayment(view, hive.conn, attest, approval, now()), hasCode("ESCROW_FUNDED"));
 });

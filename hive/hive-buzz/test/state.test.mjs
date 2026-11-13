@@ -32,9 +32,10 @@ test("a funding request is waiting until it opens, and lapses at its deadline", 
     assert.equal(jobsFromLog(text, now)[0].status, "awaiting_funding");
     assert.equal(jobsFromLog(text, now + 601)[0].status, "lapsed");
     assert.equal(jobsFromLog(text + "\n" + line({ event: "job_open", job_id: "j1" }), now)[0].status, "open");
-    // A provider's refusal ends the request, and malformed lines change nothing.
-    const declined = text + "\nnot json\n" + line({ event: "received", message: { kind: "decline", job_id: "j1", reason: "coin expires too soon" } });
-    assert.equal(jobsFromLog(declined, now)[0].status, "declined");
+    // The job's own provider's refusal ends the request; another mesh peer's changes nothing, nor do malformed lines.
+    const decline = (from) => line({ event: "received", from, message: { kind: "decline", job_id: "j1", reason: "coin expires too soon" } });
+    assert.equal(jobsFromLog(`${text}\nnot json\n${decline("stranger")}`, now)[0].status, "awaiting_funding");
+    assert.equal(jobsFromLog(`${text}\nnot json\n${decline("peer")}`, now)[0].status, "declined");
 });
 
 test("chip-ins are the settled payments, newest first", () => {

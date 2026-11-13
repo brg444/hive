@@ -1,4 +1,4 @@
-import { connect, treasuryArguments, deriveAccount } from "@hive/ark";
+import { connect, deriveAccount, treasuryArguments } from "@hive/ark";
 import { ensure, exactObject } from "@hive/kit";
 import { loadSteward } from "./config.js";
 import { checkPurpose } from "./policy.js";

@@ -16,6 +16,12 @@ const KINDS = new Set([5, 7, 9]);
 const HEX64 = /^[0-9a-f]{64}$/;
 /** At most this many events are kept per channel; the oldest go first. */
 export const MAX_EVENTS = 20_000;
+/** At most this many from one author, so one key cannot crowd the channel out. */
+export const MAX_PER_AUTHOR = 1_000;
+/** At most this many in one forward; a plugin sends only what is new. */
+export const MAX_PER_REQUEST = 3_000;
+/** How far ahead of this clock an event may be dated. */
+const SKEW_SECONDS = 600;
 
 /** NIP-01: the id is the hash of the serialized event, and the signature is the author's over it. */
 export function verifyEvent(e) {
@@ -37,15 +43,25 @@ const plain = ({ id, pubkey, created_at, kind, tags, content, sig }) => ({ id, p
  * Adds forwarded events to what the host already has, keeping only the channel's proposals, replies,
  * reactions and deletions whose signatures hold. Returns the merged events and what was added.
  */
-export function mergeEvents(known, incoming, channelId) {
+export function mergeEvents(known, incoming, channelId, now = Math.floor(Date.now() / 1000)) {
     const byId = new Map(known.map((e) => [e.id, e]));
     let added = 0;
     let refused = 0;
-    for (const e of Array.isArray(incoming) ? incoming : []) {
+    const list = Array.isArray(incoming) ? incoming : [];
+    if (list.length > MAX_PER_REQUEST) throw Object.assign(new Error(`at most ${MAX_PER_REQUEST} events at once`), { status: 413 });
+    for (const e of list) {
         if (!e || byId.has(e.id)) continue;
-        if (!KINDS.has(e.kind) || !inChannel(e, channelId) || !verifyEvent(e)) { refused += 1; continue; }
+        // Dated ahead of the clock, it could outlive the real channel in the store: refused.
+        if (!KINDS.has(e.kind) || !inChannel(e, channelId) || !(e.created_at <= now + SKEW_SECONDS) || !verifyEvent(e)) { refused += 1; continue; }
         byId.set(e.id, plain(e));
         added += 1;
+    }
+    // Each author keeps their newest events, up to a share; then the channel its newest overall.
+    const byAuthor = new Map();
+    for (const e of [...byId.values()].sort((a, b) => b.created_at - a.created_at)) {
+        const n = byAuthor.get(e.pubkey) ?? 0;
+        if (n >= MAX_PER_AUTHOR) { byId.delete(e.id); continue; }
+        byAuthor.set(e.pubkey, n + 1);
     }
     const events = [...byId.values()].sort((a, b) => a.created_at - b.created_at).slice(-MAX_EVENTS);
     return { events, added, refused };
@@ -63,6 +79,8 @@ export function governanceFrom(events, cfg, usage = {}) {
     const keepers = cfg.keepers?.length ? cfg.keepers : cfg.bot ? recordFromChannel(events, cfg.bot, cfg.threshold).keepers ?? [] : [];
     const result = coordinate(events, {
         keepers, threshold: cfg.threshold, smallSats: cfg.smallSats, now, usage,
+        // Forwarded events may come from outside the channel: members' nodes count once HiveBot vouched for them.
+        ...(cfg.bot ? { bot: cfg.bot } : {}),
         ...(cfg.discussionSeconds !== undefined ? { discussionSeconds: cfg.discussionSeconds } : {}),
     });
     const governance = {
@@ -72,6 +90,8 @@ export function governanceFrom(events, cfg, usage = {}) {
         members: Object.fromEntries(Object.entries(result.nodes).map(([k, v]) => [k, { node: v.node }])),
         // Each keeper's treasury key, in the order the keepers were confirmed: the order the treasury is built in.
         keeperKeys: keepers.map((k) => result.keys[k]?.key ?? null),
+        // The community's own agent node, when a keeper named one; the shared service's otherwise.
+        agentKey: result.agent?.key ?? null,
     };
     return { governance, members: membersFile(result, cfg.model ? { model: cfg.model } : {}) };
 }

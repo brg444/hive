@@ -1,0 +1,22 @@
+[Unit]
+Description=Hive shared service: channels, signing desks and agent nodes
+After=network-online.target hive-delegatee.service
+Wants=network-online.target hive-delegatee.service
+
+[Service]
+User=hive
+WorkingDirectory=/opt/hive
+EnvironmentFile=/etc/hive/hive.env
+# $$ leaves each variable to the shell, which splits HIVE_AGENTS into its flags.
+ExecStart=/bin/sh -c 'exec node --experimental-eventsource --import tsx tools/ops.ts service --network "$$HIVE_NETWORK" \
+  --public "https://$$HIVE_HOST" --console "https://$$KEEPER_HOST/" --origin "https://$$KEEPER_HOST" \
+  --host 127.0.0.1 --port 8080 $${HIVE_DISCUSSION_MINUTES:+--discussion-minutes $$HIVE_DISCUSSION_MINUTES} $$HIVE_AGENTS'
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/hive/.local /opt/hive/.secrets
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

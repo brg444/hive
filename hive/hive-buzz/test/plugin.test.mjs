@@ -594,3 +594,36 @@ test("a new hive's host runs before its treasury, learns the keepers from HiveBo
     assert.equal(governance.discussionSeconds, 600);
     seen.cleanups.forEach((stop) => stop());
 });
+
+test("on the shared Hive service, one plugin finds its community's hive by its channel", async () => {
+    const channel = "7d2e3f4a-0000-4000-8000-0000000000bb";
+    const asked = [];
+    const server = http.createServer((req, res) => {
+        asked.push(`${req.method} ${req.url}`);
+        if (req.url.startsWith("/hives")) return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ hives: [] }));
+        if (req.url === `/c/${channel}/hive/v1/state`)
+            return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ v: 1, name: "Open Lab", treasury: null, funding: [], jobs: [], providers: [],
+                payouts: [], contributions: [], proposals: [], governance: { channelId: channel, keepers: [], threshold: 2, smallSats: 20000, proposals: [], members: {} } }));
+        res.writeHead(404).end("{}");
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const dir = execFileSync("node", [join(root, "plugin/build.mjs"), "--service", ORIGIN, "--name", "Hive", "--out", work]).toString().trim();
+    const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
+    const { ctx, seen } = fakeHost(base, "a".repeat(64), []);
+    await mod.apply(ctx);
+    try {
+    for (let i = 0; i < 30 && !asked.some((a) => a.startsWith("GET /hives")); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(asked.some((a) => a.startsWith("GET /hives?community=")), "asks the service for its community's hives");
+    // Shown the hive's channel, it finds the hive there and loads its state.
+    renderToString(React.createElement(seen.accessories[0].component, { channelId: "00000000-0000-4000-8000-000000000000" }));
+    renderToString(React.createElement(seen.accessories[0].component, { channelId: channel }));
+    await new Promise((r) => setTimeout(r, 500));
+    assert.ok(asked.includes(`GET /c/${channel}/hive/v1/state`), "loads the hive's state under its channel");
+    const status = await seen.tools[0].call();
+    assert.match(status, /Open Lab/);
+    } finally {
+        seen.cleanups.forEach((stop) => stop());
+        server.close();
+    }
+});

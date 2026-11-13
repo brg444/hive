@@ -75,7 +75,7 @@ async function expected(escrow: Escrow, params: EscrowParams, operatorUrl: strin
         throw new Error("the job names a different delegate service");
     }
     const contract = escrow.contract(params);
-    const coin = await escrow.onlyCoin(contract.pkScript);
+    const coin = await escrow.fundingCoin(contract.pkScript);
     const info = await operatorInfo(operatorUrl);
     const expiry = coin.expiresAt ? Math.floor(new Date(coin.expiresAt as unknown as string).getTime() / 1000) : null;
     if (!expiry) throw new Error("the escrow coin states no expiry");

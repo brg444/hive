@@ -68,3 +68,8 @@ Two stops need no code change. `COINS_RENEWING` means the coins a send needs
 are about to renew; send again once they have. `RENEWALS_DISABLED` means the
 delegatee stopped renewing an account's coins after repeated refusals; its
 administrator turns renewals back on, and `pnpm ops status` warns of it.
+
+A host keeps what nobody else can rebuild, the delegatee's delegate key and
+database and each hive's records, desk and receipts, and `tools/backup.sh`
+backs them up into one archive encrypted to an age key held off the host. The
+keepers' own keys are never on the host, so each keeper backs up their own.

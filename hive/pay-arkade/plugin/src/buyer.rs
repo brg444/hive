@@ -156,6 +156,11 @@ impl App {
                 self.send(ctx, peer, &Message::RenewalAnswer { job_id, answer }).await
             }
             Message::Closed { job_id, txid, paid_sats, returned_sats } => {
+                // Only the job's own provider closes it: any other peer's word is ignored, and never logged.
+                let ours = self.book.lock().unwrap().jobs.get(&job_id).is_some_and(|j| j.peer == peer);
+                if !ours {
+                    return Ok(());
+                }
                 // A claim moves the coin, which the expiry pass will see; a close with no claim
                 // leaves the escrow for this side to return after the deadline.
                 if let Some(txid) = &txid {
@@ -255,7 +260,7 @@ impl App {
             return Ok(());
         }
         let status = self.worker.call("escrow_status", json!({"params": quote.params()})).await?;
-        if status["open"] == json!(1) && status["lockedSats"].as_u64() == Some(quote.cap_sats) {
+        if status["fundingSats"].as_u64() == Some(quote.cap_sats) {
             self.set_status(job_id, Status::Open, None, None);
             self.log(json!({"event": "job_open", "job_id": job_id, "locked_sats": quote.cap_sats}));
         }

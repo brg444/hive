@@ -51,6 +51,12 @@ export class Sitting {
         const me = publicKeyOf(secret);
         if (!hive.keepers.includes(me)) throw new Error("This key is not one of this hive's keepers. Check you opened your own hive's desk, with the key you posted in its channel.");
         const conn = await connection(desk, hive);
+        // The treasury this desk names is remembered the first time, and a desk that later names
+        // another is refused: a keeper confirms the address once, against the one HiveBot posted.
+        const pinned = `hive-keeper/treasury/${new URL(desk).origin}${new URL(desk).pathname}|${me}`;
+        const seen = read(pinned);
+        if (seen && seen !== hive.treasury.script) throw new Error("This desk now names another treasury than the one you signed for before. Nothing was signed; tell the other keepers.");
+        if (!seen) write(pinned, hive.treasury.script);
         const sitting = new Sitting(desk, secret, await nonceKeyFromPrf(prf), hive, conn);
         // The treasury the keepers' keys build must be the hive's: a desk that relayed other keys fails here.
         if (treasuryScriptOf(conn, hive) !== hive.treasury.script) throw new Error("The keepers' keys build another treasury than the one this desk names.");
@@ -131,9 +137,9 @@ export class Sitting {
     }
 
     /** Runs the checks on a session; the console signs only what this returns. */
-    async check(session, remainingSats) {
+    async check(session, shown, remainingSats) {
         this.touch();
-        return checkSession(this.conn, this.hive, session, remainingSats);
+        return checkSession(this.conn, this.hive, session, shown, remainingSats);
     }
 
     /**
@@ -146,6 +152,8 @@ export class Sitting {
         const jobId = entry.job.request.jobId;
         const { action } = this.role(entry);
         let state = entry.payment && !["expired", "cancelled", "failed"].includes(entry.payment.status) ? await this.detail(jobId) : null;
+        // What the keeper read on screen is the request every step below must carry.
+        this.shown = entry.job.request;
         if (action === "start") {
             await this.topUp();
             state = await post(`${this.desk}/desk/v1/payments/${jobId}/start`, { auth: deskAuth(this.secret, this.hive.hive, "start", jobId) });
@@ -167,22 +175,23 @@ export class Sitting {
     }
 
     /**
-     * Never two plans for one job: once this keeper has signed a payment's last step, it signs no
-     * other plan for that job until the first can no longer be registered.
+     * Never two plans for one job. A pair's attestations alone can move the coins, so the job is
+     * bound to the first plan this keeper signs anything for, and for good, as a steward binds it: a
+     * job whose payment lapsed is asked for again by the agent, as a new job.
      */
     guard(jobId, checked, stage) {
         const all = this.remembered();
         const seen = all[jobId];
-        if (seen && seen.holder !== checked.holder && seen.register && seen.until > Math.floor(Date.now() / 1000))
-            throw new Error("You already signed another payment for this job. It can be replaced once it lapses.");
-        all[jobId] = { holder: checked.holder, until: checked.until, register: (seen?.holder === checked.holder && seen.register) || stage === "register" };
+        if (seen && seen.holder !== checked.holder)
+            throw new Error("You already signed another payment for this job, so you sign no other for it. If it lapsed, the hive's agent asks for the job again.");
+        all[jobId] = { holder: checked.holder, until: checked.until, stages: [...new Set([...(seen?.stages ?? []), stage])] };
         write(`hive-keeper/signed/${this.label}`, all);
     }
 
     async signAsFirst(state, stage) {
         const session = state.sessions[stage];
         const pairSession = stage === "attest" ? state.payment.attest : state.payment.register;
-        const checked = await this.check(session, state.payment.remainingSats);
+        const checked = await this.check(session, this.shown ?? state.payment.request, state.payment.remainingSats);
         same(checked.messages, pairSession.messages);
         this.guard(state.payment.jobId, checked, stage);
         const { nonces, partials } = signFirst(pairSession, this.secret, checked.messages);
@@ -192,7 +201,7 @@ export class Sitting {
     async signAsSecond(state, stage) {
         const session = state.sessions[stage];
         const pairSession = stage === "attest" ? state.payment.attest : state.payment.register;
-        const checked = await this.check(session, state.payment.remainingSats);
+        const checked = await this.check(session, this.shown ?? state.payment.request, state.payment.remainingSats);
         same(checked.messages, pairSession.messages);
         this.guard(state.payment.jobId, checked, stage);
         const ids = pairSession.pooled[this.me] ?? [];

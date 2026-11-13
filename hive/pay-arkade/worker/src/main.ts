@@ -13,7 +13,7 @@ import { SingleKey, type NetworkName } from "@arkade-os/sdk";
 import { Escrow, type EscrowParams } from "./escrow.ts";
 import { Executor } from "./executor.ts";
 import { cosignRenewal, delegateInfo, finishRenewal, prepareRenewal, submitRenewal, type RenewalAnswer, type RenewalRequest } from "./delegation.ts";
-import { hexBytes, signQuote, signReceipt, verifyQuote, verifyReceipt } from "./signing.ts";
+import { hexBytes, hiveLinkDigest, signQuote, signReceipt, verifyQuote, verifyReceipt } from "./signing.ts";
 
 interface Args {
     operator: string;
@@ -70,6 +70,15 @@ function sats(raw: unknown, name = "amountSats"): bigint {
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     const secret = loadSecret(args.keyFile);
+    const argv = process.argv.slice(2);
+    const flag = (name: string) => (argv.indexOf(name) >= 0 ? argv[argv.indexOf(name) + 1] : undefined);
+    // A community's own agent node, linked to the Hive service instead of answering the plugin.
+    if (flag("--hive-link")) {
+        const { runHiveLink } = await import("./link.ts");
+        const log = flag("--log"), members = flag("--members-file");
+        if (!log || !members) throw new Error("--hive-link needs --log and --members-file, as the buyer has them");
+        return runHiveLink({ url: flag("--hive-link")!, log, members, secret, everyMs: Number(flag("--every-secs") ?? 15) * 1000, once: argv.includes("--once") });
+    }
     const pubkey = hex.encode(schnorr.getPublicKey(secret));
     // Connecting is lazy: signing works with the operator down; spends wait for it.
     let escrow: Promise<Escrow> | undefined;
@@ -101,6 +110,8 @@ async function main() {
         sign_quote: (r) => ({ sig: hex.encode(signQuote(secret, r.quote)) }),
         verify_quote: (r) => ({ valid: verifyQuote(hexBytes(r.providerPk, 32, "providerPk"), r.quote, hexBytes(r.sig, 64, "sig")) }),
         sign_receipt: (r) => ({ sig: hex.encode(signReceipt(secret, hexBytes(r.jobId, 32, "jobId"), sats(r.amountSats))) }),
+        // A community's own agent node, linking to the Hive service (packaging/hive-link.sh).
+        sign_hive_link: (r) => ({ sig: hex.encode(schnorr.sign(hiveLinkDigest(String(r.channelId), Number(r.at), String(r.what)), secret)) }),
         verify_receipt: (r) => ({
             valid: verifyReceipt(hexBytes(r.agentPk, 32, "agentPk"), hexBytes(r.jobId, 32, "jobId"), sats(r.amountSats), hexBytes(r.sig, 64, "sig")),
         }),

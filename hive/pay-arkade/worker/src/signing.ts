@@ -77,3 +77,15 @@ export const hexBytes = (value: unknown, size: number, name: string): Uint8Array
     if (typeof value !== "string" || value.length !== size * 2) throw new Error(`${name} must be ${size} bytes of hex`);
     return hex.decode(value.toLowerCase());
 };
+
+/**
+ * What a hive's own agent node signs to report to the Hive service and fetch its members:
+ * sha256("hive-agent/v1|" + channel + "|" + at + "|" + what). The fixed prefix keeps it apart from
+ * receipts and quotes, and only two forms of `what` are signed at all.
+ */
+export function hiveLinkDigest(channelId: string, at: number, what: string): Uint8Array {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(channelId)) throw new Error("channelId");
+    if (!Number.isSafeInteger(at) || at <= 0) throw new Error("at");
+    if (!(what === "members" || /^events\|\d+\|[0-9a-f]{64}$/.test(what))) throw new Error("not a hive link message");
+    return sha256(new TextEncoder().encode(`hive-agent/v1|${channelId}|${at}|${what}`));
+}

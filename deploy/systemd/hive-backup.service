@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive backup: delegate key, delegatee database, service state
+
+[Service]
+Type=oneshot
+User=hive
+WorkingDirectory=/opt/hive
+EnvironmentFile=/etc/hive/hive.env
+ExecStart=/opt/hive/tools/backup.sh

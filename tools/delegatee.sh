@@ -47,6 +47,8 @@ fi
 if [ ! -f "$KEY" ]; then
   (umask 077 && mkdir -p "$(dirname "$KEY")" && openssl rand -hex 32 > "$KEY")
 fi
+# A host's setup builds it and makes its key ahead of the first start.
+[ "${DELEGATEE_BUILD_ONLY:-}" = 1 ] && exit 0
 
 : "${DELEGATEE_DATABASE_URL:?set DELEGATEE_DATABASE_URL to a Postgres database for the delegatee}"
 export DELEGATEE_DATABASE_URL

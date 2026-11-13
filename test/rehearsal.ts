@@ -20,13 +20,12 @@
  *   PAY_ARKADE_MESH=… PAY_ARKADE_MODEL=… PAY_ARKADE_DIR=… node --import tsx test/rehearsal.ts
  */
 import assert from "node:assert/strict";
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { regtestDeployment } from "@hive/ark";
-import { hex, localPath, repositoryRoot, sha256Hex, unhex } from "@hive/kit";
+import { hex, localPath, repositoryRoot } from "@hive/kit";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { startDesk } from "../tools/desk.js";
 import { initHive, opsPaths } from "../tools/ops.js";
@@ -37,18 +36,30 @@ import {
   serveConsole,
   signFirstPayment,
 } from "./support/keeper-console.js";
+import {
+  ARKD,
+  chat as ask,
+  children,
+  coins,
+  events,
+  first,
+  freePort,
+  http,
+  MODEL,
+  meshNode,
+  modelId,
+  nodeId,
+  now,
+  PRICE,
+  pluginBlock,
+  proposalText,
+  signed,
+  until,
+  WORKER,
+} from "./support/mesh.js";
 
-const MESH = process.env.PAY_ARKADE_MESH ?? "mesh-llm";
-const MODEL = process.env.PAY_ARKADE_MODEL ?? "";
-const PAY = process.env.PAY_ARKADE_DIR ?? join(repositoryRoot, "hive/pay-arkade");
-const PLUGIN = join(PAY, "plugin/target/release/pay-arkade");
-const WORKER = join(PAY, "worker/dist/pay-arkade-worker");
-const PRICE = 10_000_000_000; // 10 sats a token: a few short answers cross the 330-sat floor
 const PERIOD = 420; // each job's life: long enough for two keepers here, short enough to see the claim
-const ARKD = "http://localhost:7070";
-for (const [name, path] of Object.entries({ MeshLLM: MESH, model: MODEL, plugin: PLUGIN, worker: WORKER }))
-  assert.ok(existsSync(path), `${name} not found at ${path}`);
-const MODEL_ID = `local-gguf/sha256-${createHash("sha256").update(readFileSync(MODEL)).digest("hex")}`;
+const MODEL_ID = modelId();
 
 const run = randomUUID().slice(0, 8);
 const hive = `rehearsal-${run}`;
@@ -59,135 +70,6 @@ const step = (name: string, detail: Record<string, unknown> = {}) => {
   result.steps.push({ step: name, at: new Date().toISOString(), ...detail });
   console.log(`- ${name}${Object.keys(detail).length ? `: ${JSON.stringify(detail)}` : ""}`);
 };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const now = () => Math.floor(Date.now() / 1000);
-async function until<T>(what: string, check: () => T | Promise<T>, seconds: number): Promise<NonNullable<T>> {
-  const end = Date.now() + seconds * 1000;
-  while (Date.now() < end) {
-    try {
-      const value = await check();
-      if (value) return value as NonNullable<T>;
-    } catch {
-      // not yet
-    }
-    await sleep(1000);
-  }
-  throw new Error(`timed out waiting for: ${what}`);
-}
-const events = (path: string): Record<string, unknown>[] =>
-  existsSync(path)
-    ? readFileSync(path, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .flatMap((l) => {
-          try {
-            return [JSON.parse(l)];
-          } catch {
-            return [];
-          }
-        })
-    : [];
-const first = (path: string, name: string, match: Record<string, unknown> = {}) =>
-  events(path).find((e) => e.event === name && Object.entries(match).every(([k, v]) => e[k] === v));
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const port = (server.address() as { port: number }).port;
-  await new Promise((r) => server.close(r));
-  return port;
-}
-async function http(url: string, body?: unknown, timeoutMs = 180_000) {
-  const res = await fetch(url, {
-    method: body ? "POST" : "GET",
-    headers: { "content-type": "application/json" },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const text = await res.text();
-  let json: unknown = text;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    // text
-  }
-  return { status: res.status, body: json as Record<string, unknown> };
-}
-async function coins(script: string) {
-  const { body } = await http(`${ARKD}/v1/indexer/vtxos?scripts=${script}&spendableOnly=true`);
-  return ((body.vtxos as { amount: string }[]) ?? []).map((v) => Number(v.amount));
-}
-
-const children: ChildProcess[] = [];
-function meshNode(home: string, log: string, args: string[]) {
-  mkdirSync(join(home, ".mesh-llm"), { recursive: true });
-  const child = spawn(MESH, ["serve", "--log-format", "json", ...args], {
-    env: { ...process.env, HOME: home },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const chunks: Buffer[] = [];
-  child.stdout?.on("data", (c) => chunks.push(c));
-  child.stderr?.on("data", (c) => chunks.push(c));
-  const flush = setInterval(() => writeFileSync(log, Buffer.concat(chunks)), 1000);
-  child.on("exit", () => clearInterval(flush));
-  children.push(child);
-  return {
-    async invite(): Promise<string> {
-      return until(
-        `${log} invite`,
-        () =>
-          Buffer.concat(chunks)
-            .toString()
-            .split("\n")
-            .map((l) => {
-              try {
-                return JSON.parse(l);
-              } catch {
-                return null;
-              }
-            })
-            .find((e) => e?.event === "invite_token")?.token,
-        180,
-      );
-    },
-  };
-}
-const nodeId = (token: string) =>
-  JSON.parse(Buffer.from(token.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString()).id as string;
-function pluginBlock(args: string[], grant = true) {
-  const quoted = args.map((a) => JSON.stringify(a)).join(", ");
-  return `[[plugin]]\nname = "pay-arkade"\ncommand = ${JSON.stringify(PLUGIN)}\nargs = [${quoted}]\n${
-    grant
-      ? `
-[plugin.openai_exchange_grant]
-endpoints = ["chat_completions", "completions", "responses"]
-phases = ["request_received", "backend_selected", "exchange_finished"]
-metadata = true
-request_body = true
-admission = true
-failure_policy = "required"
-deadline_ms = 30000
-max_body_bytes = 1048576
-max_queue_bytes = 4194304
-max_in_flight = 32
-`
-      : ""
-  }`;
-}
-
-/** A signed Buzz channel event, as a member's app would forward it. */
-function signed(
-  secret: Uint8Array,
-  channel: string,
-  kind: number,
-  content: string,
-  at: number,
-  tags: string[][] = [],
-) {
-  const pubkey = hex(schnorr.getPublicKey(secret));
-  const e = { pubkey, created_at: at, kind, tags: [["h", channel], ...tags], content };
-  const id = sha256Hex(JSON.stringify([0, e.pubkey, e.created_at, e.kind, e.tags, e.content]));
-  return { ...e, id, sig: hex(schnorr.sign(unhex(id), secret)) };
-}
 
 const site = await serveConsole();
 const browser = await chromium.launch();
@@ -348,24 +230,11 @@ try {
   step("MeshLLM nodes up", { agent: agentId.slice(0, 12), member: memberId.slice(0, 12) });
 
   // The channel: a proposal from the member, two keepers' ✅ after its discussion, the member's node.
-  // @ts-expect-error: the Buzz plugin's shared module is plain JavaScript, without type declarations
-  const { formatProposal } = await import("../hive/hive-buzz/shared/proposal.mjs");
   const proposal = signed(
     buzz[2]!,
     channel,
     9,
-    formatProposal({
-      title: "Answers for the docs channel",
-      budgetSats: 30000,
-      start: null,
-      end: null,
-      who: "everyone",
-      allowanceSats: 2000,
-      purpose: "Answer questions about the docs.",
-      work: "",
-      provider: "",
-      report: "",
-    }),
+    await proposalText("Answers for the docs channel"),
     now() - 600,
   );
   const forwarded = [
@@ -389,14 +258,7 @@ try {
   });
 
   // 5. The member asks; the agent asks a provider; the keepers sign.
-  const chat = () =>
-    http(`${memberApi}/chat/completions`, {
-      model: "hive",
-      messages: [{ role: "user", content: "Name a color." }],
-      temperature: 0,
-      max_tokens: 12,
-      stream: false,
-    });
+  const chat = () => ask(memberApi);
   const firstAsk = await chat();
   step("first request: no job yet", { status: firstAsk.status });
   const requested = await until(

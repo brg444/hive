@@ -15,6 +15,9 @@
  *   pnpm ops hives --network <regtest|mutinynet> --relay <url> [--relay <url> …]
  *   pnpm ops host <hive> [<hive> …] [--port <n>]
  *   pnpm ops desk <hive> --agent-log <path> [--governance <file>] [--port <n>] [--host <addr>] [--origin <url> …]
+ *   pnpm ops service --network <regtest|bitcoin> --public <https url> --console <https url> [--port <n>]
+ *                    [--host <addr>] [--model <id>] [--discussion-minutes <n>] [--origin <url> …] [--agents]
+ *   pnpm ops service-list --network <regtest|bitcoin> | pnpm ops service-approve <hive> --network <regtest|bitcoin>
  *   pnpm ops status <hive>
  *   pnpm ops withdraw <hive> <label> --to <ark address> --amount <sats|all> [--hours <n>] [--pair <01|02|12>]
  *   pnpm ops payout <hive> <provider> <label> --to <ark address> --amount <sats|all>
@@ -1413,6 +1416,50 @@ async function main(argv: string[]): Promise<void> {
           watch: record.renewalWatch.delegationId,
         },
       });
+      return;
+    }
+    case "service": {
+      const { startService } = await import("./service.js");
+      const port = option([hive!, ...rest], "port");
+      const args = [hive!, ...rest];
+      const minutes = option(args, "discussion-minutes");
+      const agents = args.includes("--agents")
+        ? await (await import("./agents.js")).meshAgents(args)
+        : undefined;
+      const running = await startService({
+        network: required(args, "network"),
+        publicUrl: required(args, "public").replace(/\/+$/, ""),
+        consoleUrl: required(args, "console"),
+        ...(option(args, "model") ? { model: option(args, "model")! } : {}),
+        ...(minutes ? { discussionSeconds: Math.round(Number(minutes) * 60) } : {}),
+        origins: every(args, "origin"),
+        ...(agents ? { agents } : {}),
+        ...(port ? { port: Number(port) } : {}),
+        ...(option(args, "host") ? { host: option(args, "host")! } : {}),
+      });
+      print({ service: running.url, agents: Boolean(agents) });
+      await new Promise(() => {});
+      return;
+    }
+    case "service-list": {
+      const { HiveService } = await import("./service.js");
+      const args = [hive!, ...rest];
+      const service = await HiveService.create({
+        network: required(args, "network"),
+        publicUrl: "",
+        consoleUrl: "",
+      });
+      print(service.list());
+      return;
+    }
+    case "service-approve": {
+      const { HiveService } = await import("./service.js");
+      const service = await HiveService.create({
+        network: required(rest, "network"),
+        publicUrl: "",
+        consoleUrl: "",
+      });
+      print(await service.approve(hive!));
       return;
     }
     case "desk": {

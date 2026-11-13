@@ -111,7 +111,7 @@ impl App {
                         }
                         self.log(json!({"event": "renewal_registered", "job_id": job_id, "valid_at": done["validAt"]}));
                         let status = self.worker.call("escrow_status", json!({"params": quote.params()})).await?;
-                        let locked = status["lockedSats"].as_u64().unwrap_or(0);
+                        let locked = status["fundingSats"].as_u64().unwrap_or(0);
                         self.set_status(&job_id, Status::Open, None, None);
                         self.log(json!({"event": "job_open", "job_id": job_id, "locked_sats": locked}));
                         self.send(ctx, peer, &Message::Opened { job_id, locked_sats: locked }).await
@@ -264,11 +264,13 @@ impl App {
             return Ok(());
         }
         let status = self.worker.call("escrow_status", json!({"params": quote.params()})).await?;
-        let (open, locked) = (status["open"].as_u64().unwrap_or(0), status["lockedSats"].as_u64().unwrap_or(0));
+        // The job's funding is the escrow's largest coin: dust anyone sends to the public address
+        // beside it changes nothing.
+        let (open, locked) = (status["open"].as_u64().unwrap_or(0), status["fundingSats"].as_u64().unwrap_or(0));
         if open == 0 {
             return Ok(());
         }
-        if open == 1 && locked == quote.cap_sats {
+        if locked == quote.cap_sats {
             // A coin swept before the deadline cannot be claimed or returned: refuse it while it can
             // still go back. Regtest states expiry in blocks, which this check does not read.
             if self.cfg.delegate.is_some() && quote.delegate_pk.is_some() {
@@ -313,10 +315,10 @@ impl App {
             self.log(json!({"event": "job_open", "job_id": job.job_id, "locked_sats": locked}));
             self.send(ctx, &job.peer, &Message::Opened { job_id: job.job_id, locked_sats: locked }).await
         } else {
-            // One coin of exactly the cap is the only funding the claim path can spend in full.
-            let note = format!("funded with {open} coin(s), {locked} sats; expected one coin of {}", quote.cap_sats);
-            self.set_status(&job.job_id, Status::Failed, Some(note.clone()), None);
-            self.send(ctx, &job.peer, &Message::Decline { job_id: job.job_id, reason: note }).await
+            // A coin of exactly the cap is the only funding the claim path can spend in full. Anything
+            // else at the address may be someone's dust: keep waiting for the funding until the deadline.
+            let _ = open;
+            Ok(())
         }
     }
 

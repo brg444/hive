@@ -7,7 +7,10 @@
 // its manifest declares.
 export const inject = ["react", "pages", "host", "notifications", "agents", "conversation", "relay", "navigation"];
 
-const HIVE_API = "__HIVE_API__";
+// One hive's own host, or, with SERVICE, the shared Hive service, where each hive lives under its
+// channel: the plugin then finds its community's hive and talks to `<service>/c/<channel ID>`.
+const SERVICE = /*__SERVICE__*/null;
+let hiveApi = SERVICE ? null : "__HIVE_API__";
 const PLUGIN_ID = "__PLUGIN_ID__";
 const HIVE_NAME = "__HIVE_NAME__";
 // The hive's channel and keepers, when the plugin was built with them; otherwise the host says.
@@ -188,9 +191,52 @@ export function apply(ctx) {
         }
     }
 
+    // ---- Finding the hive on the shared service ---------------------------------------------
+    // The community's hive is the one HiveBot set up in one of its channels. The plugin asks the
+    // service for its community's hives, and checks each channel it is shown, once.
+    const probed = new Set();
+    const community = () => {
+        try { return String(ctx.relay?.snapshot?.()?.scope ?? ""); } catch { return ""; }
+    };
+    async function tryChannel(channelId) {
+        if (!SERVICE || hiveApi || !channelId || probed.has(channelId)) return false;
+        probed.add(channelId);
+        try {
+            const res = await ctx.host.request({ url: `${SERVICE}/c/${channelId}/hive/v1/state`, timeoutMs: 15_000 });
+            if (res.status !== 200) return false;
+            hiveApi = `${SERVICE}/c/${channelId}`;
+            return true;
+        } catch { return false; }
+    }
+    async function findHive() {
+        if (!SERVICE || hiveApi) return;
+        try {
+            const res = await ctx.host.request({ url: `${SERVICE}/hives?community=${encodeURIComponent(community())}`, timeoutMs: 15_000 });
+            if (res.status === 200) for (const h of JSON.parse(res.body).hives ?? []) if (await tryChannel(h.channelId)) return;
+        } catch { /* asked again on the next poll */ }
+    }
+    /** A channel the member is looking at: the hive's, perhaps. */
+    function noteChannel(channelId) {
+        if (SERVICE && !hiveApi && channelId && !probed.has(channelId)) void tryChannel(channelId).then((found) => found && load());
+    }
+    /** HiveBot's setup asks the service for a hive in its channel, with its first setup message as proof. */
+    async function askForHive(handle, channelId, events) {
+        if (!SERVICE) return;
+        const call = events.find((e) => e.pubkey === handle.pubkey && (e.tags ?? []).some((t) => t[0] === "hive" && t[1] === "call"));
+        if (!call?.sig) return;
+        try {
+            await ctx.host.request({ url: `${SERVICE}/hives`, method: "POST", headers: { "content-type": "application/json" },
+                body: JSON.stringify({ channelId, community: community(), name: HIVE_NAME, call }), timeoutMs: 15_000 });
+            probed.delete(channelId);
+            if (await tryChannel(channelId)) void load();
+        } catch { /* asked again on the next pass */ }
+    }
+
     async function load() {
         try {
-            const res = await ctx.host.request({ url: `${HIVE_API}/hive/v1/state`, timeoutMs: 15_000 });
+            if (!hiveApi) await findHive();
+            if (!hiveApi) return publish({ ...snapshot, state: null, error: null, loadedAt: Date.now() });
+            const res = await ctx.host.request({ url: `${hiveApi}/hive/v1/state`, timeoutMs: 15_000 });
             if (res.status !== 200) throw new Error(`the hive's host answered ${res.status}`);
             const state = JSON.parse(res.body);
             if (state?.v !== 1) throw new Error("the hive's host speaks another version");
@@ -230,7 +276,8 @@ export function apply(ctx) {
             const fresh = events.filter((e) => e.sig && e.id && !forwarded.has(e.id));
             if (!fresh.length) return;
             try {
-                const res = await ctx.host.request({ url: `${HIVE_API}/hive/v1/channel`, method: "POST", headers: { "content-type": "application/json" },
+                if (!hiveApi) return;
+                const res = await ctx.host.request({ url: `${hiveApi}/hive/v1/channel`, method: "POST", headers: { "content-type": "application/json" },
                     body: JSON.stringify({ events: fresh.map(({ id, pubkey, created_at, kind, tags, content, sig }) => ({ id, pubkey, created_at, kind, tags, content, sig })) }),
                     timeoutMs: 30_000 });
                 // A host that does not take the channel says so once; this plugin then stops asking.
@@ -451,6 +498,13 @@ export function apply(ctx) {
                 await handle.publish({ kind: 9, content: post.text,
                     tags: [["h", channelId], ["hive", post.key, ...extra], ...(post.mentions ?? []).map((k) => ["p", k])] });
             }
+            // On the shared service, the setup asks for this channel's hive, proving it with HiveBot's first message.
+            if (SERVICE && !hiveApi) {
+                const mine = posts.some((p) => p.key === "call")
+                    ? await handle.query([{ kinds: [9], "#h": channel, authors: [bot.pubkey], since, limit: 50 }]).catch(() => [])
+                    : events;
+                await askForHive({ ...handle, pubkey: handle.pubkey ?? bot.pubkey }, channelId, mine);
+            }
             return posts.length;
         } finally {
             busy.delete(key);
@@ -471,7 +525,10 @@ export function apply(ctx) {
             }
             // Keys: the hive's own channel, and every channel this bot set up.
             const channels = new Set([...tagged("call"), ...(snapshot.gov?.channelId ? [snapshot.gov.channelId] : [])]);
-            for (const channelId of channels) await acknowledgeKeys(bot, handle, channelId, mine).catch(() => {});
+            for (const channelId of channels) {
+                await acknowledgeKeys(bot, handle, channelId, mine).catch(() => {});
+                await acknowledgeNodes(bot, handle, channelId, mine).catch(() => {});
+            }
         }
     }
 
@@ -505,6 +562,23 @@ export function apply(ctx) {
                 text = `Got it, ${name}: your keeper key is in${earlier && earlier !== keys[post.pubkey] ? ", replacing the one you posted before" : ""}. ${count} of ${keepers.length} keepers have posted theirs${count === keepers.length ? ", so every key is in." : "."}`;
             }
             await handle.publish({ kind: 9, content: text, tags: [...replyTags(post, channelId), ["hive", "key-ack", post.id]] });
+        }
+    }
+    /**
+     * Members' nodes, acknowledged once each. HiveBot reads the channel itself, so its acknowledgement
+     * tells the hive's host, which gets the channel forwarded, that the member really posted it here.
+     */
+    async function acknowledgeNodes(bot, handle, channelId, mine) {
+        const since = nowS() - 30 * 86400;
+        const events = await handle.query([{ kinds: [9], "#h": [channelId], since, limit: 500 }]);
+        const answered = new Set(mine.flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "node-ack").map((t) => t[2])));
+        const posts = events.filter((e) => e.pubkey !== bot.pubkey && parseNodeClaim(e.content) && !answered.has(e.id)).sort((a, b) => a.created_at - b.created_at);
+        if (!posts.length) return;
+        const names = await profileNames(handle, [...new Set(posts.map((e) => e.pubkey))]);
+        for (const post of posts) {
+            const name = `@${names[post.pubkey] ?? post.pubkey.slice(0, 8)}`;
+            await handle.publish({ kind: 9, content: `Got it, ${name}: your node is in, and uses the budgets running for you from now on.`,
+                tags: [...replyTags(post, channelId), ["hive", "node-ack", post.id]] });
         }
     }
 
@@ -939,6 +1013,7 @@ export function apply(ctx) {
     }
 
     function ChannelStatus(props) {
+        noteChannel(props.channelId);
         const { state, gov } = useSnapshot();
         const form = useProposing();
         if (!gov || !isHiveChannel(props.channelId) || props.threadRootId) return null;

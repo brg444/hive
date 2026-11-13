@@ -306,9 +306,10 @@ export async function checkPayment(
     for (const coin of await lookupSpendCoins(conn, plan.coins))
       ensure(coin.expiresAt >= request.minCoinExpiry, "COIN_EXPIRES_TOO_SOON", `${coin.txid}:${coin.vout}`);
   }
-  // A job is funded once.
+  // A job is funded once. Anyone can send dust to a public address, so only a coin that could be
+  // the job's funding counts: one of at least the cap, unspent.
   const funded = await conn.arkd.coins({ scripts: [escrow.pkScript] });
-  ensure(funded.length === 0, "ESCROW_FUNDED");
+  ensure(!funded.some((c) => !c.isSpent && c.amount >= cap), "ESCROW_FUNDED");
   const messages =
     purpose.stage === "attest" ? attest : [registration(view, session, plan, attest, purpose.signatures)];
   const holder = planHolder(plan);
