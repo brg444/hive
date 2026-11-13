@@ -79,14 +79,16 @@ community gets four tools from the plugin (`hive_guide`, `hive_proposals`, `hive
 `hive_docs`) that answer from the hive's live state and its documentation.
 
 <p>
-<img src="docs/images/keeper-console.png" alt="The keeper console after a keeper made their key" width="40%">
+<img src="docs/images/keeper-console.png" alt="The keeper console once a keeper has made their key, ready to open the hive's signing desk" width="49%">
+<img src="docs/images/keeper-console-check.png" alt="The keeper console checking a job before the keeper signs its payment" width="49%">
 </p>
 
 Signing happens outside Buzz, in the keeper console, a single page where each keeper makes their
 treasury key behind a passkey on their own device, saves an encrypted backup, and later checks and
 signs each payment against the escrow's own terms. One plugin build serves every hive on a Hive
-service and finds its own by the channel it sits in. The screenshots above are the plugin's own
-components rendered with sample data and Buzz's tokens by `hive/hive-buzz/test/preview.mjs`, and
+service and finds its own by the channel it sits in. The plugin screenshots are its own components
+rendered with sample data and Buzz's tokens by `hive/hive-buzz/test/preview.mjs`, the console's
+come from `test/keeper-console-e2e.ts` with `HIVE_SHOTS` set, and
 [the plugin's README](hive/hive-buzz/README.md) covers it in full. Buzz describes its conversation
 hooks as a preview rather than a stable interface, so a new Buzz release may ask for adjustments.
 

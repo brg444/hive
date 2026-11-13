@@ -46,8 +46,13 @@ export async function serveConsole(): Promise<{ url: string; close(): void }> {
  * A keeper's device: a fresh browser profile with a passkey, on which the keeper creates their key and
  * saves its backup. `arkdUrl` is answered with the CORS header a public Operator sends.
  */
-export async function keeperDevice(browser: Page, consoleUrl: string, arkdUrl: string) {
-  const context = await browser.newContext();
+export async function keeperDevice(
+  browser: Page,
+  consoleUrl: string,
+  arkdUrl: string,
+  contextOptions: Record<string, unknown> = {},
+) {
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable");

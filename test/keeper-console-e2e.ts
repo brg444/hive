@@ -5,6 +5,8 @@
  * keeper signs the hive's listing from Node, the other two in their consoles.
  *
  *   node --import tsx test/keeper-console-e2e.ts      (needs Playwright's Chromium)
+ *
+ * With HIVE_SHOTS=<dir>, keeper A's console is also saved as screenshots there, for the docs.
  */
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -30,9 +32,19 @@ const hive = `console-${randomUUID().slice(0, 8)}`;
 const files = localPath("console-e2e", hive);
 const site = await serveConsole();
 const browser = await chromium.launch();
+const shots = process.env.HIVE_SHOTS;
+const shoot = async (page: { screenshot(o: object): Promise<unknown> }, name: string) => {
+  if (shots) await page.screenshot({ path: join(shots, `${name}.png`), fullPage: true });
+};
 
 try {
-  const a = await keeperDevice(browser, site.url, fake.deployment().arkdUrl);
+  const a = await keeperDevice(
+    browser,
+    site.url,
+    fake.deployment().arkdUrl,
+    shots ? { deviceScaleFactor: 2, viewport: { width: 760, height: 900 } } : {},
+  );
+  await shoot(a.page, "keeper-console-key");
   const b = await keeperDevice(browser, site.url, fake.deployment().arkdUrl);
   const third = secp256k1.utils.randomSecretKey();
   const keepers = [a.key, b.key, hex(secp256k1.getPublicKey(third, true))] as [string, string, string];
@@ -77,6 +89,7 @@ try {
   await desk.desk.signListing(keepers[2], hex(schnorr.sign(unhex(pending.listingId), third)));
   assert.equal(loadListing(hive).body.name, "Open Lab");
   console.log("- the listing carries all three keepers' signatures");
+  await shoot(a.page, "keeper-console-desk");
 
   // The console shows its own checks before anyone signs.
   await a.page.getByRole("button", { name: "Check and sign" }).click();
@@ -85,6 +98,7 @@ try {
     "Unused funds go back to this hive's treasury.",
   ])
     assert.equal(await a.page.getByText(check).getAttribute("data-ok"), "true");
+  await shoot(a.page, "keeper-console-check");
   await a.page.getByRole("button", { name: "Back" }).click();
 
   assert.match(await signFirstPayment(a.page, "Check and sign"), /you sign once more after them/);
