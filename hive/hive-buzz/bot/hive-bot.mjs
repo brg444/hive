@@ -22,7 +22,8 @@
 // the relay, so the plugin can be tried in a channel before the bot runs: proposals typed there show
 // as cards with live counts, and the Propose button and status line appear.
 //
-// Every command takes --buzz <path to the buzz CLI> (default: buzz on PATH).
+// Every command takes --buzz <path to the buzz CLI>. Without it the bot uses the one inside the Buzz
+// desktop app when installed (macOS), else buzz on PATH.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { checkAuthTag, loadAuthTag, loadOrCreateKey, saveAuthTag } from "./identity.mjs";
@@ -47,7 +48,21 @@ function authorized(key) {
 
 function client(key, auth) {
     const relay = arg("--relay") ?? die("--relay <community URL> is required", 2);
-    return buzzCli({ bin: arg("--buzz", "buzz"), relay, secret: key.secret, authTag: auth.tag });
+    return buzzCli({ bin: buzzBinary(), relay, secret: key.secret, authTag: auth.tag });
+}
+
+/**
+ * The buzz CLI: --buzz when given, else the copy the Buzz desktop app ships inside itself, else
+ * `buzz` on PATH. With Buzz installed there is nothing to build.
+ */
+function buzzBinary() {
+    if (arg("--buzz")) return arg("--buzz");
+    const home = process.env.HOME ?? "";
+    const bundled = [
+        "/Applications/Buzz.app/Contents/Resources/bin/buzz",
+        join(home, "Applications/Buzz.app/Contents/Resources/bin/buzz"),
+    ].find((path) => existsSync(path));
+    return bundled ?? "buzz";
 }
 
 async function fetchState(api) {

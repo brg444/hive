@@ -17,8 +17,8 @@ const work = mkdtempSync(join(tmpdir(), "hive-buzz-"));
 const children = [];
 after(() => children.forEach((c) => c.kill()));
 
-function build() {
-    const out = execFileSync("node", [join(root, "plugin/build.mjs"), "--api", ORIGIN, "--name", "Test Hive", "--out", work]).toString().trim();
+function build(extra = []) {
+    const out = execFileSync("node", [join(root, "plugin/build.mjs"), "--api", ORIGIN, "--name", "Test Hive", "--out", work, ...extra]).toString().trim();
     return out;
 }
 
@@ -34,7 +34,25 @@ async function startApi(agentLog, extra = []) {
 }
 
 /** What a Buzz host gives a plugin, recording what the plugin registers and sends. */
-function fakeHost(apiBase, viewer = null) {
+/** A stand-in for Buzz's relay session: `observe` gives a view over the channel's events. */
+function fakeSession(events = null) {
+    if (!events) return {};
+    const listeners = new Set();
+    let snapshot = { status: "idle", events: [] };
+    return {
+        observe(filters) {
+            const wanted = (e) => filters.some((f) => f.kinds.includes(e.kind) && (e.tags ?? []).some((t) => t[0] === "h" && f["#h"].includes(t[1])));
+            return {
+                snapshot: () => snapshot,
+                subscribe: (l) => { listeners.add(l); return () => listeners.delete(l); },
+                refresh: async () => { snapshot = { status: "ready", events: events.filter(wanted) }; listeners.forEach((l) => l()); },
+                dispose: () => listeners.clear(),
+            };
+        },
+    };
+}
+
+function fakeHost(apiBase, viewer = null, events = null) {
     const seen = { pages: [], tools: [], notifications: [], categories: [], requests: [], cleanups: [], messages: [], composer: [], accessories: [], opened: [] };
     const ctx = {
         react: React,
@@ -43,7 +61,10 @@ function fakeHost(apiBase, viewer = null) {
             registerTool: (t) => seen.composer.push(t),
             registerAccessory: (a) => seen.accessories.push(a),
         },
-        relay: { snapshot: () => (viewer ? { status: "ready", generation: 1, viewer, session: {} } : { status: "disconnected", generation: 0, session: {} }) },
+        relay: (() => {
+            const session = fakeSession(events);
+            return { snapshot: () => (viewer ? { status: "ready", generation: 1, scope: "test", viewer, session } : { status: "disconnected", generation: 0, session: {} }), subscribe: () => () => {} };
+        })(),
         navigation: { open: async (t) => { seen.opened.push(t); return { status: "opened" }; } },
         pages: { register: (p) => seen.pages.push(p) },
         agents: { addTool: (t) => seen.tools.push(t) },
@@ -66,11 +87,11 @@ function fakeHost(apiBase, viewer = null) {
     return { ctx, seen };
 }
 
-async function activate(apiBase, viewer) {
-    const dir = build();
+async function activate(apiBase, viewer, events, extra = []) {
+    const dir = build(extra);
     // A fresh module per activation, as Buzz evaluates each revision once.
     const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
-    const { ctx, seen } = fakeHost(apiBase, viewer);
+    const { ctx, seen } = fakeHost(apiBase, viewer, events);
     for (const service of mod.inject) assert.ok(ctx[service], `host lacks ${service}`);
     const started = Date.now();
     await mod.apply(ctx);
@@ -202,7 +223,7 @@ test("in the hive's channel: proposals draw as cards with live counts, Propose s
     const { seen } = await activate(api, BOB);
     const status = await seen.tools[0].call();
     assert.match(status, /Proposal p-e1e1e1e1 "Translate the docs": Running, 30,000 sats/);
-    assert.match(status, /two keepers' ✅ approve it/);
+    assert.match(status, /2 keepers' ✅ approve it/);
 
     // The card: what was proposed, where it stands, and the reactions as Buzz shows them.
     const [card] = seen.messages;
@@ -259,5 +280,45 @@ test("a keeper hears once about a proposal whose discussion closed without their
     const keepers = renderToString(React.createElement(seen.pages[0].component, { initialTab: "keepers" }));
     assert.match(keepers, /Keepers<span[^>]*>1<\/span>/, "the tab counts what waits for this keeper");
     assert.ok(keepers.includes("Waiting for your decision") && keepers.includes("Needs your decision"));
+    seen.cleanups.forEach((stop) => stop());
+});
+
+test("with the channel and keepers built in, the plugin works out proposals from the channel itself, with no record from the host", async () => {
+    const { formatProposal } = await import("../shared/proposal.mjs");
+    const { bech32 } = await import("@scure/base");
+    const K = ["a".repeat(64), "b".repeat(64)];
+    const ALICE = "1".repeat(64), BOB = "2".repeat(64);
+    const channel = "7c745ff4-02b3-47c1-b081-8b321828f390";
+    const now = Math.floor(Date.now() / 1000);
+    let n = 0;
+    const id = () => (++n).toString(16).padStart(64, "0");
+    const ev = (kind, pubkey, content, at, tags = []) => ({ id: id(), kind, pubkey, content, created_at: at, tags: [["h", channel], ...tags] });
+    const proposal = ev(9, ALICE, formatProposal({ title: "Weekly summaries", budgetSats: 12000, start: null, end: null, who: "everyone", allowanceSats: 700,
+        purpose: "A weekly summary of the channel.", work: "", provider: "", report: "" }), now - 2 * 86400);
+    const events = [
+        proposal,
+        ev(7, BOB, "👍", now - 2 * 86400 + 60, [["e", proposal.id]]),
+        ev(7, K[0], "✅", now - 86400, [["e", proposal.id]]),
+        ev(7, K[1], "✅", now - 86400 + 30, [["e", proposal.id]]),
+        ev(9, BOB, `Hive node: ${"cd".repeat(32)}`, now - 3600),
+        ev(9, ALICE, "not a proposal", now - 60),
+    ];
+    // The host has no governance at all: the plugin needs only the channel.
+    const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", "--operator", "http://127.0.0.1:9"]);
+    const npub = bech32.encode("npub", bech32.toWords(Buffer.from(K[0], "hex")));
+    const { seen } = await activate(api, BOB, events, ["--channel", channel, "--keepers", `${npub},${K[1]}`]);
+    await seen.tools[0].call();
+    await new Promise((r) => setTimeout(r, 300));
+    const status = await seen.tools[0].call();
+    assert.match(status, /"Weekly summaries": Running, 12,000 sats/, "approved after its 24 hours, and running");
+    const home = renderToString(React.createElement(seen.pages[0].component, {}));
+    for (const t of ["Your allowances", "Weekly summaries", "700 sats a day", "Your node"]) assert.ok(home.includes(t), `page shows ${t}`);
+    const line = renderToString(React.createElement(seen.accessories[0].component, { channelId: channel }));
+    assert.match(line, /1 budget running/);
+    const card = renderToString(React.createElement(seen.messages[0].component, { message: { id: proposal.id, channelId: channel, authorId: ALICE, createdAt: proposal.created_at,
+        content: proposal.content, mentions: [], reactions: [{ content: "✅", events: K.map((k, i) => ({ id: `k${i}`, authorId: k })) }] } }));
+    assert.ok(card.includes("Running") && card.includes("2 of 2 keepers"), "the card shows the decision");
+    assert.ok(seen.messages[0].matches({ channelId: channel, content: proposal.content }));
+    assert.ok(!seen.messages[0].matches({ channelId: "elsewhere", content: proposal.content }));
     seen.cleanups.forEach((stop) => stop());
 });

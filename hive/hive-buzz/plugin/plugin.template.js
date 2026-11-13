@@ -1,15 +1,23 @@
 // Hive for Buzz (API v1): a hive inside its community. Members follow the treasury, propose work and
 // use their allowances; keepers see what waits for them. It shows and routes and holds no keys: every
-// proposal, support and approval is an ordinary Buzz message or reaction signed by its author, and
-// everything else comes from the hive's host over the one origin its manifest declares.
+// proposal, support and approval is an ordinary Buzz message or reaction signed by its author.
+//
+// Where proposals stand, the plugin works out itself from the hive's channel, with the same rules
+// the hive's bot uses. The treasury, jobs and payouts come from the hive's host over the one origin
+// its manifest declares.
 export const inject = ["react", "pages", "host", "notifications", "agents", "conversation", "relay", "navigation"];
 
 const HIVE_API = "__HIVE_API__";
 const PLUGIN_ID = "__PLUGIN_ID__";
 const HIVE_NAME = "__HIVE_NAME__";
+// The hive's channel and keepers, when the plugin was built with them; otherwise the host says.
+const CONFIG = /*__HIVE_CONFIG__*/null;
 const POLL_MS = 30_000;
+const LOOKBACK_DAYS = 90;
 
 /*__PROPOSAL__*/
+
+/*__COORDINATOR__*/
 
 const STATUS = {
     offered: "Offered",
@@ -57,23 +65,54 @@ function allowancesFor(gov, viewer) {
     return gov.proposals.filter((p) => p.state === "running" && (p.who === "everyone" || p.by === viewer || (p.who === "named" && p.named.includes(viewer))));
 }
 
+/** The hive's channel and keepers: built into the plugin, or as the host reports them. */
+function configFrom(state) {
+    const c = CONFIG ?? (state?.governance?.channelId ? state.governance : null);
+    if (!c?.channelId) return null;
+    return { channelId: c.channelId, keepers: c.keepers ?? [], threshold: c.threshold ?? 2, smallSats: c.smallSats ?? 20000 };
+}
+
+/**
+ * Where proposals stand. From the channel's own events when the plugin can read them, which is
+ * live and needs nothing else running; from the host's record otherwise.
+ */
+function governanceFrom(state, events) {
+    const cfg = configFrom(state);
+    if (!cfg) return null;
+    if (events) {
+        const usage = Object.fromEntries((state?.proposals ?? []).map((b) => [b.proposal, b.usedSats]));
+        const r = coordinate(events, { ...cfg, now: nowS(), usage });
+        const members = Object.fromEntries(Object.entries(r.nodes).map(([k, v]) => [k, { node: v.node }]));
+        return { ...cfg, proposals: r.proposals, members, source: "channel" };
+    }
+    const g = state?.governance;
+    if (g?.channelId === cfg.channelId) return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, source: "host" };
+    return { ...cfg, proposals: [], members: {}, source: "none" };
+}
+
 /** A one-line account of the hive, for agents in the community. */
-function summarize(state) {
-    if (!state) return "The hive's state has not loaded yet.";
-    const gov = state.governance;
-    const open = state.jobs.filter((j) => j.status === "open");
-    const lines = [
-        `${state.name}: treasury ${sats(state.treasury.balanceSats)}.`,
-        state.chipIn?.lightningAddress ? `Chip in at ${state.chipIn.lightningAddress}.` : null,
-        `${open.length} open job(s), ${state.funding.length} awaiting funding by keepers.`,
-        ...state.funding.map((j) => `- Fund ${sats(j.capSats)} to ${j.escrowAddress} for ${modelName(j.model)} (deadline ${when(j.deadline)}).`),
-        ...(gov?.proposals ?? []).filter((p) => ["open", "approved", "running"].includes(p.state)).map((p) =>
-            `- Proposal ${p.id} "${p.title}": ${STAGE[p.state]}, ${sats(p.budgetSats)}${p.state === "running" ? `, ${sats(p.usedSats)} used` : ""}, ${p.support} support, ${p.approvals.length} keeper approval(s).`),
-        ...(gov ? [] : (state.proposals ?? []).map((b) => `- Budget ${b.proposal}: ${sats(b.usedSats)} used by ${b.members} member(s) over ${b.requests} request(s).`)),
-        state.agent ? `Members install with the hive's agent's node id ${state.agent.nodeId}.` : null,
-        ...state.providers.map((p) => `- Provider ${short(p.providerPk ?? p.providerPeer)}: earned ${sats(p.earnedSats)}, ${p.openJobs} open.`),
-        "Members propose work in the hive's channel with a message starting \"Proposal:\"; 👍 supports it and two keepers' ✅ approve it.",
-    ];
+function summarize(state, gov) {
+    if (!state && !gov) return "The hive's state has not loaded yet.";
+    const lines = [];
+    if (state) {
+        const open = state.jobs.filter((j) => j.status === "open");
+        lines.push(
+            `${state.name}: treasury ${sats(state.treasury.balanceSats)}.`,
+            state.chipIn?.lightningAddress ? `Chip in at ${state.chipIn.lightningAddress}.` : null,
+            `${open.length} open job(s), ${state.funding.length} awaiting funding by keepers.`,
+            ...state.funding.map((j) => `- Fund ${sats(j.capSats)} to ${j.escrowAddress} for ${modelName(j.model)} (deadline ${when(j.deadline)}).`),
+        );
+    }
+    lines.push(...(gov?.proposals ?? []).filter((p) => ["open", "approved", "running"].includes(p.state)).map((p) =>
+        `- Proposal ${p.id} "${p.title}": ${STAGE[p.state]}, ${sats(p.budgetSats)}${p.state === "running" ? `, ${sats(p.usedSats)} used` : ""}, ${p.support} support, ${p.approvals.length} keeper approval(s).`));
+    if (state) {
+        lines.push(
+            ...(gov ? [] : (state.proposals ?? []).map((b) => `- Budget ${b.proposal}: ${sats(b.usedSats)} used by ${b.members} member(s) over ${b.requests} request(s).`)),
+            state.agent ? `Members install with the hive's agent's node id ${state.agent.nodeId}.` : null,
+            ...state.providers.map((p) => `- Provider ${short(p.providerPk ?? p.providerPeer)}: earned ${sats(p.earnedSats)}, ${p.openJobs} open.`),
+        );
+    }
+    lines.push(`Members propose work in the hive's channel with a message starting "Proposal:"; 👍 supports it and ${gov?.threshold ?? 2} keepers' ✅ approve it.`);
     return lines.filter(Boolean).join("\n");
 }
 
@@ -82,11 +121,13 @@ export function apply(ctx) {
     const h = React.createElement;
 
     // One snapshot shared by every view, the agent tool and notifications.
-    let snapshot = { state: null, error: null, loadedAt: 0 };
+    let snapshot = { state: null, error: null, loadedAt: 0, gov: null };
+    let channelEvents = null;
     const listeners = new Set();
     const publish = (next) => {
-        snapshot = next;
+        snapshot = { ...next, gov: governanceFrom(next.state, channelEvents) };
         for (const listener of listeners) listener(snapshot);
+        notify();
     };
     function useSnapshot() {
         const [view, setView] = React.useState(snapshot);
@@ -106,15 +147,32 @@ export function apply(ctx) {
             return null;
         }
     }
-    const isHiveChannel = (channelId) => {
-        const gov = snapshot.state?.governance;
-        return Boolean(gov?.channelId && channelId === gov.channelId);
-    };
+    const isHiveChannel = (channelId) => Boolean(channelId && snapshot.gov?.channelId === channelId);
 
     const funding = ctx.notifications.register({ id: "funding", label: "Hive funding requests" });
     const decisions = ctx.notifications.register({ id: "decisions", label: "Hive proposals waiting for keepers" });
     const announced = new Set();
     const pageTarget = { version: 1, kind: "plugin", pluginId: PLUGIN_ID, pageId: "main" };
+
+    /** Each job that needs keepers, and each proposal waiting on this keeper, is announced once. */
+    function notify() {
+        const { state, gov } = snapshot;
+        const name = state?.name ?? HIVE_NAME;
+        for (const job of state?.funding ?? []) {
+            if (announced.has(`f:${job.jobId}`)) continue;
+            announced.add(`f:${job.jobId}`);
+            funding.submit({ sourceKey: `funding:${job.jobId}`, target: pageTarget,
+                title: `${name}: a job needs funding`, body: `${sats(job.capSats)} for ${modelName(job.model)}, before ${when(job.deadline)}.` })?.catch?.(() => {});
+        }
+        const me = viewer();
+        if (!me || !gov?.keepers.includes(me)) return;
+        for (const p of gov.proposals) {
+            if (p.state !== "open" || p.discussionEnds > nowS() || p.approvals.includes(me) || announced.has(`d:${p.id}`)) continue;
+            announced.add(`d:${p.id}`);
+            decisions.submit({ sourceKey: `decide:${p.id}`, target: pageTarget,
+                title: `${name}: “${p.title}” is ready for keepers`, body: `${sats(p.budgetSats)}, ${p.support} members support it. React ✅ to approve or ❌ to decline.` })?.catch?.(() => {});
+        }
+    }
 
     async function load() {
         try {
@@ -122,25 +180,7 @@ export function apply(ctx) {
             if (res.status !== 200) throw new Error(`the hive's host answered ${res.status}`);
             const state = JSON.parse(res.body);
             if (state?.v !== 1) throw new Error("the hive's host speaks another version");
-            publish({ state, error: null, loadedAt: Date.now() });
-            const me = viewer();
-            const keeper = Boolean(me && state.governance?.keepers?.includes(me));
-            // Each job that needs keepers is announced once; the host also deduplicates by sourceKey.
-            for (const job of state.funding) {
-                if (announced.has(`f:${job.jobId}`)) continue;
-                announced.add(`f:${job.jobId}`);
-                await funding.submit({ sourceKey: `funding:${job.jobId}`, target: pageTarget,
-                    title: `${state.name}: a job needs funding`, body: `${sats(job.capSats)} for ${modelName(job.model)}, before ${when(job.deadline)}.` }).catch(() => {});
-            }
-            // A keeper hears once about each proposal whose discussion closed without their decision.
-            if (keeper) {
-                for (const p of state.governance.proposals) {
-                    if (p.state !== "open" || p.discussionEnds > nowS() || p.approvals.includes(me) || announced.has(`d:${p.id}`)) continue;
-                    announced.add(`d:${p.id}`);
-                    await decisions.submit({ sourceKey: `decide:${p.id}`, target: pageTarget,
-                        title: `${state.name}: “${p.title}” is ready for keepers`, body: `${sats(p.budgetSats)}, ${p.support} members support it. React ✅ to approve or ❌ to decline.` }).catch(() => {});
-                }
-            }
+            publish({ ...snapshot, state, error: null, loadedAt: Date.now() });
         } catch (e) {
             publish({ ...snapshot, error: String(e?.message ?? e) });
         }
@@ -161,15 +201,75 @@ export function apply(ctx) {
         };
     });
 
+    // The hive's channel, read through the community connection Buzz already has: proposals,
+    // reactions and deletions from the last few months, kept live as new ones arrive.
+    ctx.effect(() => {
+        let view = null;
+        let stopView = null;
+        let key = null;
+        const recompute = () => {
+            const events = (view?.snapshot().events ?? []).filter((e) => e.delivery !== "failed");
+            channelEvents = view ? events : null;
+            publish(snapshot);
+        };
+        const detach = () => {
+            stopView?.();
+            view?.dispose?.();
+            view = stopView = null;
+            if (channelEvents) {
+                channelEvents = null;
+                publish(snapshot);
+            }
+        };
+        const attach = () => {
+            let relay;
+            try { relay = ctx.relay?.snapshot?.(); } catch { relay = null; }
+            const cfg = configFrom(snapshot.state);
+            const session = relay?.session;
+            const next = cfg && typeof session?.observe === "function" ? `${relay.scope ?? relay.generation}:${cfg.channelId}` : null;
+            if (next === key) return;
+            key = next; // before detaching, which publishes and calls back here
+            detach();
+            if (!next) return;
+            const since = nowS() - LOOKBACK_DAYS * 86400;
+            const channel = [cfg.channelId];
+            try {
+                view = session.observe([
+                    { kinds: [9], "#h": channel, since, limit: 1000 },
+                    { kinds: [7], "#h": channel, since, limit: 2000 },
+                    { kinds: [5], "#h": channel, since, limit: 500 },
+                ]);
+            } catch {
+                view = null;
+                return;
+            }
+            stopView = view.subscribe(recompute);
+            recompute();
+            view.refresh?.();
+        };
+        const stopRelay = ctx.relay?.subscribe?.(attach);
+        listeners.add(attach);
+        attach();
+        // Live events reach the view while Buzz follows the channel; a refresh catches the rest.
+        const refresher = setInterval(() => view?.refresh?.(), 120_000);
+        return () => {
+            clearInterval(refresher);
+            listeners.delete(attach);
+            stopRelay?.();
+            detach();
+        };
+    });
+
     ctx.agents.addTool({
         name: "hive_status",
         description: `The ${HIVE_NAME} hive's treasury, chip-in address, proposals, open jobs, jobs awaiting funding and provider earnings.`,
         inputSchema: { type: "object", properties: {} },
         async call() {
             if (!snapshot.state) await load();
-            return summarize(snapshot.state);
+            return summarize(snapshot.state, snapshot.gov);
         },
     });
+
 
     // ---- Look ---------------------------------------------------------------------------
     // Buzz's own tokens throughout, so light and dark both hold; honey is Buzz's amber scale, used
@@ -273,11 +373,10 @@ export function apply(ctx) {
         new Set((message.reactions ?? []).filter((r) => emojis.includes(r.content)).flatMap((r) => r.events.map((e) => e.authorId)));
 
     function ProposalCard({ message }) {
-        const { state } = useSnapshot();
+        const { gov } = useSnapshot();
         const [open, setOpen] = React.useState(false);
         const p = parseProposal(message.content, message.mentions ?? []);
         if (!p) return h("p", { style: p0 }, message.content);
-        const gov = state?.governance;
         const record = gov?.proposals.find((x) => x.eventId === message.id);
         const keepers = gov?.keepers ?? [];
         const threshold = gov?.threshold ?? 2;
@@ -340,7 +439,7 @@ export function apply(ctx) {
         title: "Hive proposal",
         // Only in the hive's own channel once known; any well-formed proposal until then.
         matches: (message) => {
-            const gov = snapshot.state?.governance;
+            const gov = snapshot.gov;
             if (gov?.channelId && message.channelId !== gov.channelId) return false;
             return parseProposal(message.content) !== null;
         },
@@ -395,8 +494,7 @@ export function apply(ctx) {
     const WHO = [["me", "Only me"], ["everyone", "Everyone"], ["named", "Named members"]];
 
     function ProposeForm({ channelId }) {
-        const { state } = useSnapshot();
-        const gov = state?.governance;
+        const { state, gov } = useSnapshot();
         const [f, setF] = React.useState({ title: "", purpose: "", budget: "", start: "", end: "", who: "me", allowance: "", work: "", provider: "", report: "" });
         const [more, setMore] = React.useState(false);
         const [tried, setTried] = React.useState(false);
@@ -456,24 +554,26 @@ export function apply(ctx) {
     }
 
     function ChannelStatus(props) {
-        const { state } = useSnapshot();
+        const { state, gov } = useSnapshot();
         const form = useProposing();
-        if (!state || !isHiveChannel(props.channelId) || props.threadRootId) return null;
+        if (!gov || !isHiveChannel(props.channelId) || props.threadRootId) return null;
         if (form === props.channelId) return h(ProposeForm, { channelId: props.channelId });
-        const gov = state.governance;
         const open = gov.proposals.filter((p) => p.state === "open");
+        const running = gov.proposals.filter((p) => p.state === "running");
         const soonest = open.map((p) => p.discussionEnds).filter((t) => t > nowS()).sort((a, b) => a - b)[0];
         const parts = [
-            h("span", { key: "t", style: tnum }, h("span", { style: { color: C.text, fontWeight: 600 } }, sats(state.treasury.balanceSats)), " in the treasury"),
+            state ? h("span", { key: "t", style: tnum }, h("span", { style: { color: C.text, fontWeight: 600 } }, sats(state.treasury.balanceSats)), " in the treasury") : null,
             open.length ? h("span", { key: "o" }, `${open.length} proposal${open.length === 1 ? "" : "s"} open${soonest ? `, next decision ${until(soonest)}` : ""}`) : null,
-            state.funding.length ? h("span", { key: "f", style: { color: C.honeyInk } }, `${state.funding.length} job${state.funding.length === 1 ? "" : "s"} waiting for keepers`) : null,
+            !open.length && running.length ? h("span", { key: "r" }, `${running.length} budget${running.length === 1 ? "" : "s"} running`) : null,
+            state?.funding.length ? h("span", { key: "f", style: { color: C.honeyInk } }, `${state.funding.length} job${state.funding.length === 1 ? "" : "s"} waiting for keepers`) : null,
+            !open.length && !running.length && !state ? h("span", { key: "n" }, "Propose work with the button below") : null,
         ].filter(Boolean);
         return h("div", { style: { display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", ...muted, ...small, padding: "4px 6px 4px 12px", margin: "0 0 var(--space-2)",
             background: C.inset, borderRadius: C.pill } },
             h(Hex, { size: 13 }),
             h("span", { style: { display: "inline-flex", gap: "var(--space-3)", flexWrap: "wrap", flex: 1, minWidth: 0 } },
                 parts.flatMap((part, i) => (i ? [h("span", { key: `s${i}`, "aria-hidden": true }, "·"), part] : [part]))),
-            h("button", { type: "button", style: { ...btn.quiet, ...small, color: C.text, fontWeight: 550 }, onClick: () => ctx.navigation.open(pageTarget) }, `Open ${state.name}`));
+            h("button", { type: "button", style: { ...btn.quiet, ...small, color: C.text, fontWeight: 550 }, onClick: () => ctx.navigation.open(pageTarget) }, `Open ${state?.name ?? HIVE_NAME}`));
     }
     ctx.conversation.registerAccessory({ id: "status", title: "Hive status", order: 50, component: ChannelStatus });
 
@@ -485,7 +585,8 @@ export function apply(ctx) {
             h("div", { style: { display: "flex", gap: "var(--space-3)", alignItems: "center", minWidth: 0 } },
                 h(Hex, { size: 40 }),
                 h("div", { style: stack(2) },
-                    h("h1", { style: { ...p0, lineHeight: 1.15 } }, state?.name ?? HIVE_NAME),
+                    h("h1", { style: { ...p0, lineHeight: 1.15, display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" } }, state?.name ?? HIVE_NAME,
+                        state?.demo ? h(Pill, { tone: "quiet" }, "Sample data") : null),
                     h("span", { style: { ...muted, ...small } },
                         loadedAt ? `Updated ${new Date(loadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ` : "",
                         h("button", { type: "button", style: { ...btn.quiet, ...small, padding: 0, textDecoration: "underline", textUnderlineOffset: 3 }, onClick: () => load() }, "Refresh")))),
@@ -506,9 +607,8 @@ export function apply(ctx) {
                 "Pay from any Lightning or Arkade wallet. Chip-ins are donations toward the hive's purpose, and every one lands in the treasury as Bitcoin."));
     }
 
-    function YourPart({ state }) {
+    function YourPart({ state, gov }) {
         const me = viewer();
-        const gov = state.governance;
         if (!gov) return null;
         const mine = allowancesFor(gov, me);
         const node = me ? gov.members?.[me]?.node : null;
@@ -560,10 +660,9 @@ export function apply(ctx) {
             p.state === "declined" && p.reason ? h("span", { style: { ...small, color: C.bad } }, p.reason) : null);
     }
 
-    function Proposals({ state, filter, title = "Proposals", empty }) {
-        const gov = state.governance;
+    function Proposals({ state, gov, filter, title = "Proposals", empty }) {
         const me = viewer();
-        if (!gov) return h(Budgets, { state });
+        if (!gov) return state ? h(Budgets, { state }) : null;
         const shown = gov.proposals.filter(filter);
         return h(Card, { title, aside: h("span", { style: { ...muted, ...small } }, `${shown.length}`) },
             shown.length === 0
@@ -586,8 +685,7 @@ export function apply(ctx) {
                         `For provider ${short(j.providerPk)}. Send it in one payment from the treasury; anything else comes back after the deadline.${j.minCoinExpiry ? ` The coins you send must be valid until ${day(j.minCoinExpiry)}, so renew the wallet first if it has not renewed in a few weeks.` : ""}`)))));
     }
 
-    function Keepers({ state }) {
-        const gov = state.governance;
+    function Keepers({ gov }) {
         if (!gov) return null;
         const me = viewer();
         return h(Card, { title: "Keepers", aside: h("span", { style: { ...muted, ...small } }, `${gov.threshold} of ${gov.keepers.length} approve`) },
@@ -640,30 +738,27 @@ export function apply(ctx) {
         const view = useSnapshot();
         const [tab, setTab] = React.useState(TABS.some(([k]) => k === props?.initialTab) ? props.initialTab : "home");
         React.useEffect(() => { if (!snapshot.state) load(); }, []);
-        const { state, error, loadedAt } = view;
+        const { state, gov, error, loadedAt } = view;
         const me = viewer();
-        const keeper = Boolean(me && state?.governance?.keepers?.includes(me));
-        const decide = keeper ? (state?.governance?.proposals ?? []).filter((p) => p.state === "open" && p.discussionEnds <= nowS() && !p.approvals.includes(me)) : [];
-        const waiting = keeper ? decide.length + state.funding.length : 0;
+        const keeper = Boolean(me && gov?.keepers.includes(me));
+        const decide = keeper ? gov.proposals.filter((p) => p.state === "open" && p.discussionEnds <= nowS() && !p.approvals.includes(me)) : [];
+        const waiting = keeper ? decide.length + (state?.funding.length ?? 0) : 0;
         const live = (p) => ["open", "approved", "running"].includes(p.state);
+        const col = (...children) => h("div", { style: stack("var(--space-4)") }, ...children);
+        const needsHost = h(Card, null, h(Empty, null, error ? "The hive's host is out of reach, so the treasury and jobs are not shown." : "Loading the treasury…"));
         let body = null;
-        if (state) {
+        if (state || gov) {
             body = tab === "home" ? h("div", { style: grid },
-                    h("div", { style: stack("var(--space-4)") },
-                        h(YourPart, { state }),
-                        h(Proposals, { state, filter: live, title: "Live proposals" })),
-                    h("div", { style: stack("var(--space-4)") },
-                        state.funding.length ? h(Funding, { state }) : null,
-                        h(Treasury, { state })))
-                : tab === "proposals" ? h("div", { style: stack("var(--space-4)") },
-                    h(Proposals, { state, filter: live, title: "Live proposals" }),
-                    state.governance ? h(Proposals, { state, filter: (p) => !live(p), title: "Past proposals", empty: "None yet." }) : null)
-                : tab === "keepers" ? h("div", { style: stack("var(--space-4)") },
-                    keeper ? h(Proposals, { state, filter: (p) => decide.includes(p), title: "Waiting for your decision", empty: "No proposal needs your decision." }) : null,
-                    h(Funding, { state }), h(Keepers, { state }))
-                : h("div", { style: grid },
-                    h("div", { style: stack("var(--space-4)") }, h(Flows, { state }), h(Jobs, { state })),
-                    h("div", { style: stack("var(--space-4)") }, h(Providers, { state })));
+                    col(h(YourPart, { state: state ?? {}, gov }), gov || state ? h(Proposals, { state, gov, filter: live, title: "Live proposals" }) : null),
+                    col(state?.funding.length ? h(Funding, { state }) : null, state ? h(Treasury, { state }) : needsHost))
+                : tab === "proposals" ? col(
+                    h(Proposals, { state, gov, filter: live, title: "Live proposals" }),
+                    gov ? h(Proposals, { state, gov, filter: (p) => !live(p), title: "Past proposals", empty: "None yet." }) : null)
+                : tab === "keepers" ? col(
+                    keeper ? h(Proposals, { state, gov, filter: (p) => decide.includes(p), title: "Waiting for your decision", empty: "No proposal needs your decision." }) : null,
+                    state ? h(Funding, { state }) : needsHost, h(Keepers, { gov }))
+                : state ? h("div", { style: grid }, col(h(Flows, { state }), h(Jobs, { state })), col(h(Providers, { state })))
+                : needsHost;
         }
         return h("div", { style: { padding: "var(--space-panel-inset)", ...stack("var(--space-5, 20px)"), width: "100%", maxWidth: 1080, boxSizing: "border-box" } },
             h(Head, { state, loadedAt }),
@@ -674,7 +769,7 @@ export function apply(ctx) {
                     onClick: () => setTab(k) }, text,
                     k === "keepers" && waiting ? h("span", { style: { ...TONE.honey, borderRadius: C.pill, padding: "0 7px", fontSize: "0.8em", fontWeight: 600, ...tnum } }, `${waiting}`) : null))),
             error ? h("p", { role: "alert", style: { ...p0, color: C.bad } }, `Could not reach the hive: ${error}`) : null,
-            !state ? h("p", { style: muted }, error ? "" : "Loading the hive…") : body);
+            !state && !gov ? h("p", { style: muted }, error ? "" : "Loading the hive…") : body);
     }
 
     ctx.pages.register({ id: "main", title: HIVE_NAME, primary: true, component: HivePage });

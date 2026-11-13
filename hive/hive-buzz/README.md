@@ -1,7 +1,9 @@
 # Hive for Buzz
 
-A Buzz 1.0 plugin that puts a hive inside its community, the bot that coordinates it, and the
-small read-only service both read from. The plugin shows and routes; it holds no keys. Proposing,
+A Buzz 1.0 plugin that puts a hive inside its community, the bot that announces what happens in
+it, and the small read-only service that reports the treasury. The plugin shows and routes; it holds
+no keys. It reads proposals, support and approvals straight from the hive's channel, so they work
+as soon as it is installed. Proposing,
 supporting and approving are ordinary Buzz messages and reactions, signed by whoever sends them.
 Chipping in and funding jobs happen in each person's own wallet.
 
@@ -65,10 +67,14 @@ the same way.
 ## The plugin
 
 ```bash
-node plugin/build.mjs --api https://hive.example.org --name "Hive"
+node plugin/build.mjs --api https://hive.example.org --name "Hive" \
+  --channel <the hive's channel ID> --keepers <npub>,<npub>,<npub> [--threshold 2] [--small-sats 20000]
 ```
 
-writes `dist/<id>/manifest.json` and `plugin.js` for that hive. The community owner installs it in
+writes `dist/<id>/manifest.json` and `plugin.js` for that hive. `--api` is hive-api's HTTPS address
+and may carry a path; the manifest asks only for its origin. The channel ID is under View channel
+details in Buzz. With `--channel` and `--keepers` the plugin knows the hive's channel and keepers by
+itself; without them it takes them from hive-api, which has them when the bot coordinates. The community owner installs it in
 the Buzz desktop app: Settings → Plugins → Manage plugins → Add → Browse, pick that folder, review
 the one network origin it asks for, and install.
 
@@ -82,16 +88,41 @@ proposals; every proposal; what waits for keepers; and the money, with chip-ins,
 providers. It knows the viewer from the community's connection, and it uses Buzz's conversation
 hooks, which Buzz describes as a preview rather than a stable cross-version interface.
 
+Where each proposal stands, the plugin works out itself: it reads the channel's messages, reactions
+and deletions from the last 90 days through the community connection Buzz already has (the same
+event views Buzz's own plugins use) and applies the coordinator's rules, which the build inlines
+from `bot/coordinator.mjs`. A reaction shows at once, and nothing else has to run for proposals,
+approvals and allowances. If the plugin cannot read the channel, it falls back to the bot's record
+from hive-api.
+
+### Trying it with the demo
+
+`demo/make-state.mjs` writes a sample hive state, and `.github/workflows/demo.yml` publishes it on
+the repo's GitHub Pages every six hours, so trying the plugin needs no host. Build the plugin
+against it with your own channel and keepers, and install the folder:
+
+```bash
+node plugin/build.mjs --api https://brg444.github.io/hive/demo --name "Hive demo" \
+  --channel <your channel ID> --keepers <npub>,<npub>
+```
+
+Proposals then work for real in that channel; the treasury, jobs and payouts on the page are
+sample data, marked as such, with addresses that no wallet accepts.
+
 ## The hive's bot
+
+The plugin does not need the bot. The bot posts what happens in the hive for everyone in the
+channel, with or without the plugin, and writes the members file the hive's agent spends by.
 
 `bot/hive-bot.mjs` posts what happens in the hive into its Buzz channel as an agent of its own:
 funding requests for keepers (at once, even on its first run), jobs opening, providers paid with
 what went back to the treasury, unused escrows returned, lapsed or declined requests, chip-ins, a
 treasury that falls under a floor, and a summary of each month on the first run of the next. It
 reads only hive-api's public state, so it can run on any machine that reaches hive-api; the hive's
-receipt key and its Buzz key never need to share a host. It posts through Buzz's agent CLI (`buzz`,
-built from block/buzz with `cargo build --release -p buzz-cli`), which handles request signing and
-the relay's owner check.
+receipt key and its Buzz key never need to share a host. It posts through Buzz's agent CLI, `buzz`,
+which handles request signing and the relay's owner check. The Buzz desktop app ships that CLI
+inside itself, and on a Mac with Buzz installed the bot uses it without being told; elsewhere, pass
+`--buzz <path>` or build it from block/buzz with `cargo build --release -p buzz-cli`.
 
 ```bash
 node bot/hive-bot.mjs init --state ~/.hive-bot          # makes the bot's key, prints its public key
@@ -107,15 +138,14 @@ node bot/hive-bot.mjs run --state ~/.hive-bot --relay https://<community> --chan
 With `--keepers` (npubs as Buzz shows them, or hex keys, comma-separated) the bot also
 coordinates. Each pass it reads the channel's
 messages, reactions and deletions from the last 90 days (`--since-days`), works out where each
-proposal stands, and writes it to `state/governance.json` (`--governance-file`), which hive-api
-serves to the plugin when started with `--governance <file>`. With `--members-file <path>` it also
+proposal stands by the same rules as the plugin, and writes it to `state/governance.json`
+(`--governance-file`), which hive-api serves when started with `--governance <file>`. With `--members-file <path>` it also
 writes the agent's members file: each member who named a node, with the running proposal they may
 spend from and its daily allowance. It posts each approval, decline and close once. `--threshold`
 and `--small-sats` change the two numbers above, and `--as-of <unix seconds>` judges proposals as
-of another time, for rehearsing a decision without waiting out its discussion. Before the bot runs,
-`hive-bot seed --state <dir> --channel <UUID> --keepers <npub,npub>` writes a governance file with
-just the channel and keepers, which is enough for the plugin's card, Propose button and status line
-to appear in that channel.
+of another time, for rehearsing a decision without waiting out its discussion. For a plugin built without
+`--channel`, `hive-bot seed --state <dir> --channel <UUID> --keepers <npub,npub>` writes a
+governance file with just the channel and keepers for hive-api to serve.
 
 The bot checks the authorization against its own key before keeping it, and the relay admits the
 bot only through it: a member must authorize the key, and the messages then show as the bot's,
