@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Hive keeper console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1.8 21 7v10l-9 5.2L3 17V7z' fill='%23FFC53D'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1c19; --ink-2: #4a4843; --muted: #6f6c64; --line: #e4e1da;
+    --inset: #f1efea; --honey: #ffc53d; --honey-ink: #7a5200; --honey-tint: #fff4d6; --bad: #b4301b; --good: #2f7a3e;
+    --button: #1d1c19; --on-button: #ffffff;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141311; --panel: #1d1c19; --ink: #f2f0ea; --ink-2: #cfccc3; --muted: #a29e94; --line: #34322d;
+      --inset: #26241f; --honey-ink: #ffd36b; --honey-tint: #3a2c0b; --bad: #ff8a73; --good: #7fd18f;
+      --button: #f2f0ea; --on-button: #141311;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  main { max-width: 600px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+  header svg { flex: none; }
+  header b { font-weight: 650; }
+  header span { color: var(--muted); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; padding: 28px; }
+  h1 { font-size: 28px; line-height: 1.15; letter-spacing: -0.015em; font-weight: 650; margin: 0 0 12px; outline: none; }
+  p { margin: 0 0 14px; color: var(--ink-2); }
+  .note { font-size: 14px; color: var(--muted); }
+  .test { display: flex; gap: 10px; align-items: flex-start; background: var(--honey-tint); color: var(--honey-ink); border-radius: 16px; padding: 12px 14px; font-size: 14px; margin-bottom: 20px; }
+  .test svg { flex: none; margin-top: 3px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 20px; }
+  button { font: inherit; font-weight: 600; font-size: 15px; border-radius: 999px; padding: 10px 20px; cursor: pointer; border: 1px solid transparent; }
+  button.primary { background: var(--button); color: var(--on-button); }
+  button.quiet { background: transparent; color: var(--ink-2); border-color: var(--line); }
+  button.link { background: none; border: 0; padding: 4px 0; color: var(--muted); font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--honey); outline-offset: 2px; }
+  label { display: block; font-size: 14px; font-weight: 600; color: var(--ink-2); margin: 14px 0 6px; }
+  input[type=password], input[type=file] { width: 100%; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .line { display: flex; gap: 10px; align-items: center; background: var(--inset); border-radius: 16px; padding: 10px 10px 10px 16px; margin: 18px 0 8px; }
+  .line code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  ol { margin: 0 0 14px; padding-left: 22px; color: var(--ink-2); }
+  ol li { margin: 6px 0; }
+  [data-tone=bad] { color: var(--bad); }
+  [data-tone=good] { color: var(--good); }
+  .msg { min-height: 1.4em; margin: 12px 0 0; font-size: 14px; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 24px 0; }
+  details summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg width="36" height="36" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.8 21 7v10l-9 5.2L3 17V7z" fill="#FFC53D"/></svg>
+    <div><b>Hive keeper console</b><br><span>Your treasury key, on this device only</span></div>
+  </header>
+
+  <div class="test" role="note">
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.8 21 7v10l-9 5.2L3 17V7z" fill="currentColor"/></svg>
+    <span>This console is for test networks. Keys made here are for trying Hive; mainnet keys get a console of their own.</span>
+  </div>
+
+  <section data-view="start" hidden>
+    <h1 tabindex="-1">Create your keeper key</h1>
+    <p>As a keeper you hold one of the keys to your hive's treasury. Any two keepers sign each payment together, so no one moves funds alone, you included.</p>
+    <ol>
+      <li>Your key is made here, on this device, and locked with a passkey: Touch ID, Face ID or your device's screen lock.</li>
+      <li>You save an encrypted backup with a passphrase you choose.</li>
+      <li>You post one line in the hive's channel, so the hive knows the key is yours.</li>
+    </ol>
+    <p class="note">The key never leaves this device. This page has no network access at all.</p>
+    <div class="actions">
+      <button class="primary" id="create" type="button">Create my key</button>
+      <button class="link" id="to-restore" type="button">I have a backup</button>
+    </div>
+    <p class="msg" id="create-msg" role="alert"></p>
+  </section>
+
+  <section data-view="backup" hidden>
+    <h1 tabindex="-1">Save a backup</h1>
+    <p>Your key is created and locked with your passkey. Now save a backup: if this device or your passkey is lost, the backup and its passphrase are the only way back to your key.</p>
+    <form id="backup-form">
+      <label for="b-pass">Backup passphrase</label>
+      <input id="b-pass" name="passphrase" type="password" autocomplete="new-password" minlength="12" required>
+      <label for="b-again">The same passphrase again</label>
+      <input id="b-again" name="again" type="password" autocomplete="new-password" minlength="12" required>
+      <p class="note" style="margin-top:10px">At least 12 characters. Keep the file and the passphrase apart; together they open your key.</p>
+      <div class="actions"><button class="primary" type="submit">Save the backup</button></div>
+      <p class="msg" id="backup-msg" role="alert"></p>
+    </form>
+  </section>
+
+  <section data-view="key" hidden>
+    <h1 tabindex="-1">Your keeper key is ready</h1>
+    <p>Post this line in your hive's channel in Buzz, from your own account. It ties the key to you; HiveBot counts it once every keeper has posted theirs.</p>
+    <div class="line"><code id="line"></code><button class="quiet" id="copy" type="button">Copy</button></div>
+    <p class="msg" id="copy-msg" role="status"></p>
+    <p class="note">Created <span id="created"></span>, locked with your passkey on this device.</p>
+    <hr>
+    <details>
+      <summary>Save another backup</summary>
+      <form id="again-form">
+        <label for="a-pass">Backup passphrase</label>
+        <input id="a-pass" name="passphrase" type="password" autocomplete="new-password" minlength="12" required>
+        <label for="a-again">The same passphrase again</label>
+        <input id="a-again" name="again" type="password" autocomplete="new-password" minlength="12" required>
+        <div class="actions"><button class="quiet" type="submit">Save another backup</button></div>
+        <p class="msg" id="again-msg" role="alert"></p>
+      </form>
+    </details>
+    <div class="actions"><button class="link" id="remove" type="button">Remove the key from this browser</button></div>
+  </section>
+
+  <section data-view="restore" hidden>
+    <h1 tabindex="-1">Restore your key</h1>
+    <p>Open your backup with its passphrase, then lock the key with a passkey on this device.</p>
+    <form id="restore-form">
+      <label for="r-file">Backup file</label>
+      <input id="r-file" name="file" type="file" accept="application/json,.json" required>
+      <label for="r-pass">Backup passphrase</label>
+      <input id="r-pass" name="passphrase" type="password" autocomplete="current-password" required>
+      <div class="actions">
+        <button class="primary" type="submit">Restore my key</button>
+        <button class="link" id="to-start" type="button">Back</button>
+      </div>
+      <p class="msg" id="restore-msg" role="alert"></p>
+    </form>
+  </section>
+</main>
+<script type="module" src="console.js"></script>
+</body>
+</html>

@@ -118,6 +118,26 @@ the branch `plugin`, installs it, and Check for updates picks up each new build.
 Proposals then work for real in that channel; the treasury, jobs and payouts on the page are
 sample data, marked as such, with addresses that no wallet accepts.
 
+## The keeper console
+
+`keeper/` is where keepers create their treasury key, for now on test networks only. The key is
+made on the keeper's own device, kept there encrypted under their passkey (WebAuthn's PRF
+extension), and backed up to a file encrypted with a passphrase they choose. The page has no
+network access at all: its Content-Security-Policy refuses every connection, so the key cannot
+leave the device. It gives the keeper the line to post in the hive's channel, `Hive keeper key:
+<key>`, which ties the key to their Buzz identity. Signing payments comes next, in the same page.
+
+```bash
+node keeper/build.mjs dist/keeper          # index.html and console.js, the curve library bundled in
+```
+
+The repo's `Demo` workflow publishes it on GitHub Pages at `/keeper/`, and builds the demo plugin
+with `--console` pointing there. A passkey belongs to one web address, so keys made there stay
+with that address; mainnet keys will be made on a console of their own. `test/keeper.test.mjs`
+covers the key handling, and `node test/keeper-browser.mjs` runs the page in Chromium with a virtual
+passkey: creating a key, saving its backup, keeping it across a reload and restoring it on another
+device.
+
 ## The hive's bot
 
 The plugin does not need the bot. The bot posts what happens in the hive for everyone in the
