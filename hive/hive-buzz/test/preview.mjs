@@ -41,6 +41,7 @@ const proposals = [
 ];
 const state = {
     v: 1, name: "Buzz Builders", updatedAt: now, agent: { nodeId: "ab".repeat(32) },
+    keepersDesk: { desk: "https://hive.example.org/c/chan-hive", console: "https://keeper.hive.example/" },
     chipIn: { lightningAddress: "builders@hive.example" },
     treasury: { address: "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", balanceSats: 1284500 },
     funding: [{ jobId: "j42", status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, deadline: now + 20 * H, minCoinExpiry: now + 4 * D,
@@ -61,7 +62,7 @@ const state = {
         { at: now - 3 * D, sats: 5000, rail: "lightning", reference: "c3" },
     ],
     proposals: [],
-    governance: { channelId: "chan-hive", keepers: K, threshold: 2, smallSats: 20000, updatedAt: now, proposals, members: { [ME]: { node: "cd".repeat(32) } } },
+    governance: { channelId: "chan-hive", keepers: K, keeperKeys: K.map((_, i) => `02${String(i).repeat(64)}`), threshold: 2, smallSats: 20000, updatedAt: now, proposals, members: { [ME]: { node: "cd".repeat(32) } } },
 };
 
 // Build and activate the plugin against the sample state.

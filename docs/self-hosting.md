@@ -163,7 +163,9 @@ sudo -u hive pnpm ops listing <hive> --name "<hive name>" --purpose "<what the h
 
 ### 5. Chip-ins and the first proposal
 
-Members send to the treasury's address from any Arkade wallet. A member presses Propose in the
+Members send to the treasury's address from any Arkade wallet. A hive on the service has no
+Lightning address yet; a hive on a host of its own gets one from `pnpm ops init --lnurl`, which any
+Lightning wallet can pay. A member presses Propose in the
 channel and posts the proposal, others react 👍, and once the discussion closes two keepers react ✅.
 The member who will use the model sets up their node, joins the hive's mesh and posts the node's ID
 in the channel as `Hive node: <node ID>`. Once HiveBot acknowledges it, the agent serves that node up

@@ -103,7 +103,11 @@ function governanceFrom(state, events) {
         return { ...cfg, proposals: r.proposals, members, keys, source: "channel" };
     }
     const g = state?.governance;
-    if (g?.channelId === cfg.channelId) return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, source: "host" };
+    if (g?.channelId === cfg.channelId) {
+        // The host lists each keeper's treasury key in the keepers' order.
+        const keys = Object.fromEntries((g.keepers ?? []).map((k, i) => [k, g.keeperKeys?.[i]]).filter(([, key]) => key));
+        return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, keys, source: "host" };
+    }
     return { ...cfg, proposals: [], members: {}, source: "none" };
 }
 

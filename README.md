@@ -1,8 +1,9 @@
 # Hive
 
 Hive is a proof of concept for a Bitcoin treasury that a Buzz community keeps together and spends on
-AI inference served over MeshLLM. Members chip in from any Arkade wallet, propose work in the hive's
-Buzz channel and approve it with reactions. When a member asks the hive's model, the hive's agent
+AI inference served over MeshLLM. Members chip in from any Lightning wallet through the hive's
+Lightning address, or from any Arkade wallet straight to its treasury. They propose work in the
+hive's Buzz channel and approve it with reactions. When a member asks the hive's model, the hive's agent
 buys the answer from an independent provider, three keepers chosen by the community hold the
 treasury's keys, and any two of them sign each job's payment from their own devices. The provider
 is paid for exactly the tokens it served, against receipts the agent signs as the answers come back,
@@ -23,7 +24,9 @@ places. I am not going to keep developing it. If your community wants to take it
 with some dirty work it can run, and with real interest it can grow into something sturdier. Read
 it and test it before trusting it with funds that matter.
 
-The known gaps are the ones you would expect at this stage. Keepers can fund jobs and nothing else,
+The known gaps are the ones you would expect at this stage. A hive on the Hive service gets no
+Lightning address yet, so its members chip in from an Arkade wallet until the service registers one
+the way `pnpm ops init --lnurl` does for a hive on its own host. Keepers can fund jobs and nothing else,
 so there is no keeper-signed withdrawal, no tooling for the exit path, for replacing a keeper or for
 winding a hive down. The keeper console is reproducible and hashed, though it is not published as a
 signed release. The signing desk answers anyone who asks it, the buyer trusts the usage a provider
@@ -32,12 +35,65 @@ rebuild their view from disk on every request, the services run from a git check
 logging, and CI does not run the test suites. Mainnet sits behind an explicit opt-in, with the
 Operator and Emulator pinned in the code and hard ceilings on escrows, chip-ins and treasury size.
 
+## The Buzz plugin
+
+Most of the work went into making a hive feel native to Buzz, so that a community runs it from the
+channel it already talks in. The plugin is a Buzz 1.0 plugin that holds no keys and asks for one
+network origin, the host it reads the hive from. It builds on the plugin APIs Buzz is opening up:
+message renderers, composer tools and accessories, pages, agent tools, notifications and the
+community connection Buzz already has. It draws with Buzz's own design tokens, so it follows the
+app's light and dark themes.
+
+<p>
+<img src="docs/images/plugin-channel.png" alt="Proposals drawn as cards in the hive's channel, with the status line above the composer" width="49%">
+<img src="docs/images/plugin-propose.png" alt="The Propose form, opened from the composer" width="49%">
+</p>
+
+In the hive's channel, a proposal is an ordinary message that any Buzz client can read and write,
+and the plugin draws it as a card with its budget, period and allowance, the discussion's progress
+and live 👍 and ✅ counts. A status line above the composer shows the treasury, the open proposals
+with the next decision, and any job waiting for keepers. The Propose button opens a short form that
+writes the proposal into the message box, and the member sends it themselves. The plugin works out
+where each proposal stands on its own, reading the channel's messages, reactions and deletions
+through the community connection and applying the hive's rules, so proposals, approvals and
+allowances work as soon as it is installed. It also forwards the channel's signed events to the
+hive's host, which therefore needs no Buzz identity of its own and checks every signature itself.
+
+<p>
+<img src="docs/images/plugin-hive-page.png" alt="The hive's page: allowances, live proposals, jobs to fund and how to chip in" width="49%">
+<img src="docs/images/plugin-keepers-dark.png" alt="The Keepers tab in dark mode: decisions waiting, jobs to fund with a link to the keeper console, and the keepers' keys" width="49%">
+</p>
+
+The hive's page has four tabs. The overview shows the treasury, the viewer's own allowances and
+the live proposals; the proposals tab lists every proposal; the keepers tab shows what waits for a
+keeper's decision, the jobs to fund with a link that opens the keeper console on the hive's signing
+desk, and which keepers have posted their keys; and the treasury tab shows chip-ins, payouts, jobs
+and providers.
+
+The plugin also defines HiveBot, an agent the community owner creates on Buzz's Agents page, which
+needs no model and keeps nothing on disk. Mentioned with "set up with 3 keepers", it takes the
+channel through the hive's setup: it asks for keepers, has the owner confirm them, acknowledges each
+keeper's key and each member's node, and later posts decisions, payouts and chip-ins as they happen.
+For questions it can bring in a guide, a Goose agent on Buzz's own harness, and every agent in the
+community gets four tools from the plugin (`hive_guide`, `hive_proposals`, `hive_status` and
+`hive_docs`) that answer from the hive's live state and its documentation.
+
+<p>
+<img src="docs/images/keeper-console.png" alt="The keeper console after a keeper made their key" width="40%">
+</p>
+
+Signing happens outside Buzz, in the keeper console, a single page where each keeper makes their
+treasury key behind a passkey on their own device, saves an encrypted backup, and later checks and
+signs each payment against the escrow's own terms. One plugin build serves every hive on a Hive
+service and finds its own by the channel it sits in. The screenshots above are the plugin's own
+components rendered with sample data and Buzz's tokens by `hive/hive-buzz/test/preview.mjs`, and
+[the plugin's README](hive/hive-buzz/README.md) covers it in full. Buzz describes its conversation
+hooks as a preview rather than a stable interface, so a new Buzz release may ask for adjustments.
+
 ## How it fits together
 
-- **[`hive/hive-buzz`](hive/hive-buzz/README.md)** is the Buzz side: the plugin that draws the hive in
-  its channel (proposals, the treasury, jobs waiting for keepers), HiveBot, which sets a hive up and
-  reports on it, and the keeper console, where keepers make their keys behind a passkey and sign
-  payments.
+- **[`hive/hive-buzz`](hive/hive-buzz/README.md)** is the Buzz side: the plugin, HiveBot and the
+  keeper console described above, and hive-api for a hive on a host of its own.
 - **[`hive/pay-arkade`](hive/pay-arkade/README.md)** is the MeshLLM side: a plugin through which a
   provider is paid per token from an escrow on Arkade, with the agent signing a receipt after every
   answer.
