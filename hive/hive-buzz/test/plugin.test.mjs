@@ -122,6 +122,7 @@ test("mainnet: the page shows the treasury, the paid job and the provider's earn
     assert.equal(seen.pages.length, 1);
     assert.equal(seen.pages[0].id, "main");
     assert.equal(seen.pages[0].primary, true);
+    assert.match(seen.pages[0].icon, /^data:image\/svg\+xml,/, "the hive's mark in Buzz's navigation");
     assert.equal(seen.tools[0].name, "hive_status");
 
     const status = await seen.tools[0].call();

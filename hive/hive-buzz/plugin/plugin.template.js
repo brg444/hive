@@ -853,5 +853,7 @@ export function apply(ctx) {
             !state && !gov ? h("p", { style: muted }, error ? "" : "Loading the hive…") : body);
     }
 
-    ctx.pages.register({ id: "main", title: HIVE_NAME, primary: true, component: HivePage });
+    // The hive's mark beside the page in Buzz's navigation: Buzz's amber, the same in both themes.
+    const MARK = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1.8 21 7v10l-9 5.2L3 17V7z" fill="#FFC53D"/></svg>')}`;
+    ctx.pages.register({ id: "main", title: HIVE_NAME, primary: true, icon: MARK, component: HivePage });
 }
