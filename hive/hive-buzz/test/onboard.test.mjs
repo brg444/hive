@@ -2,7 +2,7 @@
 // walks the community through the plugin, the treasury and the first proposal.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY, onboardingPlan, yesVotes } from "../bot/onboard.mjs";
+import { EMPTY, keepersKeys, onboardingPlan, yesVotes } from "../bot/onboard.mjs";
 import { formatProposal } from "../shared/proposal.mjs";
 
 const BOT = "b0".repeat(32), FOUNDER = "f0".repeat(32), A = "a1".repeat(32), B = "b2".repeat(32), C = "c3".repeat(32);
@@ -44,16 +44,32 @@ test("keepers volunteer with ✅, the founder confirms, and the plugin follows w
     events.push(react(FOUNDER, "confirm-id", "✅", T0 + 12), react(FOUNDER, "call-id", "✅", T0 + 13));
     ({ posts, record } = step(record, cfg(events)));
     assert.deepEqual(record.keepers, [A, C, B], "keepers who volunteered before the founder confirmed, in order");
-    assert.deepEqual(posts.map((p) => p.key), ["plugin", "treasury", "propose"]);
+    assert.deepEqual(posts.map((p) => p.key), ["plugin", "keys", "propose"]);
     assert.ok(posts[0].plugin);
     assert.match(posts[0].text, /^Keepers are set: @Ari, @Cy and @Bo\. Any 2 of them approve\./);
-    assert.match(posts[1].text, /I'll post its address here once it's ready/);
+    assert.match(posts[1].text, /^Keepers, your treasury keys next\. Each of you creates one in the keeper console, which the Hive team shares with you\./);
+    assert.deepEqual(posts[1].mentions, [A, C, B]);
     assert.match(posts[2].text, /\nProposal: What the work is, in a few words\nBudget: 20,000 sats\n/);
     assert.match(posts[2].text, /Discussion runs 48 hours, or 24 under 20,000 sats, and then 2 keepers' ✅ approve it\.$/);
+
+    // Keys count only from keepers; the treasury step waits for all of them.
+    const key = (c) => `02${c.repeat(64)}`;
+    const say = (pubkey, content, at) => ({ id: id(), kind: 9, pubkey, content, created_at: at, tags: [["h", "chan"]] });
+    events.push(say(A, `Hive keeper key: ${key("a")}`, T0 + 20), say(FOUNDER, `Hive keeper key: ${key("f")}`, T0 + 21), say(C, `Hive keeper key: ${key("c")}`, T0 + 22));
+    ({ posts, record } = step(record, cfg(events)));
+    assert.deepEqual(posts, [], "one keeper still to go; the founder is not a keeper");
+    events.push(say(B, "Hive keeper key: not-a-key", T0 + 23), say(B, `hive keeper key: ${key("B")}`, T0 + 24));
+    ({ posts, record } = step(record, cfg(events)));
+    assert.deepEqual(posts.map((p) => p.key), ["keys-in", "treasury"]);
+    assert.equal(posts[0].text, "All 3 keys are in, from @Ari, @Cy and @Bo. The treasury is built from them, and any 2 keepers sign its payments together.");
+    assert.match(posts[1].text, /sets it up from the keepers' keys, and I'll post its address here once it's ready/);
+    assert.deepEqual(keepersKeys(events, [A, B, C]), { [A]: key("a"), [C]: key("c"), [B]: key("b") });
+    ({ posts } = step(record, cfg(events, { console: "https://keepers.example.org" })));
+    assert.deepEqual(posts, [], "said once");
 });
 
 test("the treasury is announced once the host has one, and the first proposal closes the setup", () => {
-    let record = { ...EMPTY, keepers: [A, C], threshold: 2, posts: { call: "call-id", confirm: "confirm-id", plugin: "plugin-id", treasury: "t-id", propose: "p-id" } };
+    let record = { ...EMPTY, keepers: [A, C], threshold: 2, posts: { call: "call-id", confirm: "confirm-id", plugin: "plugin-id", keys: "k-id", "keys-in": "ki-id", treasury: "t-id", propose: "p-id" } };
     let r = step(record, cfg([], { state: { demo: true, treasury: { address: "ark1qdemo" } } }));
     assert.deepEqual(r.posts, [], "sample data is not a treasury");
     r = step(record, cfg([], { state: { treasury: { address: "ark1qreal" }, chipIn: { lightningAddress: "hive@example.org" } } }));
@@ -71,7 +87,7 @@ test("the treasury is announced once the host has one, and the first proposal cl
 
 test("the proposal example in the bot's own message is not itself a proposal", async () => {
     const { parseProposal } = await import("../shared/proposal.mjs");
-    const { posts } = onboardingPlan({ ...EMPTY, keepers: [A, C], threshold: 2, posts: { call: 1, confirm: 1, plugin: 1, treasury: 1 } }, cfg([]));
+    const { posts } = onboardingPlan({ ...EMPTY, keepers: [A, C], threshold: 2, posts: { call: 1, confirm: 1, plugin: 1, keys: 1, treasury: 1 } }, cfg([]));
     const text = posts.find((p) => p.key === "propose").text;
     assert.equal(parseProposal(text), null);
     assert.ok(parseProposal(formatProposal({ title: "x", budgetSats: 1, start: null, end: null, who: "me", purpose: "y" })));

@@ -383,7 +383,7 @@ test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with âœ
     const channel = "5e1f0c2a-7d3b-4e8f-9a6c-1b2d3e4f5a6b";
     const BOT = "b0".repeat(32), OWNER = "0e".repeat(32), KA = "a1".repeat(32), KB = "b2".repeat(32);
     const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", "--operator", "http://127.0.0.1:9"]);
-    const dir = build(["--install", "https://github.com/example/hive#plugin"]);
+    const dir = build(["--install", "https://github.com/example/hive#plugin", "--console", "https://keepers.example.org"]);
     const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
     const { ctx, seen } = fakeHost(api, OWNER, []);
     // The community, as the bot reads and writes it.
@@ -428,7 +428,13 @@ test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with âœ
     const plugin = fromBot("plugin");
     assert.deepEqual(plugin.tags.filter((t) => t[0] === "p").map((t) => t[1]), [KA, KB], "the keepers, as the record");
     assert.match(plugin.content, /Add from Git, with https:\/\/github\.com\/example\/hive and the branch plugin\./);
-    assert.ok(fromBot("treasury") && fromBot("propose"));
+    assert.match(fromBot("keys").content, /in the keeper console at https:\/\/keepers\.example\.org\./);
+    assert.ok(fromBot("propose") && !fromBot("treasury"), "the treasury waits for the keepers' keys");
+    add(KA, 9, `Hive keeper key: 02${"a".repeat(64)}`, []);
+    add(KB, 9, `Hive keeper key: 03${"b".repeat(64)}`, []);
+    await pass();
+    assert.match(fromBot("keys-in").content, /^All 2 keys are in, from @Ari and @b2b2b2b2\./);
+    assert.ok(fromBot("treasury"));
 
     add(KB, 9, formatProposal({ title: "Weekly summaries", budgetSats: 12000, start: null, end: null, who: "everyone", allowanceSats: 500, purpose: "A weekly summary.", work: "", provider: "", report: "" }), []);
     await pass();

@@ -2,7 +2,7 @@
 //
 //   node plugin/build.mjs --api https://hive.example.org --name "Example Hive" [--id example.hive] [--out dist]
 //       [--channel <the hive's channel UUID> --keepers <npub or hex, comma-separated> [--threshold 2] [--small-sats 20000]]
-//       [--install <https Git repository>#<branch>]
+//       [--install <https Git repository>#<branch>] [--console <keeper console HTTPS address>]
 //
 // --api is the hive host's HTTPS address; it may carry a path (https://example.github.io/hive/demo),
 // and the manifest grants only its origin. With --channel and --keepers the plugin knows the hive's
@@ -77,12 +77,16 @@ const coordinator = inline("../bot/coordinator.mjs", "coordinate");
 const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel");
 // Where members install the plugin from, for HiveBot to tell them: a Git repository and branch.
 const install = arg("--install");
+// The keeper console's address, where keepers create their treasury keys and sign payments.
+const keeperConsole = arg("--console");
+if (keeperConsole && !/^https:\/\/[^\s]+$/.test(keeperConsole)) fail("--console is the keeper console's HTTPS address");
 if (install && !/^https:\/\/[^\s#]+#[A-Za-z0-9._/-]+$/.test(install)) fail("--install is <https Git repository>#<branch>");
 const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__PROPOSAL__*/", () => proposal)
     .replace("/*__COORDINATOR__*/", () => coordinator)
     .replace("/*__ONBOARDING__*/", () => onboarding)
     .replace("/*__INSTALL__*/null", () => JSON.stringify(install ?? null))
+    .replace("/*__CONSOLE__*/null", () => JSON.stringify(keeperConsole ?? null))
     .replace("/*__HIVE_CONFIG__*/null", () => JSON.stringify(config))
     .replace("__HIVE_API__", api)
     .replace("__PLUGIN_ID__", id)

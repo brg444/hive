@@ -162,8 +162,11 @@ With `--onboard`, the bot sets the hive up in its channel, and every answer is a
 
 1. It asks who will keep the treasury, and each keeper reacts ✅ (`--keepers-needed`, 3 by default).
 2. Once enough have, the member who authorized the bot confirms them with ✅.
-3. It posts the plugin, built for that channel and those keepers, as an attachment.
-4. It says what happens with the treasury, and posts the chip-in address once hive-api has one.
+3. It posts the plugin, built for that channel and those keepers, as an attachment, and asks each
+   keeper to create a treasury key in the keeper console (`--console`) and post the line it gives
+   them, `Hive keeper key: <key>`, from their own Buzz identity.
+4. Once every keeper's key is in, it says so and what happens with the treasury, and posts the
+   chip-in address once hive-api has one.
 5. It shows the proposal format, and closes the setup when the first proposal arrives.
 
 Nobody copies a key or a channel ID: the bot reads them from the signed reactions and from the

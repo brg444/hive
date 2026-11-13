@@ -2,7 +2,7 @@
 // proposal stands. Everything it decides comes from signed Buzz events: a proposal is a member's
 // message, support is members' 👍, approval is two keepers' ✅, a decline is a keeper's ❌ with the
 // reason they reply in the thread. Pure, so it can be tested without a relay.
-import { discussionSeconds, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
+import { discussionSeconds, parseKeeperKey, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
 
 const DAY = 86400;
 const SUPPORT = new Set(["👍", "+", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤️", "🙌"]);
@@ -31,11 +31,15 @@ export function coordinate(events, cfg) {
     const live = events.filter((e) => !deleted.has(e.id)).sort((a, b) => a.created_at - b.created_at);
 
     const nodes = {};
+    const keys = {};
     const proposals = new Map();
     for (const e of live) {
         if (e.kind !== 9) continue;
         const node = parseNodeClaim(e.content);
         if (node) { nodes[e.pubkey] = { node, at: e.created_at }; continue; }
+        // A keeper's treasury key counts only from that keeper; a later post replaces an earlier one.
+        const key = parseKeeperKey(e.content);
+        if (key) { if (keeperSet.has(e.pubkey)) keys[e.pubkey] = { key, at: e.created_at, eventId: e.id }; continue; }
         if (target(e)) continue; // replies are read below
         const p = parseProposal(e.content, tagValues(e, "p"));
         if (!p) continue;
@@ -85,7 +89,7 @@ export function coordinate(events, cfg) {
         });
     }
     out.sort((a, b) => b.postedAt - a.postedAt);
-    return { proposals: out, nodes };
+    return { proposals: out, nodes, keys };
 }
 
 /**

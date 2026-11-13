@@ -23,6 +23,7 @@
 // as cards with live counts, and the Propose button and status line appear.
 //
 //   hive-bot run ... --onboard [--keepers-needed 3] [--threshold 2] [--name "Hive"] [--plugin-api <HTTPS address>]
+//                    [--console <keeper console HTTPS address>]
 //
 // --onboard sets the hive up in its channel, step by step: it asks who will keep the treasury
 // (each keeper reacts ✅), has the member who authorized the bot confirm them, posts the plugin built
@@ -150,7 +151,7 @@ async function onboardOnce(buzz, channel, state, ob) {
     const keys = [...new Set([ob.founder, ...events.filter((e) => e.kind === 7).map((e) => e.pubkey)])];
     const names = await buzz.names(keys);
     const { posts, record: next } = onboardingPlan(record, { events, bot: ob.bot, founder: ob.founder, needed: ob.needed, threshold: ob.threshold,
-        smallSats: ob.smallSats, state, proposals, name: (k) => names[k] ?? k.slice(0, 8) });
+        smallSats: ob.smallSats, state, proposals, name: (k) => names[k] ?? k.slice(0, 8), console: ob.console });
     for (const post of posts) {
         const files = post.plugin ? [pluginZip({ api: ob.api, name: state?.name ?? ob.name, channel, keepers: next.keepers, threshold: next.threshold, smallSats: ob.smallSats })] : [];
         const sent = await buzz.send(channel, post.text, { mentions: post.mentions ?? [], files });
@@ -255,7 +256,7 @@ async function main() {
         const gov = keepers ? { ...govBase, keepers: keepers.split(",").map(keeperKey).filter(Boolean) } : null;
         if (gov && gov.keepers.length < gov.threshold) die("--keepers needs at least --threshold valid public keys", 2);
         const ob = flag("--onboard") ? {
-            api: arg("--plugin-api", api), gov: govBase, bot: key.pubkey, founder: authorized(key).owner, name: arg("--name", "Hive"),
+            api: arg("--plugin-api", api), console: arg("--console"), gov: govBase, bot: key.pubkey, founder: authorized(key).owner, name: arg("--name", "Hive"),
             needed: Number(arg("--keepers-needed", "3")), threshold: govBase.threshold, smallSats: govBase.smallSats,
         } : null;
         if (ob && !(ob.needed >= ob.threshold && ob.threshold >= 1)) die("--keepers-needed must be at least --threshold", 2);

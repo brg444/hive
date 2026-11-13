@@ -23,6 +23,8 @@ const LOOKBACK_DAYS = 90;
 
 // Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
 const INSTALL = /*__INSTALL__*/null;
+// The keeper console, where keepers create their treasury keys and sign payments, when built with --console.
+const KEEPER_CONSOLE = /*__CONSOLE__*/null;
 
 const STATUS = {
     offered: "Offered",
@@ -88,7 +90,8 @@ function governanceFrom(state, events) {
         const usage = Object.fromEntries((state?.proposals ?? []).map((b) => [b.proposal, b.usedSats]));
         const r = coordinate(events, { ...cfg, now: nowS(), usage });
         const members = Object.fromEntries(Object.entries(r.nodes).map(([k, v]) => [k, { node: v.node }]));
-        return { ...cfg, proposals: r.proposals, members, source: "channel" };
+        const keys = Object.fromEntries(Object.entries(r.keys ?? {}).map(([k, v]) => [k, v.key]));
+        return { ...cfg, proposals: r.proposals, members, keys, source: "channel" };
     }
     const g = state?.governance;
     if (g?.channelId === cfg.channelId) return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, source: "host" };
@@ -366,7 +369,7 @@ export function apply(ctx) {
             const founder = handle.owner ?? bot.owner;
             const names = await profileNames(handle, [...new Set([founder, ...events.filter((e) => e.kind === 7).map((e) => e.pubkey)])]);
             const { posts, record: next } = onboardingPlan(record, { events, bot: bot.pubkey, founder, needed, threshold, smallSats,
-                state: snapshot.state, proposals, name: (k) => names[k] ?? k.slice(0, 8), botName: bot.name, install: installText() });
+                state: snapshot.state, proposals, name: (k) => names[k] ?? k.slice(0, 8), botName: bot.name, install: installText(), console: KEEPER_CONSOLE });
             for (const post of posts) {
                 const extra = post.key === "call" ? [`needed=${needed}`] : post.key === "treasury" && next.treasuryReady ? ["ready"] : [];
                 await handle.publish({ kind: 9, content: post.text,
@@ -868,8 +871,13 @@ export function apply(ctx) {
         return h(Card, { title: "Keepers", aside: h("span", { style: { ...muted, ...small } }, `${gov.threshold} of ${gov.keepers.length} approve`) },
             h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-2)" } },
                 gov.keepers.map((k) => h("span", { key: k, style: { display: "inline-flex", gap: 8, alignItems: "center", padding: "5px 12px 5px 8px", background: C.inset, borderRadius: C.pill } },
-                    h(Hex, { size: 14, filled: k === me }), h("code", { style: small }, short(k, 8, 4)), k === me ? h("span", { style: { ...small, ...muted } }, "you") : null))),
-            h("p", { style: { ...p0, ...muted, ...small } }, "Keepers approve proposals with ✅ in the channel and fund their jobs from the treasury with their own wallets."));
+                    h(Hex, { size: 14, filled: Boolean(gov.keys?.[k]) }), h("code", { style: small }, short(k, 8, 4)),
+                    h("span", { style: { ...small, ...muted } }, `${k === me ? "you, " : ""}${gov.keys?.[k] ? "key in" : "no key yet"}`)))),
+            me && gov.keepers.includes(me) && !gov.keys?.[me]
+                ? h("p", { style: { ...p0, ...small } }, "Create your treasury key in the keeper console", KEEPER_CONSOLE ? [" at ", h("code", { key: "c" }, KEEPER_CONSOLE)] : null,
+                    ", then post the line it gives you, starting with “Hive keeper key:”, in the hive's channel.")
+                : null,
+            h("p", { style: { ...p0, ...muted, ...small } }, `Keepers approve proposals with ✅ in the channel, and each payment from the treasury with their own key in the keeper console. Any ${gov.threshold} of them sign together.`));
     }
 
     function Jobs({ state }) {

@@ -93,6 +93,15 @@ export function parseNodeClaim(text) {
     return m ? m[1].toLowerCase() : null;
 }
 
+/**
+ * A keeper tells the hive which treasury key is theirs: `Hive keeper key: <compressed key>`, the line
+ * the keeper console gives them. Sent from their Buzz identity, it ties the key to the person.
+ */
+export function parseKeeperKey(text) {
+    const m = /^\s*hive keeper key\s*:\s*(0[23][0-9a-f]{64})\s*$/i.exec(text ?? "");
+    return m ? m[1].toLowerCase() : null;
+}
+
 /** How long discussion stays open: 48 hours, or 24 under the small-proposal threshold. */
 export function discussionSeconds(budgetSats, smallSats) {
     return budgetSats < smallSats ? DAY : 2 * DAY;

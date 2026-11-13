@@ -1,10 +1,14 @@
+import { parseKeeperKey } from "../shared/proposal.mjs";
 // Setting up a hive in its community's channel, one message or reaction at a time. The bot asks,
-// members answer with ✅, and every answer is a signed Buzz event, so nobody pastes keys or IDs:
+// members answer with ✅ or a message, and every answer is a signed Buzz event, so nobody copies
+// anyone else's key or a channel ID:
 //
 //   1. Keepers: the bot asks who will keep the treasury; each keeper reacts ✅.
 //   2. Confirm: once enough have, the member who authorized the bot confirms them with ✅.
-//   3. Plugin: the bot posts the plugin, built for this channel and these keepers.
-//   4. Treasury: the bot says what comes next and posts the address once the host reports one.
+//   3. Plugin and keys: the bot says where to get the plugin, and asks each keeper to create a
+//      treasury key in the keeper console and post the line it gives them.
+//   4. Treasury: once every keeper's key is in, the bot says so, and posts the address once the
+//      host reports one.
 //   5. First proposal: the bot shows the format and closes the setup when one arrives.
 //
 // Pure, like the announcer: it reads the channel's events and the record of what it already said,
@@ -37,7 +41,7 @@ export const EMPTY = Object.freeze({ v: 1, posts: {}, keepers: null, treasuryRea
  * What to post next.
  *
  * record: what the bot has said and decided (EMPTY to start).
- * cfg: { events, bot, founder, needed, threshold, smallSats, state, proposals, name(pubkey), botName, install }
+ * cfg: { events, bot, founder, needed, threshold, smallSats, state, proposals, name(pubkey), botName, install, console }
  *   events: the channel's kind 9, 7 and 5 events; state: hive-api's state or null;
  *   proposals: the coordinator's proposals, once keepers are set; name: a display name for a key.
  * Returns { posts: [{ key, text, mentions, plugin }], record }: the record as it stands once the
@@ -45,7 +49,8 @@ export const EMPTY = Object.freeze({ v: 1, posts: {}, keepers: null, treasuryRea
  */
 export function onboardingPlan(record, cfg) {
     const { events = [], bot, founder, needed = 3, threshold = 2, smallSats = 20000, state = null, proposals = [], name = (k) => k.slice(0, 8), botName = "Hive",
-        install = "Download the attachment and unzip it, then in Buzz open Settings → Plugins → Manage plugins → Add → Browse and pick the folder." } = cfg;
+        install = "Download the attachment and unzip it, then in Buzz open Settings → Plugins → Manage plugins → Add → Browse and pick the folder.",
+        console: consoleUrl = null } = cfg;
     const next = { ...record, posts: { ...record.posts } };
     const posts = [];
     if (next.done) return { posts, record: next };
@@ -80,6 +85,19 @@ export function onboardingPlan(record, cfg) {
             "",
             `Next, the Hive plugin. It shows proposals as cards and adds a Propose button to this channel. ${install} Anyone here can install it, and the hive works without it too.`,
         ].join("\n") });
+        posts.push({ key: "keys", mentions: keepers, text: [
+            `Keepers, your treasury keys next. Each of you creates one in the keeper console${consoleUrl ? ` at ${consoleUrl}` : ", which the Hive team shares with you"}. It stays on your own device, locked with your passkey, and signs only the payments you approve there yourself.`,
+            "",
+            "Then post the line the console gives you here, starting with “Hive keeper key:”.",
+        ].join("\n") });
+    }
+
+    // Each keeper's latest key, from that keeper only.
+    const keys = keepersKeys(events, next.keepers);
+    if (!next.posts["keys-in"] && Object.keys(keys).length === next.keepers.length) {
+        posts.push({ key: "keys-in", mentions: next.keepers, text:
+            `All ${next.keepers.length} keys are in, from ${people(next.keepers, name)}. The treasury is built from them, and any ${threshold} keepers sign its payments together.` });
+        next.keysIn = true;
     }
 
     const treasury = state?.treasury?.address && !state.demo ? state.treasury : null;
@@ -87,12 +105,12 @@ export function onboardingPlan(record, cfg) {
         const ln = state?.chipIn?.lightningAddress;
         return `The treasury is ready. ${ln ? `Chip in at ${ln}, or send to ${t.address}` : `Chip in by sending to ${t.address}`} from any Lightning or Arkade wallet. Every chip-in lands in the treasury as Bitcoin.`;
     };
-    if (!next.posts.treasury) {
+    if (!next.posts.treasury && (next.keysIn || next.posts["keys-in"])) {
         next.treasuryReady = Boolean(treasury);
         posts.push({ key: "treasury", text: treasury
             ? chipIn(treasury)
-            : "Next, the treasury: the address chip-ins go to and approved work is paid from. During the beta, the Hive team sets it up with the keepers, and I'll post its address here once it's ready." });
-    } else if (!next.treasuryReady && treasury) {
+            : "Next, the treasury: the address chip-ins go to and approved work is paid from. During the beta, the Hive team sets it up from the keepers' keys, and I'll post its address here once it's ready." });
+    } else if (next.posts.treasury && !next.treasuryReady && treasury) {
         next.treasuryReady = true;
         posts.push({ key: "treasury-ready", text: chipIn(treasury) });
     }
@@ -135,4 +153,15 @@ export function recordFromChannel(events, bot, threshold) {
         if (tag[1] === "done") record.done = true;
     }
     return record;
+}
+
+/** Each keeper's latest `Hive keeper key:` post, keyed by the keeper, ignoring everyone else's. */
+export function keepersKeys(events, keepers) {
+    const out = {};
+    for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
+        if (e.kind !== 9 || !keepers.includes(e.pubkey)) continue;
+        const key = parseKeeperKey(e.content);
+        if (key) out[e.pubkey] = key;
+    }
+    return out;
 }

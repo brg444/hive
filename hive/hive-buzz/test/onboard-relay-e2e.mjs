@@ -72,7 +72,11 @@ async function main() {
     await member.run(["reactions", "add", "--event", record().posts.confirm, "--emoji", "✅"]);
     assert.deepEqual(steps(run()), [], "only the member who authorized the bot confirms");
     await owner.run(["reactions", "add", "--event", record().posts.confirm, "--emoji", "✅"]);
-    assert.deepEqual(steps(run()), ["plugin", "treasury", "propose"]);
+    assert.deepEqual(steps(run()), ["plugin", "keys", "propose"]);
+    // Each keeper posts the line the keeper console gives them.
+    await owner.run(["messages", "send", "--channel", channel, "--content", "-"], `Hive keeper key: 02${"1".repeat(64)}`);
+    await member.run(["messages", "send", "--channel", channel, "--content", "-"], `Hive keeper key: 03${"2".repeat(64)}`);
+    assert.deepEqual(steps(run()), ["keys-in", "treasury"]);
     assert.deepEqual(record().keepers.sort(), [ownerPub, memberPub].sort());
     assert.ok(existsSync(join(botState, "governance.json")), "coordinating with the keepers from the channel");
 
