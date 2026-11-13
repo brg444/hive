@@ -3,6 +3,7 @@
 //   node plugin/build.mjs --api https://hive.example.org --name "Example Hive" [--id example.hive] [--out dist]
 //       [--channel <the hive's channel UUID> --keepers <npub or hex, comma-separated> [--threshold 2] [--small-sats 20000]]
 //       [--install <https Git repository>#<branch>] [--console <keeper console HTTPS address>]
+//       [--docs <the repository's docs, as one Markdown file on the --api origin>]
 //
 // --api is the hive host's HTTPS address; it may carry a path (https://example.github.io/hive/demo),
 // and the manifest grants only its origin. With --channel and --keepers the plugin knows the hive's
@@ -79,6 +80,13 @@ const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChann
 const guide = readFileSync(join(here, "../shared/guide.mjs"), "utf8").replace(/^export\s+/gm, "");
 // Where members install the plugin from, for HiveBot to tell them: a Git repository and branch.
 const install = arg("--install");
+// The repository's documentation, for the Hive guide: on the same origin the manifest grants.
+const docs = arg("--docs");
+if (docs) {
+    let u;
+    try { u = new URL(docs); } catch { fail("--docs is an HTTPS address"); }
+    if (u.origin !== origin.origin) fail("--docs must be on the same origin as --api, the one the plugin may call");
+}
 // The keeper console's address, where keepers create their treasury keys and sign payments.
 const keeperConsole = arg("--console");
 if (keeperConsole && !/^https:\/\/[^\s]+$/.test(keeperConsole)) fail("--console is the keeper console's HTTPS address");
@@ -90,6 +98,7 @@ const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__GUIDE__*/", () => guide)
     .replace("/*__INSTALL__*/null", () => JSON.stringify(install ?? null))
     .replace("/*__CONSOLE__*/null", () => JSON.stringify(keeperConsole ?? null))
+    .replace("/*__DOCS__*/null", () => JSON.stringify(docs ?? null))
     .replace("/*__HIVE_CONFIG__*/null", () => JSON.stringify(config))
     .replace("__HIVE_API__", api)
     .replace("__PLUGIN_ID__", id)

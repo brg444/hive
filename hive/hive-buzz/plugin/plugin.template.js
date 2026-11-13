@@ -27,6 +27,8 @@ const LOOKBACK_DAYS = 90;
 const INSTALL = /*__INSTALL__*/null;
 // The keeper console, where keepers create their treasury keys and sign payments, when built with --console.
 const KEEPER_CONSOLE = /*__CONSOLE__*/null;
+// The repository's documentation as one Markdown file, for the Hive guide, when built with --docs.
+const HIVE_DOCS = /*__DOCS__*/null;
 
 const STATUS = {
     offered: "Offered",
@@ -323,6 +325,10 @@ export function apply(ctx) {
                 await handle.publish({ kind: 9, content: await addGuide(handle, t.event), tags: replyTags(t.event, delivery.channelId) });
                 return;
             }
+            if (UPDATE_GUIDE.test(t.event.content ?? "")) {
+                await handle.publish({ kind: 9, content: await updateGuide(handle, t.event), tags: replyTags(t.event, delivery.channelId) });
+                return;
+            }
             // Questions go to the guide, when the owner has one; HiveBot itself only states where the hive stands.
             const guide = guideFor(handle.owner);
             if (guide && !STATUS.test(t.event.content ?? "")) {
@@ -338,6 +344,15 @@ export function apply(ctx) {
     });
     const STATUS = /\b(status|where|treasury|balance|budget)\b/i;
     const ADD_GUIDE = /\badd\b.*\bguide\b/i;
+    const UPDATE_GUIDE = /\bupdate\b.*\bguide\b/i;
+    /** Asks Buzz, for the owner to review, to give the guide the current instructions. */
+    async function updateGuide(handle, event) {
+        if (event.pubkey !== handle.owner) return "Only the member who created me can update the guide.";
+        if (!guideFor(handle.owner)) return `There is no ${GUIDE_NAME} here yet: mention me with “add a guide”.`;
+        if (typeof handle.updateAgent !== "function") return `This Buzz can't change agents for me. Paste the instructions from shared/guide.mjs in the Hive repository into ${GUIDE_NAME}'s settings.`;
+        await handle.updateAgent({ agent: GUIDE_NAME, instructions: GUIDE_INSTRUCTIONS });
+        return `I've asked Buzz to give ${GUIDE_NAME} the current instructions. Review the change on the Agents page.`;
+    }
     /** The owner's Hive guide running on this computer: a Goose agent by that name. */
     function guideFor(owner) {
         if (typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.wake !== "function") return null;
@@ -346,7 +361,7 @@ export function apply(ctx) {
     /** Asks Buzz, for the owner to review, to create the guide with its instructions. */
     async function addGuide(handle, event) {
         if (event.pubkey !== handle.owner) return "Only the member who created me can add a guide.";
-        if (guideFor(handle.owner)) return `${GUIDE_NAME} is already here. Mention it, or me, with a question.`;
+        if (guideFor(handle.owner)) return `${GUIDE_NAME} is already here. Mention it, or me, with a question; mention me with “update the guide” to give it the current instructions.`;
         if (typeof handle.createAgent !== "function") {
             return `This Buzz can't create agents for me. Create a Goose agent named ${GUIDE_NAME} on the Agents page, give it the Hive guide instructions from the Hive repository, and add it to this channel.`;
         }
@@ -486,7 +501,7 @@ export function apply(ctx) {
             `This hive: ${state?.name ?? HIVE_NAME}.`,
             gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and sign a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their treasury key. Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.` : "Its keepers are not set yet.",
             KEEPER_CONSOLE ? `The keeper console is at ${KEEPER_CONSOLE}.` : null,
-            INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings.` : null,
+            INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings. That repository is also Hive's source and documentation.` : null,
             state?.chipIn?.lightningAddress ? `Its Lightning address is ${state.chipIn.lightningAddress}.` : null,
             state?.demo ? "Its treasury figures are sample data for trying Hive." : null,
         ].filter(Boolean).join(" ");
@@ -497,6 +512,59 @@ export function apply(ctx) {
         inputSchema: { type: "object", properties: {} },
         async call() {
             return `${hiveFacts()}\n\n${HOW_IT_WORKS}`;
+        },
+    });
+    const STOP = new Set(["the", "and", "are", "what", "how", "does", "for", "with", "that", "this", "who", "why", "when", "can", "you", "our", "its", "from", "about", "work", "works", "hive"]);
+    // The repository's documentation, read once in a while and handed over a section at a time.
+    let docsCache = { at: 0, sections: null };
+    async function docSections() {
+        if (docsCache.sections && Date.now() - docsCache.at < 15 * 60_000) return docsCache.sections;
+        const res = await ctx.host.request({ url: HIVE_DOCS, timeoutMs: 15_000 });
+        if (res.status !== 200) throw new Error(`the docs answered ${res.status}`);
+        const sections = [];
+        let source = "", current = null, fenced = false;
+        for (const line of res.body.split("\n")) {
+            const src = /^<!-- source: (.+) -->$/.exec(line);
+            if (src) { source = src[1]; continue; }
+            if (/^\s*```/.test(line)) fenced = !fenced;
+            if (!fenced && /^#{1,3} /.test(line)) {
+                current = { source, title: line.replace(/^#+ /, "").trim(), lines: [] };
+                sections.push(current);
+            } else if (current) current.lines.push(line);
+        }
+        docsCache = { at: Date.now(), sections: sections.map((s) => ({ ...s, text: s.lines.join("\n").trim() })).filter((s) => s.text) };
+        return docsCache.sections;
+    }
+    ctx.agents.addTool({
+        name: "hive_docs",
+        description: `The Hive repository's documentation, for details hive_guide does not cover: how Hive works end to end, its safeguards, the plugin and HiveBot, the keeper console, and how providers serve a hive. Give a topic in a few words; without one it lists the sections.`,
+        inputSchema: { type: "object", properties: { topic: { type: "string", description: "What to look up, in a few words" } } },
+        async call(_client, _context, args) {
+            if (!HIVE_DOCS) return "This hive's plugin was built without the repository's docs.";
+            const sections = await docSections();
+            // Words of the topic, cut to their stems so "claimed" finds "claim" and "keepers" "keeper".
+            const words = String(args?.topic ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOP.has(w))
+                .map((w) => (w.length > 5 ? w.slice(0, 5) : w.replace(/s$/, "")));
+            if (!words.length) return `Sections, by document:\n${sections.map((s) => `- ${s.source}: ${s.title}`).join("\n")}`;
+            const scored = sections.map((s) => {
+                const hay = `${s.title} ${s.text}`.toLowerCase();
+                const title = s.title.toLowerCase();
+                // A word in the title counts most; mentions in the text count up to three times, so long
+                // sections do not win on length alone.
+                return { s, score: words.reduce((n, w) => n + (title.includes(w) ? 6 : 0) + Math.min(3, hay.split(w).length - 1), 0) };
+            }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+            // Sections that matter as much as the best one, not every passing mention.
+            const best = scored[0]?.score ?? 0;
+            scored.splice(0, scored.length, ...scored.filter((x) => x.score * 3 >= best));
+            if (!scored.length) return `Nothing in the docs mentions ${args.topic}.`;
+            let out = "", budget = 12_000;
+            for (const { s } of scored) {
+                const block = `## ${s.title} (${s.source})\n\n${s.text}\n\n`;
+                if (block.length > budget) { if (!out) out = block.slice(0, budget); break; }
+                out += block;
+                budget -= block.length;
+            }
+            return out.trim();
         },
     });
     ctx.agents.addTool({

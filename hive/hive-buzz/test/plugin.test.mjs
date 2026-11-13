@@ -328,7 +328,7 @@ test("HiveBot: an agent of the plugin's own type says hello once in the hive's c
     const channel = "7c745ff4-02b3-47c1-b081-8b321828f390";
     const BOT = "b0".repeat(32), ALICE = "1".repeat(64);
     const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", "--operator", "http://127.0.0.1:9"]);
-    const dir = build(["--channel", channel, "--keepers", `${"a".repeat(64)},${"c".repeat(64)}`]);
+    const dir = build(["--channel", channel, "--keepers", `${"a".repeat(64)},${"c".repeat(64)}`, "--docs", `${ORIGIN}/docs/hive-docs.md`]);
     const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
     const { ctx, seen } = fakeHost(api, ALICE, []);
     const published = [];
@@ -410,6 +410,27 @@ test("HiveBot: an agent of the plugin's own type says hello once in the hive's c
     assert.match(await tool("hive_guide").call(), /^This hive: Test Hive\. It has 2 keepers, any 2 of whom approve/);
     assert.match(await tool("hive_guide").call(), /iCloud Drive or Google Drive/);
     assert.equal(await tool("hive_proposals").call(), "No proposal has been posted in the hive's channel yet.");
+
+    // The repository's docs, a section at a time, from the hive's own origin.
+    const docs = ["<!-- source: README.md -->", "", "# Hive", "", "A shared treasury.", "", "## Safeguards", "", "One keeper alone moves nothing.",
+        "", "<!-- source: hive/pay-arkade/README.md -->", "", "## Mainnet", "", "Providers name the peers they serve."].join("\n");
+    const fetched = [];
+    const request = ctx.host.request;
+    ctx.host.request = async (r) => { if (r.url.endsWith("/docs/hive-docs.md")) { fetched.push(r.url); return { status: 200, headers: {}, body: docs }; } return request(r); };
+    const safeguards = await tool("hive_docs").call(null, null, { topic: "what are the safeguards" });
+    assert.match(safeguards, /^## Safeguards \(README\.md\)\n\nOne keeper alone moves nothing\./);
+    assert.ok(!safeguards.includes("Providers name"), "only what the topic needs");
+    assert.match(await tool("hive_docs").call(null, null, {}), /- hive\/pay-arkade\/README\.md: Mainnet/);
+    assert.match(await tool("hive_docs").call(null, null, { topic: "zebra" }), /^Nothing in the docs mentions zebra\./);
+    assert.equal(fetched.length, 1, "read once, then kept a while");
+    assert.equal(fetched[0], `${ORIGIN}/docs/hive-docs.md`);
+
+    // The owner gives an existing guide the current instructions.
+    const updates = [];
+    handle.updateAgent = async (input) => { updates.push(input); return { requestId: "u1", saved: false }; };
+    await mentionRun("@HiveBot update the guide");
+    assert.equal(updates[0].agent, "Hive guide");
+    assert.match(updates[0].instructions, /call hive_docs with a topic/);
     seen.cleanups.forEach((stop) => stop());
 });
 

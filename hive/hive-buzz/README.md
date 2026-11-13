@@ -113,8 +113,13 @@ harness with whichever model the owner set up for Goose. The owner mentions Hive
 guide", and HiveBot asks Buzz to create it with the guide's instructions from `shared/guide.mjs`,
 for the owner to review on the Agents page. From then on, a question to HiveBot wakes the guide in
 the same thread, while status and setup stay HiveBot's. The plugin gives every agent in the
-community three tools: `hive_guide` (how a hive works, with this hive's own settings),
-`hive_proposals` and `hive_status`. The guide's instructions have it read them before answering,
+community four tools: `hive_guide` (how a hive works, with this hive's own settings),
+`hive_proposals`, `hive_status`, and `hive_docs`, which hands over the sections of the repository's
+own documentation a question needs. The `Demo` workflow publishes that documentation beside the
+demo state (`demo/make-docs.mjs`: the top-level README, how Hive works, this README and the payment
+plugin's), and `--docs` at build time points the plugin at it; it must be on the origin the plugin
+already calls. Mentioning HiveBot with "update the guide" asks Buzz to give an existing guide the
+current instructions. The guide's instructions have it read them before answering,
 state nothing they do not say, and never ask for or accept a key, backup or passphrase. HiveBot's
 own messages stay the hive's record; the guide only explains.
 
