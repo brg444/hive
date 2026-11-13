@@ -78,19 +78,58 @@ For questions it can bring in a guide, a Goose agent on Buzz's own harness, and 
 community gets four tools from the plugin (`hive_guide`, `hive_proposals`, `hive_status` and
 `hive_docs`) that answer from the hive's live state and its documentation.
 
+One plugin build serves every hive on a Hive service and finds its own by the channel it sits in.
+The plugin screenshots are its own components rendered with sample data and Buzz's tokens by
+`hive/hive-buzz/test/preview.mjs`, and [the plugin's README](hive/hive-buzz/README.md) covers it in
+full. Buzz describes its conversation hooks as a preview rather than a stable interface, so a new
+Buzz release may ask for adjustments.
+
+## Keepers, passkeys and signing
+
+The treasury's keys belong to three keepers the community chooses in its channel, and nobody else
+ever holds them: not the host, not HiveBot, not the agent. Each keeper makes and keeps their key in
+the keeper console, a single page served from an origin of its own, on whatever device they already
+unlock with Touch ID, Face ID or a screen lock.
+
 <p>
-<img src="docs/images/keeper-console.png" alt="The keeper console once a keeper has made their key, ready to open the hive's signing desk" width="49%">
-<img src="docs/images/keeper-console-check.png" alt="The keeper console checking a job before the keeper signs its payment" width="49%">
+<img src="docs/images/keeper-console-create.png" alt="The keeper console's first screen: create your keeper key" width="49%">
+<img src="docs/images/keeper-console-backup.png" alt="Saving an encrypted backup of the key with a passphrase" width="49%">
 </p>
 
-Signing happens outside Buzz, in the keeper console, a single page where each keeper makes their
-treasury key behind a passkey on their own device, saves an encrypted backup, and later checks and
-signs each payment against the escrow's own terms. One plugin build serves every hive on a Hive
-service and finds its own by the channel it sits in. The plugin screenshots are its own components
-rendered with sample data and Buzz's tokens by `hive/hive-buzz/test/preview.mjs`, the console's
-come from `test/keeper-console-e2e.ts` with `HIVE_SHOTS` set, and
-[the plugin's README](hive/hive-buzz/README.md) covers it in full. Buzz describes its conversation
-hooks as a preview rather than a stable interface, so a new Buzz release may ask for adjustments.
+Becoming a keeper takes three steps. HiveBot asks the channel who will keep the treasury, three
+members react ✅ and the founder confirms them. Each of them then opens the console and presses
+Create my key: the key is made in the browser and sealed with AES-GCM under a secret the passkey
+gives the page through WebAuthn's PRF extension, so only that passkey opens it. The
+console asks next for a backup, encrypted with a passphrase of the keeper's choosing (PBKDF2 at
+600,000 iterations) and saved through the system's own save sheet, so the file can go to iCloud
+Drive or Google Drive without the page signing in anywhere. A keeper who loses the device restores
+the key on a new one from that file and a new passkey.
+
+<p>
+<img src="docs/images/keeper-console-key.png" alt="The key is ready: the line to post in the hive's channel, and the field to open the signing desk" width="49%">
+<img src="docs/images/keeper-console-check.png" alt="Funding a job: the console's own checks, all passed, before the keeper signs" width="49%">
+</p>
+
+Last, the console gives the keeper one line to post from their own Buzz account,
+`Hive keeper key: <key>`, which ties the key to their identity in the community. A key line counts
+only from a confirmed keeper, HiveBot acknowledges each one, and once the third is in, the host builds
+the treasury from the three public keys without keeping any of them. Any two keepers together can
+then move funds, and no single keeper can, whoever they are.
+
+Signing follows the same idea. When the agent asks for a job to be funded, the plugin links each
+keeper to the console with the hive's signing desk filled in, and the keeper unlocks the key with
+the passkey for one sitting, after which the console locks itself when left idle. The desk only
+carries messages between keepers: the console rebuilds the job's escrow from its terms with the
+hive's own code, checks that it pays back to this treasury, that the amount fits what approved work
+has left and that every coin is the treasury's, and signs only the messages it computed itself. The
+two keepers can sign hours apart. The first signs at once, the second signs both remaining steps in
+one sitting, and the first comes back once to finish. The nonces those signatures need are shared
+ahead of time and kept on the device under the same passkey, each deleted before the signature that
+uses it. The console also pins the treasury's address the first time it opens a desk and binds each
+job to the first payment it signs for it, while the build for real funds pins the Arkade Operator's
+and Emulator's keys and comes out the same byte for byte from the same commit, so a keeper can check
+what their host serves against hashes they build themselves. The console screenshots come from the
+browser test in which two keepers fund a job (`test/keeper-console-e2e.ts`, with `HIVE_SHOTS` set).
 
 ## How it fits together
 

@@ -51,6 +51,8 @@ export async function keeperDevice(
   consoleUrl: string,
   arkdUrl: string,
   contextOptions: Record<string, unknown> = {},
+  /** Called on each screen of key creation, for screenshots. */
+  onScreen: (page: Page, name: string) => Promise<void> = async () => {},
 ) {
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
@@ -79,9 +81,13 @@ export async function keeperDevice(
   const errors: string[] = [];
   page.on("pageerror", (e: Error) => errors.push(e.message));
   await page.goto(consoleUrl);
+  await page.getByRole("heading", { name: "Create your keeper key" }).waitFor();
+  await onScreen(page, "create");
   await page.getByRole("button", { name: "Create my key" }).click();
+  await page.locator("#b-pass").waitFor();
   await page.locator("#b-pass").fill("correct horse battery staple");
   await page.locator("#b-again").fill("correct horse battery staple");
+  await onScreen(page, "backup");
   await page.getByRole("button", { name: "Encrypt the backup" }).click();
   await page.getByRole("button", { name: "Save the backup file" }).click();
   await page

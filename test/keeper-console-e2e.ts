@@ -43,6 +43,7 @@ try {
     site.url,
     fake.deployment().arkdUrl,
     shots ? { deviceScaleFactor: 2, viewport: { width: 760, height: 900 } } : {},
+    (page, name) => shoot(page, `keeper-console-${name}`),
   );
   await shoot(a.page, "keeper-console-key");
   const b = await keeperDevice(browser, site.url, fake.deployment().arkdUrl);
