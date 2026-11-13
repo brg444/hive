@@ -240,7 +240,7 @@ test("in the hive's channel: proposals draw as cards with live counts, Propose s
     let inserted = null;
     const toolProps = { channelId: "chan", disabled: false, insertText: (t) => { inserted = t; return true; }, focus: () => {} };
     assert.equal(renderToString(React.createElement(propose.component, { ...toolProps, channelId: "elsewhere" })), "");
-    assert.match(renderToString(React.createElement(propose.component, toolProps)), /Propose/);
+    assert.match(renderToString(React.createElement(propose.component, toolProps)), /aria-label="Propose work to the hive"/);
     assert.equal(seen.accessories[0].placement, undefined, "the status line sits above the composer");
     const line = renderToString(React.createElement(seen.accessories[0].component, { channelId: "chan" }));
     assert.match(line, /1 proposal open, next decision in 23 h/);

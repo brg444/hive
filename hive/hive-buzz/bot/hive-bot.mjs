@@ -172,6 +172,8 @@ async function tick(buzz, channel, api, lowTreasurySats, gov, ob) {
     const keepers = gov ?? (ob && loadOnboarding()?.keepers ? { ...ob.gov, keepers: loadOnboarding().keepers, threshold: loadOnboarding().threshold } : null);
     if (!state) return 0;
     if (keepers) state.governance = await coordinateOnce(buzz, channel, state, keepers);
+    // Sample data is for looking at, never for announcing as if it happened.
+    if (state.demo) return 0;
     const { posts, record, newBudgets } = plan(state, loadRecord(), { lowTreasurySats });
     let current = record;
     saveRecord(current);

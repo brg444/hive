@@ -477,14 +477,17 @@ export function apply(ctx) {
             return () => { if (composers.get(props.channelId) === entry) composers.delete(props.channelId); };
         }, [here, props.channelId, props.insertText, props.focus]);
         if (!here) return null;
+        // Just the hive's mark, like the composer's other tools; its name is in the label and tooltip.
         return h("button", {
             type: "button",
             title: "Propose work to the hive",
+            "aria-label": "Propose work to the hive",
             "aria-pressed": open,
             disabled: props.disabled,
-            style: { display: "inline-flex", alignItems: "center", gap: 6, ...(open ? { background: C.honeyTint, color: C.honeyInk } : {}) },
+            style: { display: "inline-grid", placeItems: "center", width: 28, height: 28, padding: 0, border: 0, borderRadius: C.pill, cursor: "pointer",
+                background: open ? C.honeyTint : "transparent" },
             onClick: () => setProposing(open ? null : props.channelId),
-        }, h(Hex, { size: 13 }), "Propose");
+        }, h(Hex, { size: 16 }));
     }
     ctx.conversation.registerTool({ id: "propose", title: "Propose work to the hive", order: 50, component: ProposeTool });
 
