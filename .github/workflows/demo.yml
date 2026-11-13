@@ -60,7 +60,8 @@ jobs:
           KEEPERS: ${{ vars.HIVE_DEMO_KEEPERS }}
         run: |
           npm install --omit=dev --no-audit --no-fund
-          node plugin/build.mjs --api "$API" --name "Hive demo" --channel "$CHANNEL" --keepers "$KEEPERS" --out "$RUNNER_TEMP/plugin"
+          node plugin/build.mjs --api "$API" --name "Hive demo" --channel "$CHANNEL" --keepers "$KEEPERS" \
+            --install "https://github.com/${GITHUB_REPOSITORY}#plugin" --out "$RUNNER_TEMP/plugin"
       - name: Publish it on the plugin branch
         working-directory: ${{ runner.temp }}/plugin
         env:

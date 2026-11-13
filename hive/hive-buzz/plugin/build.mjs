@@ -2,10 +2,12 @@
 //
 //   node plugin/build.mjs --api https://hive.example.org --name "Example Hive" [--id example.hive] [--out dist]
 //       [--channel <the hive's channel UUID> --keepers <npub or hex, comma-separated> [--threshold 2] [--small-sats 20000]]
+//       [--install <https Git repository>#<branch>]
 //
 // --api is the hive host's HTTPS address; it may carry a path (https://example.github.io/hive/demo),
 // and the manifest grants only its origin. With --channel and --keepers the plugin knows the hive's
-// channel and keepers by itself; without them it takes them from the host.
+// channel and keepers by itself; without them it takes them from the host. --install says where
+// members get the plugin, for HiveBot's onboarding.
 //
 // Each hive gets its own plugin, because Buzz only lets a plugin call the exact HTTPS origins its
 // manifest declares, and the community owner reviews that origin when installing.
@@ -68,11 +70,19 @@ const here = dirname(fileURLToPath(import.meta.url));
 // acts on. Buzz plugins are one file with no imports, so it is inlined here without its exports.
 const proposal = readFileSync(join(here, "../shared/proposal.mjs"), "utf8").replace(/^export\s+/gm, "");
 // The bot's coordinator, in its own scope: the plugin works out where proposals stand by the same rules.
-const coordinator = `const { coordinate } = (() => {\n${readFileSync(join(here, "../bot/coordinator.mjs"), "utf8")
-    .replace(/^import .*$/gm, "").replace(/^export\s+/gm, "")}\nreturn { coordinate };\n})();`;
+const inline = (file, names) => `const { ${names} } = (() => {\n${readFileSync(join(here, file), "utf8")
+    .replace(/^import .*$/gm, "").replace(/^export\s+/gm, "")}\nreturn { ${names} };\n})();`;
+const coordinator = inline("../bot/coordinator.mjs", "coordinate");
+// HiveBot's onboarding, the same steps the server bot posts.
+const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel");
+// Where members install the plugin from, for HiveBot to tell them: a Git repository and branch.
+const install = arg("--install");
+if (install && !/^https:\/\/[^\s#]+#[A-Za-z0-9._/-]+$/.test(install)) fail("--install is <https Git repository>#<branch>");
 const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__PROPOSAL__*/", () => proposal)
     .replace("/*__COORDINATOR__*/", () => coordinator)
+    .replace("/*__ONBOARDING__*/", () => onboarding)
+    .replace("/*__INSTALL__*/null", () => JSON.stringify(install ?? null))
     .replace("/*__HIVE_CONFIG__*/null", () => JSON.stringify(config))
     .replace("__HIVE_API__", api)
     .replace("__PLUGIN_ID__", id)

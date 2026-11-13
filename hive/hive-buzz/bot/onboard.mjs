@@ -37,21 +37,22 @@ export const EMPTY = Object.freeze({ v: 1, posts: {}, keepers: null, treasuryRea
  * What to post next.
  *
  * record: what the bot has said and decided (EMPTY to start).
- * cfg: { events, bot, founder, needed, threshold, smallSats, state, proposals, name(pubkey) }
+ * cfg: { events, bot, founder, needed, threshold, smallSats, state, proposals, name(pubkey), botName, install }
  *   events: the channel's kind 9, 7 and 5 events; state: hive-api's state or null;
  *   proposals: the coordinator's proposals, once keepers are set; name: a display name for a key.
  * Returns { posts: [{ key, text, mentions, plugin }], record }: the record as it stands once the
  * posts are sent; the caller adds each post's event ID under record.posts[key].
  */
 export function onboardingPlan(record, cfg) {
-    const { events = [], bot, founder, needed = 3, threshold = 2, smallSats = 20000, state = null, proposals = [], name = (k) => k.slice(0, 8) } = cfg;
+    const { events = [], bot, founder, needed = 3, threshold = 2, smallSats = 20000, state = null, proposals = [], name = (k) => k.slice(0, 8), botName = "Hive",
+        install = "Download the attachment and unzip it, then in Buzz open Settings → Plugins → Manage plugins → Add → Browse and pick the folder." } = cfg;
     const next = { ...record, posts: { ...record.posts } };
     const posts = [];
     if (next.done) return { posts, record: next };
 
     if (!next.posts.call) {
         posts.push({ key: "call", text: [
-            "Hi, I'm Hive. I'll set up a shared treasury for this community here in this channel, and each step is a message or a reaction.",
+            `Hi, I'm ${botName}. I'll set up a shared treasury for this community here in this channel, and each step is a message or a reaction.`,
             "",
             `First, keepers. Keepers hold the treasury's keys together: any ${threshold} of them approve work and sign payments, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅ to this message. It needs ${needed}.`,
         ].join("\n") });
@@ -77,7 +78,7 @@ export function onboardingPlan(record, cfg) {
         posts.push({ key: "plugin", plugin: true, mentions: keepers, text: [
             `Keepers are set: ${people(keepers, name)}. Any ${threshold} of them approve.`,
             "",
-            "Next, the Hive plugin. It shows proposals as cards and adds a Propose button to this channel. Download the attachment and unzip it, then in Buzz open Settings → Plugins → Manage plugins → Add → Browse and pick the folder. Anyone here can install it, and the hive works without it too.",
+            `Next, the Hive plugin. It shows proposals as cards and adds a Propose button to this channel. ${install} Anyone here can install it, and the hive works without it too.`,
         ].join("\n") });
     }
 
@@ -113,4 +114,25 @@ export function onboardingPlan(record, cfg) {
         posts.push({ key: "done", text: `The first proposal is in: “${first.title}”. That's the setup done. From here I'll post approvals, payouts and chip-ins in this channel.` });
     }
     return { posts, record: next };
+}
+
+/**
+ * The record, read back from the bot's own messages in the channel: each onboarding post carries a
+ * ["hive", key] tag, and the plugin post names the keepers in its "p" tags. So a bot that keeps no
+ * state of its own picks up where it left off.
+ */
+export function recordFromChannel(events, bot, threshold) {
+    const record = { ...EMPTY, posts: {} };
+    for (const e of [...events].filter((e) => e.kind === 9 && e.pubkey === bot).sort((a, b) => a.created_at - b.created_at)) {
+        const tag = (e.tags ?? []).find((t) => t[0] === "hive");
+        if (!tag || record.posts[tag[1]]) continue;
+        record.posts[tag[1]] = e.id;
+        if (tag[1] === "plugin") {
+            record.keepers = (e.tags ?? []).filter((t) => t[0] === "p").map((t) => t[1]);
+            record.threshold = threshold;
+        }
+        if (tag[1] === "treasury-ready" || (tag[1] === "treasury" && tag[2] === "ready")) record.treasuryReady = true;
+        if (tag[1] === "done") record.done = true;
+    }
+    return record;
 }

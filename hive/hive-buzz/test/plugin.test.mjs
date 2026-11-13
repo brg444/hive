@@ -377,3 +377,64 @@ test("HiveBot: an agent of the plugin's own type says hello once in the hive's c
     assert.equal(ignored, 1, "only mentions are answered");
     seen.cleanups.forEach((stop) => stop());
 });
+
+test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with ✅, the owner confirms, and it walks the channel to the first proposal", async () => {
+    const { formatProposal } = await import("../shared/proposal.mjs");
+    const channel = "5e1f0c2a-7d3b-4e8f-9a6c-1b2d3e4f5a6b";
+    const BOT = "b0".repeat(32), OWNER = "0e".repeat(32), KA = "a1".repeat(32), KB = "b2".repeat(32);
+    const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", "--operator", "http://127.0.0.1:9"]);
+    const dir = build(["--install", "https://github.com/example/hive#plugin"]);
+    const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
+    const { ctx, seen } = fakeHost(api, OWNER, []);
+    // The community, as the bot reads and writes it.
+    let clock = Math.floor(Date.now() / 1000) - 3600, n = 0;
+    const events = [];
+    const add = (pubkey, kind, content, tags) => { const e = { id: (++n).toString(16).padStart(64, "0"), pubkey, kind, content, created_at: ++clock, tags: [["h", channel], ...tags] }; events.push(e); return e; };
+    const matches = (e, f) => (!f.kinds || f.kinds.includes(e.kind)) && (!f.authors || f.authors.includes(e.pubkey)) && (!f["#h"] || (e.tags ?? []).some((t) => t[0] === "h" && f["#h"].includes(t[1])));
+    events.push({ id: "f".repeat(64), pubkey: KA, kind: 0, content: JSON.stringify({ display_name: "Ari" }), created_at: 1, tags: [] });
+    const handle = {
+        pubkey: BOT, name: "HiveBot", owner: OWNER,
+        query: async (filters) => events.filter((e) => filters.some((f) => matches(e, f))),
+        publish: async (t) => add(BOT, t.kind, t.content, t.tags.filter((tag) => tag[0] !== "h")),
+    };
+    const types = [];
+    const agentListeners = new Set();
+    ctx.agents = { ...ctx.agents, register: (t) => types.push(t), snapshot: () => ({ running: [{ pubkey: BOT, name: "HiveBot", owner: OWNER, type: "test-hive.hive/bot" }] }),
+        subscribe: (l) => { agentListeners.add(l); return () => agentListeners.delete(l); }, handle: (k) => (k === BOT ? handle : undefined) };
+    await mod.apply(ctx);
+    const pass = async () => { agentListeners.forEach((l) => l()); await new Promise((r) => setTimeout(r, 150)); };
+    const run = (event) => types[0].run({ trigger: { type: "mention", event }, channelId: channel, agent: handle, config: {}, signal: new AbortController().signal, workingUntil() {}, acknowledged() {} });
+    const fromBot = (key) => events.find((e) => e.pubkey === BOT && e.tags.some((t) => t[0] === "hive" && t[1] === key));
+
+    await run(add(KA, 9, "@HiveBot set up a hive here", [["p", BOT]]));
+    assert.match(events.at(-1).content, /^Only the member who created me/, "only the owner starts it");
+    await run(add(OWNER, 9, "@HiveBot set up a hive here with 2 keepers", [["p", BOT]]));
+    const call = fromBot("call");
+    assert.ok(call, "the keeper call");
+    assert.match(call.content, /^Hi, I'm HiveBot\./);
+    assert.match(call.content, /It needs 2\.$/);
+
+    add(KA, 7, "✅", [["e", call.id]]);
+    add(KB, 7, "✅", [["e", call.id]]);
+    await pass();
+    const confirm = fromBot("confirm");
+    assert.ok(confirm, "asks the owner to confirm");
+    assert.match(confirm.content, /^2 keepers so far: @Ari and @b2b2b2b2\./);
+    await pass();
+    assert.equal(events.filter((e) => e.pubkey === BOT && e.tags.some((t) => t[1] === "confirm")).length, 1, "said once across passes");
+
+    add(OWNER, 7, "✅", [["e", confirm.id]]);
+    await pass();
+    const plugin = fromBot("plugin");
+    assert.deepEqual(plugin.tags.filter((t) => t[0] === "p").map((t) => t[1]), [KA, KB], "the keepers, as the record");
+    assert.match(plugin.content, /Add from Git, with https:\/\/github\.com\/example\/hive and the branch plugin\./);
+    assert.ok(fromBot("treasury") && fromBot("propose"));
+
+    add(KB, 9, formatProposal({ title: "Weekly summaries", budgetSats: 12000, start: null, end: null, who: "everyone", allowanceSats: 500, purpose: "A weekly summary.", work: "", provider: "", report: "" }), []);
+    await pass();
+    assert.match(fromBot("done").content, /^The first proposal is in: “Weekly summaries”/);
+    const count = events.length;
+    await pass();
+    assert.equal(events.length, count, "nothing more once the setup is done");
+    seen.cleanups.forEach((stop) => stop());
+});

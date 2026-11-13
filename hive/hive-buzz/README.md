@@ -95,6 +95,17 @@ from `bot/coordinator.mjs`. A reaction shows at once, and nothing else has to ru
 approvals and allowances. If the plugin cannot read the channel, it falls back to the bot's record
 from hive-api.
 
+### HiveBot
+
+The plugin also defines an agent type, Hive bot. The community owner creates HiveBot on Buzz's
+Agents page and adds it to a channel; Buzz holds its key and signs it into the community, so it
+posts as itself even where the community requires Buzz's sign-in. It needs no model and runs
+while Buzz is open on the owner's computer. Mention it for where the hive stands. The owner sets a
+hive up by mentioning it with "set up" (and, optionally, "with 2 keepers"): HiveBot then takes the
+channel through the onboarding steps below, reading where it stands from its own tagged messages,
+so it keeps nothing on disk and picks up after a restart. `--install <repository>#<branch>` at
+build time tells members where to get the plugin.
+
 ### Trying it with the demo
 
 `demo/make-state.mjs` writes a sample hive state, and the repo's `Demo` workflow publishes it on

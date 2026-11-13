@@ -19,6 +19,11 @@ const LOOKBACK_DAYS = 90;
 
 /*__COORDINATOR__*/
 
+/*__ONBOARDING__*/
+
+// Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
+const INSTALL = /*__INSTALL__*/null;
+
 const STATUS = {
     offered: "Offered",
     awaiting_funding: "Awaiting funding",
@@ -298,9 +303,96 @@ export function apply(ctx) {
             }
             delivery.acknowledged?.();
             if (!snapshot.state) await load();
-            await delivery.agent.publish({ kind: 9, content: statusText(), tags: replyTags(t.event, delivery.channelId) });
+            const handle = delivery.agent;
+            if (SETUP.test(t.event.content ?? "")) {
+                if (t.event.pubkey !== handle.owner) {
+                    await handle.publish({ kind: 9, content: "Only the member who created me can start a hive's setup.", tags: replyTags(t.event, delivery.channelId) });
+                    return;
+                }
+                const needed = Math.max(2, Math.min(9, Number(/(\d+)\s*keepers?/i.exec(t.event.content)?.[1] ?? 3)));
+                const posted = await onboardIn({ pubkey: handle.pubkey, name: handle.name, owner: handle.owner }, handle, delivery.channelId, { start: true, needed });
+                if (!posted) await handle.publish({ kind: 9, content: "Setup is already under way in this channel: react ✅ to my message above if you'll keep the treasury.", tags: replyTags(t.event, delivery.channelId) });
+                return;
+            }
+            await handle.publish({ kind: 9, content: statusText(), tags: replyTags(t.event, delivery.channelId) });
         },
     });
+    // Onboarding: the owner mentions HiveBot asking to set up, and HiveBot walks the channel through
+    // keepers, the plugin, the treasury and the first proposal. Where it stands is read back from
+    // its own tagged messages, so a restart, another computer or a reload picks up where it left off.
+    const SETUP = /\b(set\s*up|setup|onboard)\b/i;
+    function installText() {
+        if (!INSTALL) return "The community owner shares it; in Buzz it installs from Settings → Plugins → Manage plugins → Add.";
+        const [repository, ref] = INSTALL.split("#");
+        return `In Buzz, open Settings → Plugins → Manage plugins → Add → Add from Git, with ${repository} and the branch ${ref}.`;
+    }
+    /** Display names from Buzz profiles, as the bot reads them. */
+    async function profileNames(handle, keys) {
+        if (!keys.length) return {};
+        const events = await handle.query([{ kinds: [0], authors: keys, limit: keys.length * 2 }]).catch(() => []);
+        const out = {};
+        for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
+            try {
+                const p = JSON.parse(e.content);
+                const name = p.display_name || p.displayName || p.name;
+                if (name) out[e.pubkey] = String(name).slice(0, 60);
+            } catch { /* not a profile */ }
+        }
+        return out;
+    }
+    const busy = new Set();
+    /** One onboarding pass in a channel; returns how many messages it posted. */
+    async function onboardIn(bot, handle, channelId, { start = false, needed: asked } = {}) {
+        const key = `${bot.pubkey}:${channelId}`;
+        if (busy.has(key)) return 0;
+        busy.add(key);
+        try {
+            const since = nowS() - 30 * 86400;
+            const channel = [channelId];
+            const events = await handle.query([
+                { kinds: [9], "#h": channel, since, limit: 500 },
+                { kinds: [7], "#h": channel, since, limit: 1000 },
+                { kinds: [5], "#h": channel, since, limit: 200 },
+            ]);
+            const cfg = configFrom(snapshot.state);
+            const threshold = cfg?.channelId === channelId ? cfg.threshold : 2;
+            const smallSats = cfg?.smallSats ?? 20000;
+            const record = recordFromChannel(events, bot.pubkey, threshold);
+            if (!record.posts.call && !start) return 0;
+            if (record.done) return 0;
+            const call = events.find((e) => e.id === record.posts.call);
+            const needed = Number(/needed=(\d+)/.exec((call?.tags ?? []).find((t) => t[0] === "hive")?.[2] ?? "")?.[1] ?? asked ?? 3);
+            const proposals = record.keepers ? coordinate(events, { keepers: record.keepers, threshold, smallSats }).proposals : [];
+            const founder = handle.owner ?? bot.owner;
+            const names = await profileNames(handle, [...new Set([founder, ...events.filter((e) => e.kind === 7).map((e) => e.pubkey)])]);
+            const { posts, record: next } = onboardingPlan(record, { events, bot: bot.pubkey, founder, needed, threshold, smallSats,
+                state: snapshot.state, proposals, name: (k) => names[k] ?? k.slice(0, 8), botName: bot.name, install: installText() });
+            for (const post of posts) {
+                const extra = post.key === "call" ? [`needed=${needed}`] : post.key === "treasury" && next.treasuryReady ? ["ready"] : [];
+                await handle.publish({ kind: 9, content: post.text,
+                    tags: [["h", channelId], ["hive", post.key, ...extra], ...(post.mentions ?? []).map((k) => ["p", k])] });
+            }
+            return posts.length;
+        } finally {
+            busy.delete(key);
+        }
+    }
+    /** Every channel where a bot of this type has a setup under way. */
+    async function driveOnboarding() {
+        if (typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.handle !== "function") return;
+        for (const bot of (ctx.agents.snapshot()?.running ?? []).filter((a) => a.type === BOT_TYPE)) {
+            const handle = ctx.agents.handle(bot.pubkey);
+            if (!handle) continue;
+            const mine = await handle.query([{ kinds: [9], authors: [bot.pubkey], since: nowS() - 30 * 86400, limit: 200 }]).catch(() => []);
+            const tagged = (key) => new Set(mine.filter((e) => (e.tags ?? []).some((t) => t[0] === "hive" && t[1] === key))
+                .map((e) => (e.tags ?? []).find((t) => t[0] === "h")?.[1]).filter(Boolean));
+            const done = tagged("done");
+            for (const channelId of tagged("call")) {
+                if (!done.has(channelId)) await onboardIn(bot, handle, channelId).catch(() => {});
+            }
+        }
+    }
+
     // Once per channel, the bot introduces itself, so the owner sees it posting. What it has said
     // is read back from the channel, so nothing is stored here.
     const greeted = new Set();
@@ -318,7 +410,7 @@ export function apply(ctx) {
             tried.set(key, Date.now());
             try {
                 const said = await handle.query([{ kinds: [9], authors: [bot.pubkey], "#h": [gov.channelId], limit: 50 }]);
-                if (said.some((e) => (e.tags ?? []).some((tag) => tag[0] === "hive" && tag[1] === "hello"))) continue;
+                if (said.some((e) => (e.tags ?? []).some((tag) => tag[0] === "hive" && (tag[1] === "hello" || tag[1] === "call")))) continue;
                 await handle.publish({ kind: 9, tags: [["h", gov.channelId], botTag("hello")], content:
                     `Hi, I'm ${bot.name}, this hive's bot. I'll post proposals' decisions, payouts and chip-ins here as they happen. Mention me any time for where the hive stands. ${statusText()}` });
             } catch {
@@ -327,12 +419,16 @@ export function apply(ctx) {
         }
     }
     ctx.effect(() => {
-        const stop = ctx.agents.subscribe?.(() => { greet(); });
+        const stop = ctx.agents.subscribe?.(() => { greet(); driveOnboarding(); });
         listeners.add(greet);
         greet();
+        driveOnboarding();
+        // Reactions and replies reach the bot here every half minute, with a little jitter.
+        const steps = setInterval(() => driveOnboarding().catch(() => {}), 30_000 + Math.floor(Math.random() * 5_000));
         const retry = setInterval(greet, 60_000);
         return () => {
             clearInterval(retry);
+            clearInterval(steps);
             listeners.delete(greet);
             stop?.();
         };
