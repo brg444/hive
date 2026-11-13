@@ -322,3 +322,57 @@ test("with the channel and keepers built in, the plugin works out proposals from
     assert.ok(!seen.messages[0].matches({ channelId: "elsewhere", content: proposal.content }));
     seen.cleanups.forEach((stop) => stop());
 });
+
+test("HiveBot: an agent of the plugin's own type says hello once in the hive's channel and answers mentions with the hive's status", async () => {
+    const channel = "7c745ff4-02b3-47c1-b081-8b321828f390";
+    const BOT = "b0".repeat(32), ALICE = "1".repeat(64);
+    const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", "--operator", "http://127.0.0.1:9"]);
+    const dir = build(["--channel", channel, "--keepers", `${"a".repeat(64)},${"c".repeat(64)}`]);
+    const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
+    const { ctx, seen } = fakeHost(api, ALICE, []);
+    const published = [];
+    const types = [];
+    const agentListeners = new Set();
+    let running = [];
+    const handle = {
+        query: async () => published.map((p) => ({ ...p, pubkey: BOT })),
+        publish: async (event) => { published.push(event); return { id: String(published.length).padStart(64, "0"), ...event }; },
+    };
+    ctx.agents = {
+        ...ctx.agents,
+        register: (t) => types.push(t),
+        snapshot: () => ({ status: "ready", running, agents: running }),
+        subscribe: (l) => { agentListeners.add(l); return () => agentListeners.delete(l); },
+        handle: (pubkey) => (pubkey === BOT ? handle : undefined),
+    };
+    await mod.apply(ctx);
+    assert.equal(types.length, 1);
+    assert.equal(types[0].id, "bot");
+    assert.equal(types[0].title, "Hive bot");
+    assert.deepEqual(types[0].defaults(), { config: {} });
+
+    // The owner creates HiveBot: it says hello in the channel, once.
+    running = [{ pubkey: BOT, name: "HiveBot", type: "test-hive.hive/bot" }];
+    agentListeners.forEach((l) => l());
+    await new Promise((r) => setTimeout(r, 300));
+    agentListeners.forEach((l) => l());
+    await new Promise((r) => setTimeout(r, 100));
+    const hellos = published.filter((e) => e.tags.some((t) => t[0] === "hive" && t[1] === "hello"));
+    assert.equal(hellos.length, 1, "said once");
+    assert.deepEqual(hellos[0].tags[0], ["h", channel]);
+    assert.match(hellos[0].content, /^Hi, I'm HiveBot, this hive's bot\./);
+
+    // A mention gets the hive's status in its thread.
+    const mention = { id: "9".repeat(64), pubkey: ALICE, kind: 9, content: "@HiveBot where are we?", tags: [["h", channel]] };
+    let ack = 0;
+    await types[0].run({ trigger: { type: "mention", event: mention }, channelId: channel, agent: handle, config: {}, signal: new AbortController().signal,
+        workingUntil() {}, acknowledged: () => { ack += 1; } });
+    const reply = published.at(-1);
+    assert.equal(ack, 1);
+    assert.deepEqual(reply.tags, [["h", channel], ["e", mention.id, "", "root"], ["e", mention.id, "", "reply"], ["p", ALICE]]);
+    assert.match(reply.content, /No proposal is open\./);
+    let ignored = 0;
+    await types[0].run({ trigger: { type: "wake" }, channelId: channel, agent: handle, config: {}, signal: new AbortController().signal, workingUntil() {}, ignored: () => { ignored += 1; } });
+    assert.equal(ignored, 1, "only mentions are answered");
+    seen.cleanups.forEach((stop) => stop());
+});

@@ -260,6 +260,84 @@ export function apply(ctx) {
         };
     });
 
+    // ---- HiveBot: an agent of the plugin's own type --------------------------------------
+    // The owner creates it on the Agents page and adds it to the hive's channel. Buzz holds its key
+    // and signs it into the community, so it posts as itself wherever the community requires
+    // sign-in. It needs no model: it answers mentions with the hive's status, and says hello once.
+    const BOT_TYPE = `${PLUGIN_ID}/bot`;
+    const botTag = (key) => ["hive", key];
+    /** A line or two about where the hive stands, for a mention or the hello. */
+    function statusText() {
+        const { state, gov } = snapshot;
+        const open = (gov?.proposals ?? []).filter((p) => p.state === "open");
+        const running = (gov?.proposals ?? []).filter((p) => p.state === "running");
+        const parts = [
+            state ? `The treasury holds ${sats(state.treasury.balanceSats)}.` : null,
+            open.length ? `${open.length} proposal${open.length === 1 ? " is" : "s are"} open: ${open.map((p) => `“${p.title}”`).join(", ")}.` : "No proposal is open.",
+            running.length ? `${running.length} budget${running.length === 1 ? " is" : "s are"} running.` : null,
+            state?.funding.length ? `${state.funding.length} job${state.funding.length === 1 ? " is" : "s are"} waiting for keepers to fund.` : null,
+        ];
+        return parts.filter(Boolean).join(" ");
+    }
+    /** Reply tags for a message: its thread's root, the message itself, and its author. */
+    function replyTags(event, channelId) {
+        const root = (event.tags ?? []).find((t) => t[0] === "e" && t[3] === "root")?.[1] ?? event.id;
+        return [["h", channelId], ["e", root, "", "root"], ["e", event.id, "", "reply"], ["p", event.pubkey]];
+    }
+    ctx.agents.register?.({
+        id: "bot",
+        title: "Hive bot",
+        description: "Posts what happens in the hive into its channel as itself, and answers mentions with the hive's status. It needs no model and runs while Buzz is open on this computer.",
+        defaults: () => ({ config: {} }),
+        summary: () => "Hive bot",
+        async run(delivery) {
+            const t = delivery.trigger;
+            if (t?.type !== "mention" || !delivery.channelId) {
+                delivery.ignored?.();
+                return;
+            }
+            delivery.acknowledged?.();
+            if (!snapshot.state) await load();
+            await delivery.agent.publish({ kind: 9, content: statusText(), tags: replyTags(t.event, delivery.channelId) });
+        },
+    });
+    // Once per channel, the bot introduces itself, so the owner sees it posting. What it has said
+    // is read back from the channel, so nothing is stored here.
+    const greeted = new Set();
+    const tried = new Map();
+    async function greet() {
+        const gov = snapshot.gov;
+        if (!gov?.channelId || typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.handle !== "function") return;
+        const bots = (ctx.agents.snapshot()?.running ?? []).filter((a) => a.type === BOT_TYPE);
+        for (const bot of bots) {
+            const key = `${bot.pubkey}:${gov.channelId}`;
+            if (greeted.has(key) || Date.now() - (tried.get(key) ?? 0) < 60_000) continue;
+            const handle = ctx.agents.handle(bot.pubkey);
+            if (!handle) continue;
+            greeted.add(key);
+            tried.set(key, Date.now());
+            try {
+                const said = await handle.query([{ kinds: [9], authors: [bot.pubkey], "#h": [gov.channelId], limit: 50 }]);
+                if (said.some((e) => (e.tags ?? []).some((tag) => tag[0] === "hive" && tag[1] === "hello"))) continue;
+                await handle.publish({ kind: 9, tags: [["h", gov.channelId], botTag("hello")], content:
+                    `Hi, I'm ${bot.name}, this hive's bot. I'll post proposals' decisions, payouts and chip-ins here as they happen. Mention me any time for where the hive stands. ${statusText()}` });
+            } catch {
+                greeted.delete(key); // not in the channel yet, or offline: try again later
+            }
+        }
+    }
+    ctx.effect(() => {
+        const stop = ctx.agents.subscribe?.(() => { greet(); });
+        listeners.add(greet);
+        greet();
+        const retry = setInterval(greet, 60_000);
+        return () => {
+            clearInterval(retry);
+            listeners.delete(greet);
+            stop?.();
+        };
+    });
+
     ctx.agents.addTool({
         name: "hive_status",
         description: `The ${HIVE_NAME} hive's treasury, chip-in address, proposals, open jobs, jobs awaiting funding and provider earnings.`,
