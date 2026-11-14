@@ -540,7 +540,7 @@ test("each member's plugin forwards the channel's signed events, and the host wo
     const { bytesToHex } = await import("@noble/hashes/utils");
     const { formatProposal } = await import("../shared/proposal.mjs");
     const channel = "5a0c1e2d-0000-4000-8000-00000000c0de";
-    const keys = [1, 2, 3].map(() => schnorr.utils.randomPrivateKey());
+    const keys = [1, 2, 3, 4].map(() => schnorr.utils.randomPrivateKey());
     const pub = (k) => bytesToHex(schnorr.getPublicKey(k));
     const [K0, K1, ALICE] = keys.map(pub);
     const now = Math.floor(Date.now() / 1000);
@@ -552,11 +552,16 @@ test("each member's plugin forwards the channel's signed events, and the host wo
     };
     const proposal = sign(keys[2], 9, formatProposal({ title: "Docs in Spanish", budgetSats: 15000, start: null, end: null, who: "everyone", allowanceSats: 500,
         purpose: "Translate the docs.", work: "", provider: "", report: "" }), now - 600);
+    const node = sign(keys[2], 9, `Hive node: ${"ef".repeat(32)}`, now - 100);
     const events = [
         proposal,
         sign(keys[0], 7, "✅", now - 300, [["e", proposal.id]]),
         sign(keys[1], 7, "✅", now - 200, [["e", proposal.id]]),
-        sign(keys[2], 9, `Hive node: ${"ef".repeat(32)}`, now - 100),
+        node,
+        // The host sees no relay, so a node counts once a keeper has reacted ✅ to the message naming it:
+        // the one from a key no keeper answered, which may come from outside the channel, does not.
+        sign(keys[0], 7, "✅", now - 95, [["e", node.id]]),
+        sign(keys[3], 9, `Hive node: ${"cd".repeat(32)}`, now - 94),
         sign(keys[0], 9, `Hive keeper key: 02${"11".repeat(32)}`, now - 90),
         // Pending on this device, not yet signed by the relay's view: never forwarded.
         { id: "f".repeat(64), pubkey: ALICE, created_at: now, kind: 9, tags: [["h", channel]], content: "draft", delivery: "pending" },
@@ -577,7 +582,7 @@ test("each member's plugin forwards the channel's signed events, and the host wo
     // A forged or edited event is refused; the draft never left the device.
     const forged = { ...events[1], id: "ab".repeat(32), content: "❌" };
     const res = await fetch(`${api}/hive/v1/channel`, { method: "POST", body: JSON.stringify({ events: [forged] }) });
-    assert.deepEqual(await res.json(), { added: 0, refused: 1, events: 5, proposals: null });
+    assert.deepEqual(await res.json(), { added: 0, refused: 1, events: 7, proposals: null });
     seen.cleanups.forEach((stop) => stop());
 });
 

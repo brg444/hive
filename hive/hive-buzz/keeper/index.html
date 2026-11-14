@@ -66,6 +66,7 @@
   details summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
   .units { display: flex; gap: 8px; align-items: center; margin-left: auto; font-size: 14px; color: var(--ink-2); }
   .units select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; }
+  #withdraw { margin-top: 18px; }
 </style>
 </head>
 <body>
@@ -156,6 +157,19 @@
     </div>
     <ul class="list" id="payment-list"></ul>
     <p class="note" id="payments-empty" hidden>No job is waiting for the keepers right now.</p>
+    <ul class="list" id="withdrawal-list"></ul>
+    <details id="withdraw">
+      <summary>Withdraw from the treasury</summary>
+      <p class="note">Two keepers can send the treasury's Bitcoin to an Arkade address: to move the hive, or to wind it down. Agree on the address and the amount in the hive's channel first. The other keeper sees both in their own console before signing.</p>
+      <form id="withdraw-form">
+        <label for="w-address">Arkade address</label>
+        <input id="w-address" name="address" type="text" autocomplete="off" spellcheck="false" required>
+        <label for="w-amount">Amount, in sats</label>
+        <input id="w-amount" name="amount" type="number" inputmode="numeric" min="1" step="1" required>
+        <div class="actions"><button class="quiet" type="submit">Check and sign the withdrawal</button></div>
+        <p class="msg" id="withdraw-msg" role="alert"></p>
+      </form>
+    </details>
     <p class="msg" id="payments-msg" role="alert"></p>
     <div class="actions">
       <button class="quiet" id="refresh" type="button">Refresh</button>
@@ -165,11 +179,11 @@
   </section>
 
   <section data-view="payment" hidden>
-    <h1 tabindex="-1">Fund a job</h1>
+    <h1 tabindex="-1" id="payment-title">Fund a job</h1>
     <p id="payment-lead"></p>
     <dl class="facts" id="payment-facts"></dl>
     <ul class="checks" id="payment-checks"></ul>
-    <p class="note">Two keepers sign each payment. Your console rebuilds the escrow from the job's terms and checks every coin with the Operator before it signs anything.</p>
+    <p class="note" id="payment-note">Two keepers sign each payment. Your console rebuilds the escrow from the job's terms and checks every coin with the Operator before it signs anything.</p>
     <div class="actions">
       <button class="primary" id="act" type="button">Check and sign</button>
       <button class="quiet" id="cancel-payment" type="button" hidden>Cancel this payment</button>

@@ -25,10 +25,12 @@ export {
   signOver,
   signShared,
   verifyNonceBatch,
+  withdrawalId,
 } from "./keeper.js";
 export { signWithPair } from "./pair.js";
 export {
   type Checked,
+  checkKeeperWithdrawal,
   checkPayment,
   checkPurpose,
   KEEPER_MAX_VALIDITY_SECONDS,

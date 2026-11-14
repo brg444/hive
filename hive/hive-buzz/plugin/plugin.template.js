@@ -237,8 +237,11 @@ export function apply(ctx) {
         const call = events.find((e) => e.pubkey === handle.pubkey && (e.tags ?? []).some((t) => t[0] === "hive" && t[1] === "call"));
         if (!call?.sig) return;
         try {
-            await ctx.host.request({ url: `${SERVICE}/hives`, method: "POST", headers: { "content-type": "application/json" },
+            const res = await ctx.host.request({ url: `${SERVICE}/hives`, method: "POST", headers: { "content-type": "application/json" },
                 body: JSON.stringify({ channelId, community: community(), name: HIVE_NAME, call }), timeoutMs: 15_000 });
+            // A hive the service opened in this channel under another key is not this bot's: left alone.
+            const asked = res.status === 200 ? JSON.parse(res.body) : null;
+            if (asked?.status === "approved" && asked.bot !== handle.pubkey) return;
             probed.delete(channelId);
             if (await tryChannel(channelId)) void load();
         } catch { /* asked again on the next pass */ }
@@ -255,6 +258,9 @@ export function apply(ctx) {
             // A new hive has no treasury until its keepers' keys are in.
             state.treasury ??= { address: null, balanceSats: null };
             publish({ ...snapshot, state, error: null, loadedAt: Date.now() });
+            // Whatever the host has not taken yet is sent again: a hive just opened on the service
+            // gets its channel without waiting for the next message in it.
+            if (channelEvents) forward(channelEvents);
         } catch (e) {
             publish({ ...snapshot, error: String(e?.message ?? e) });
         }
@@ -283,6 +289,8 @@ export function apply(ctx) {
     let forwarding = true;
     function forward(events) {
         if (!forwarding) return;
+        // A hive still waiting for the service's operator keeps nothing: sent once it is open.
+        if (snapshot.state?.hive && snapshot.state.hive.status !== "approved") return;
         clearTimeout(forwardTimer);
         forwardTimer = setTimeout(async () => {
             const fresh = events.filter((e) => e.sig && e.id && !forwarded.has(e.id));

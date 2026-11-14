@@ -12,6 +12,11 @@
 # HIVE_BACKUP_DAYS days (default 30) are removed. Copy the directory off the
 # host as well, with rclone or rsync; a backup on the same disk is no backup.
 #
+# On a host where the delegatee has a user and a home of its own (deploy/setup.sh),
+# DELEGATEE_HOME names that home, whose delegate key goes into the archive under
+# delegatee/, and HIVE_PG_DUMP_AS names the user the database is dumped as. The
+# backup then runs as root, which alone reads both services' state.
+#
 # The delegate key is part of every treasury address the delegatee renews: a
 # host that loses it can no longer renew those coins, and they have to leave
 # through the keepers or the exit path. Run this from cron or a systemd timer at
@@ -21,6 +26,10 @@
 #   age -d -i <secret key file> hive-<stamp>.tar.age | tar xf - -C <repository>
 #   pg_restore --clean --if-exists -d "$DELEGATEE_DATABASE_URL" <repository>/delegatee.dump
 #   rm <repository>/delegatee.dump
+# and, when the archive holds a delegatee/ directory, move its .secrets into the
+# delegatee's home (/var/lib/hive-delegatee on a host set up by deploy/setup.sh)
+# before the delegatee first starts, owned by its user and readable by no other.
+# docs/self-hosting.md walks through a whole restore.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 : "${HIVE_BACKUP_RECIPIENT:?set HIVE_BACKUP_RECIPIENT to the age public key backups are encrypted to}"
@@ -35,17 +44,29 @@ mkdir -p "$OUT"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-pg_dump --format=custom --no-owner --file="$WORK/delegatee.dump" "$DELEGATEE_DATABASE_URL"
+if [ -n "${HIVE_PG_DUMP_AS:-}" ]; then
+  # The database belongs to the delegatee's own role, which signs in as its own user.
+  runuser -u "$HIVE_PG_DUMP_AS" -- pg_dump --format=custom --no-owner "$DELEGATEE_DATABASE_URL" > "$WORK/delegatee.dump"
+else
+  pg_dump --format=custom --no-owner --file="$WORK/delegatee.dump" "$DELEGATEE_DATABASE_URL"
+fi
 
 cd "$ROOT"
 set --
 for path in .secrets/bitcoin .secrets/v4 .secrets/ops .local/service .local/ops; do
   [ -e "$path" ] && set -- "$@" "$path"
 done
+# The delegatee's own home, when it has one: its keys are archived apart, under delegatee/.
+DELEGATEE_KEYS=""
+if [ -n "${DELEGATEE_HOME:-}" ] && [ "$DELEGATEE_HOME" != "$ROOT" ] && [ -d "$DELEGATEE_HOME/.secrets" ]; then
+  mkdir "$WORK/delegatee"
+  cp -a "$DELEGATEE_HOME/.secrets" "$WORK/delegatee/.secrets"
+  DELEGATEE_KEYS=delegatee
+fi
 # The service writes each file whole (write, then rename), so a copy taken while it runs holds no torn file.
-tar cf "$WORK/hive.tar" -C "$WORK" delegatee.dump -C "$ROOT" "$@"
+tar cf "$WORK/hive.tar" -C "$WORK" delegatee.dump $DELEGATEE_KEYS -C "$ROOT" "$@"
 # A backup without a delegate key would only look like one: older backups stay until a whole one exists.
-tar tf "$WORK/hive.tar" | grep -q '^\.secrets/\(bitcoin\|v4\)/delegate-key$' \
+tar tf "$WORK/hive.tar" | grep -q '^\(delegatee/\)\{0,1\}\.secrets/\(bitcoin\|v4\)/delegate-key$' \
   || { echo "no delegate key found under .secrets; older backups kept" >&2; exit 1; }
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)

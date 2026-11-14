@@ -29,7 +29,7 @@ import https from "node:https";
 import { existsSync, readFileSync } from "node:fs";
 import { renameSync, writeFileSync } from "node:fs";
 import { bech32 } from "@scure/base";
-import { governanceFrom, mergeEvents } from "./channel.mjs";
+import { governanceFrom, mergeForwarded } from "./channel.mjs";
 import { currentPrice } from "./price.mjs";
 import { agentFromStatus, arkadePkScript, contributionsFromPayments, hiveState, jobsFromLog, proposalsFromLog } from "./state.mjs";
 
@@ -97,7 +97,7 @@ const headers = { "user-agent": "hive-api/0.1" };
 
 async function treasuryBalance() {
     if (!treasuryScript) return null;
-    const res = await fetch(`${cfg.operator}/v1/indexer/vtxos?scripts=${treasuryScript}&spendableOnly=true`, { headers });
+    const res = await fetch(`${cfg.operator}/v1/indexer/vtxos?scripts=${treasuryScript}&spendableOnly=true`, { headers, signal: AbortSignal.timeout(10_000) });
     if (!res.ok) throw new Error(`indexer ${res.status}`);
     const { vtxos = [] } = await res.json();
     return vtxos.reduce((n, v) => n + Number(v.amount), 0);
@@ -107,7 +107,7 @@ async function contributions() {
     if (!cfg.lightningAddress || !cfg.lnurlTokenFile) return [];
     const [handle, domain] = cfg.lightningAddress.split("@");
     const token = JSON.parse(readFileSync(cfg.lnurlTokenFile, "utf8")).token;
-    const res = await fetch(`https://${domain}/lnurl/address/${handle}/payments`, { headers: { ...headers, authorization: `Bearer ${token}` } });
+    const res = await fetch(`https://${domain}/lnurl/address/${handle}/payments`, { headers: { ...headers, authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
     if (!res.ok) throw new Error(`lnurl ${res.status}`);
     return contributionsFromPayments(await res.json());
 }
@@ -142,8 +142,40 @@ function coordinateChannel(events) {
     writeAtomic(cfg.governance, governance);
     if (cfg.membersFile) writeAtomic(cfg.membersFile, members);
     cached = { at: 0, body: null };
+    generation += 1;
     return governance;
 }
+
+/** A client's share of requests: `perMinute` on average, `burst` at once, kept for a bounded number of clients. */
+function rateLimit(perMinute, burst = perMinute, maxKeys = 10_000) {
+    const buckets = new Map();
+    return (key) => {
+        const now = Date.now();
+        const b = buckets.get(key) ?? { tokens: burst, at: now };
+        b.tokens = Math.min(burst, b.tokens + ((now - b.at) / 60_000) * perMinute);
+        b.at = now;
+        buckets.delete(key);
+        buckets.set(key, b);
+        if (buckets.size > maxKeys) buckets.delete(buckets.keys().next().value);
+        if (b.tokens < 1) return false;
+        b.tokens -= 1;
+        return true;
+    };
+}
+/** Who a request comes from: the peer, or behind this host's own TLS proxy the address the proxy added last. */
+function clientAddress(req) {
+    const peer = req.socket.remoteAddress ?? "";
+    const forwarded = req.headers["x-forwarded-for"];
+    if (["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer) && forwarded) return String(forwarded).split(",").pop().trim() || peer;
+    return peer;
+}
+const reads = rateLimit(600, 300);
+const forwards = rateLimit(60, 30);
+
+// Forwards are taken one at a time, so two never both start from the same stored events, and only a
+// few may wait.
+let merging = Promise.resolve();
+let waiting = 0;
 
 /** Forwarded events from a member's plugin: verified, merged, and the governance worked out again. */
 async function receiveChannel(req) {
@@ -151,14 +183,20 @@ async function receiveChannel(req) {
     let size = 0;
     for await (const chunk of req) {
         size += chunk.length;
-        if (size > 8 * 1024 * 1024) throw Object.assign(new Error("too large"), { status: 413 });
+        if (size > 4 * 1024 * 1024) throw Object.assign(new Error("too large"), { status: 413 });
         chunks.push(chunk);
     }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const { events, added, refused } = mergeEvents(storedEvents(), body?.events, cfg.channel);
-    if (added) writeAtomic(storePath(), events);
-    const governance = added || !existsSync(cfg.governance) ? coordinateChannel(events) : null;
-    return { added, refused, events: events.length, proposals: governance?.proposals.length ?? null };
+    if (waiting >= 8) throw Object.assign(new Error("forwards are waiting; try again shortly"), { status: 429 });
+    waiting += 1;
+    const turn = merging.then(async () => {
+        const { events, added, refused } = await mergeForwarded(storedEvents(), body?.events, cfg.channel, { bot: cfg.bot, keepers: cfg.keepers });
+        if (added) writeAtomic(storePath(), events);
+        const governance = added || !existsSync(cfg.governance) ? coordinateChannel(events) : null;
+        return { added, refused, events: events.length, proposals: governance?.proposals.length ?? null };
+    });
+    merging = turn.then(() => {}, () => {}).finally(() => { waiting -= 1; });
+    return turn;
 }
 
 function governanceFile() {
@@ -168,8 +206,16 @@ function governanceFile() {
 
 // One shared snapshot, refreshed at most every 15 seconds (--cache-secs) however many members are looking.
 let cached = { at: 0, body: null };
+let generation = 0;
+let refreshing = null;
 async function snapshot() {
     if (cached.body && Date.now() - cached.at < cfg.cacheMs) return cached.body;
+    // One refresh at a time: everyone who asks while it runs gets its answer.
+    refreshing ??= refresh().finally(() => { refreshing = null; });
+    return refreshing;
+}
+async function refresh() {
+    const started = generation;
     const [balance, chips, node] = await Promise.all([
         treasuryBalance().catch(() => null),
         contributions().catch(() => []),
@@ -191,16 +237,21 @@ async function snapshot() {
             updatedAt: Math.floor(Date.now() / 1000), proposals: [], members: {} } : null),
         ...(cfg.desk || cfg.keeperConsole ? { keepersDesk: { desk: cfg.desk ?? null, console: cfg.keeperConsole ?? null } } : {}),
     }), price: currentPrice(cfg.priceUrl ?? process.env.HIVE_PRICE_URL ?? undefined) ?? null });
-    cached = { at: Date.now(), body };
+    // A governance worked out meanwhile is not in this answer: it is given, but not kept.
+    if (generation === started) cached = { at: Date.now(), body };
     return body;
 }
 
 // Discussions close and budgets run out with time alone: the governance is worked out again each minute.
-if (cfg.channel) setInterval(() => { try { if (storedEvents().length) coordinateChannel(storedEvents()); } catch { /* next minute */ } }, 60_000).unref();
+if (cfg.channel) setInterval(() => { try { const events = storedEvents(); if (events.length) coordinateChannel(events); } catch { /* next minute */ } }, 60_000).unref();
 
 const tls = cfg.tlsCert ? { cert: readFileSync(cfg.tlsCert), key: readFileSync(cfg.tlsKey) } : null;
-(tls ? https.createServer.bind(null, tls) : http.createServer)(async (req, res) => {
-    if (req.method === "GET" && req.url === "/hive/v1/state") {
+const server = (tls ? https.createServer.bind(null, tls) : http.createServer)(async (req, res) => {
+    if (req.url === "/healthz") {
+        res.writeHead(200).end("ok");
+    } else if (!(req.method === "POST" ? forwards : reads)(clientAddress(req))) {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "60" }).end(JSON.stringify({ error: "too many requests" }));
+    } else if (req.method === "GET" && req.url === "/hive/v1/state") {
         try {
             const body = await snapshot();
             res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(body);
@@ -219,9 +270,11 @@ const tls = cfg.tlsCert ? { cert: readFileSync(cfg.tlsCert), key: readFileSync(c
         } catch (e) {
             res.writeHead(e.status ?? 400, { "content-type": "application/json" }).end(JSON.stringify({ error: String(e.message ?? e) }));
         }
-    } else if (req.url === "/healthz") {
-        res.writeHead(200).end("ok");
     } else {
         res.writeHead(404).end();
     }
-}).listen(cfg.port, cfg.host, () => console.log(`hive-api on ${tls ? "https" : "http"}://${cfg.host}:${cfg.port}`));
+});
+// A client that sends its request a byte at a time holds a connection no longer than this.
+server.headersTimeout = 15_000;
+server.requestTimeout = 60_000;
+server.listen(cfg.port, cfg.host, () => console.log(`hive-api on ${tls ? "https" : "http"}://${cfg.host}:${cfg.port}`));

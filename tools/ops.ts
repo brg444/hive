@@ -17,7 +17,9 @@
  *   pnpm ops desk <hive> --agent-log <path> [--governance <file>] [--port <n>] [--host <addr>] [--origin <url> …]
  *   pnpm ops service --network <regtest|bitcoin> --public <https url> --console <https url> [--port <n>]
  *                    [--host <addr>] [--model <id>] [--discussion-minutes <n>] [--origin <url> …] [--agents]
- *   pnpm ops service-list --network <regtest|bitcoin> | pnpm ops service-approve <hive> --network <regtest|bitcoin>
+ *   pnpm ops service-list --network <regtest|bitcoin>
+ *   pnpm ops service-approve <hive> --bot <HiveBot's key, npub or hex> --network <regtest|bitcoin>
+ *   pnpm ops service-reject <hive> --network <regtest|bitcoin>
  *   pnpm ops status <hive>
  *   pnpm ops withdraw <hive> <label> --to <ark address> --amount <sats|all> [--hours <n>] [--pair <01|02|12>]
  *   pnpm ops payout <hive> <provider> <label> --to <ark address> --amount <sats|all>
@@ -1433,6 +1435,7 @@ async function main(argv: string[]): Promise<void> {
         ...(option(args, "model") ? { model: option(args, "model")! } : {}),
         ...(minutes ? { discussionSeconds: Math.round(Number(minutes) * 60) } : {}),
         origins: every(args, "origin"),
+        ...(args.includes("--serve-invite") ? { serveInvite: true } : {}),
         ...(agents ? { agents } : {}),
         ...(port ? { port: Number(port) } : {}),
         ...(option(args, "host") ? { host: option(args, "host")! } : {}),
@@ -1459,7 +1462,26 @@ async function main(argv: string[]): Promise<void> {
         publicUrl: "",
         consoleUrl: "",
       });
-      print(await service.approve(hive!));
+      // HiveBot's key as the channel shows it, npub or hex: never copied from the request itself.
+      const named = required(rest, "bot");
+      let bot = named.toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(bot)) {
+        const decoded = (await import("nostr-tools")).nip19.decode(named);
+        ensure(decoded.type === "npub", "USAGE", "--bot takes HiveBot's public key, as an npub or in hex");
+        bot = decoded.data;
+      }
+      print(await service.approve(hive!, bot));
+      return;
+    }
+    case "service-reject": {
+      const { HiveService } = await import("./service.js");
+      const service = await HiveService.create({
+        network: required(rest, "network"),
+        publicUrl: "",
+        consoleUrl: "",
+      });
+      service.reject(hive!);
+      print({ rejected: hive });
       return;
     }
     case "desk": {

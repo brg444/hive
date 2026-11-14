@@ -3,7 +3,14 @@ Description=Hive backup: delegate key, delegatee database, service state
 
 [Service]
 Type=oneshot
-User=hive
+# Root reads what each service keeps to itself, and writes the archive where neither can reach it.
+User=root
 WorkingDirectory=/opt/hive
 EnvironmentFile=/etc/hive/hive.env
+Environment=DELEGATEE_HOME=/var/lib/hive-delegatee HIVE_PG_DUMP_AS=hive-delegatee HIVE_BACKUP_DIR=/var/backups/hive
 ExecStart=/opt/hive/tools/backup.sh
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/hive
+PrivateTmp=true
+ProtectHome=true

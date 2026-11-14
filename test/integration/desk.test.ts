@@ -3,9 +3,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type TestContext, test } from "node:test";
-import { connect, jobEscrow } from "@hive/ark";
+import { arkAddress, connect, jobEscrow, xOnly } from "@hive/ark";
 import { faultCode, hex, localPath, unhex } from "@hive/kit";
 import {
+  checkKeeperWithdrawal,
   checkPayment,
   deskAuthDigest,
   keeperView,
@@ -14,6 +15,7 @@ import {
   type SessionRequest,
   signOver,
   signShared,
+  withdrawalId,
 } from "@hive/steward";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { type DeskAuth, startDesk } from "../../tools/desk.js";
@@ -109,6 +111,15 @@ function consoleOf(i: number, ctx: Awaited<ReturnType<typeof setup>>) {
       return ctx.server.desk.addNonces(batch);
     },
     async check(session: SessionRequest, remainingSats: number) {
+      // A console signs for what its keeper read: here, what the session itself carries.
+      if (session.purpose.kind === "withdrawal")
+        return checkKeeperWithdrawal(
+          view,
+          ctx.conn,
+          session,
+          { withdrawal: session.purpose.withdrawal },
+          now(),
+        );
       const purpose = session.purpose as Extract<SessionRequest["purpose"], { kind: "payment" }>;
       return checkPayment(view, ctx.conn, session, { request: purpose.request, remainingSats }, now());
     },
@@ -210,8 +221,121 @@ test("the desk serves consoles over HTTP and a keeper can cancel a payment that 
   // Another pair may start again; the coins of the cancelled plan are free.
   const again = await post(`/payments/${jobId}/start`, { auth: ctx.auth(0, "start", jobId) });
   assert.equal(again.status, 200);
-  const missing = await fetch(`${base}/payments/${"00".repeat(32)}`);
-  assert.equal(missing.status, 404);
+  // The hive's payments are read by its keepers alone: a read carries a keeper's fresh signature.
+  const read = (path: string, keeper?: string) =>
+    fetch(`${base}${path}`, keeper ? { headers: { "x-hive-keeper": keeper } } : {});
+  const signed = (i: number, at?: number) => {
+    const auth = ctx.auth(i, "read", "");
+    return `${auth.keeper}.${at ?? auth.at}.${auth.signature}`;
+  };
+  assert.equal((await read("/payments")).status, 401);
+  assert.equal((await read(`/payments/${jobId}`)).status, 401);
+  assert.equal((await read("/listing")).status, 401);
+  assert.equal((await read("/payments", signed(0, 1))).status, 401, "a signature for another time");
+  const stranger = ctx.auth(0, "read", "");
+  assert.equal(
+    (await read("/payments", `02${"11".repeat(32)}.${stranger.at}.${stranger.signature}`)).status,
+    400,
+  );
+  const overview = (await (await read("/payments", signed(1))).json()) as { payments: unknown[] };
+  assert.equal(overview.payments.length, 1);
+  assert.equal((await read(`/payments/${jobId}`, signed(1))).status, 200);
+  assert.equal((await read(`/payments/${"00".repeat(32)}`, signed(1))).status, 404);
+  // A page elsewhere on the web cannot call the desk from a keeper's browser; one on this machine can.
+  const from = (origin: string) => fetch(`${base}/hive`, { headers: { origin } });
+  assert.equal((await from("https://elsewhere.example")).status, 403);
+  const local = await from("http://127.0.0.1:5173");
+  assert.deepEqual(
+    [local.status, local.headers.get("access-control-allow-origin")],
+    [200, "http://127.0.0.1:5173"],
+  );
+});
+
+test("a keeper who signed a payment that was given up signs no other for the job, and the two who did not can fund it", async (t) => {
+  const ctx = await setup(t);
+  const { desk } = ctx.server;
+  const consoles = [0, 1, 2].map((i) => consoleOf(i, ctx));
+  await Promise.all(consoles.map((c) => c.share(32)));
+  const jobId = ctx.params.jobId;
+  await desk.start(jobId, ctx.auth(0, "start", jobId), ctx.keepers[1]);
+  await consoles[0]!.signFirst(jobId, "attest");
+  await desk.cancel(jobId, ctx.auth(1, "cancel", jobId));
+  // Keeper A's console holds A to the plan it signed: the desk says so, and plans around A.
+  assert.equal(await code(desk.start(jobId, ctx.auth(0, "start", jobId))), "ALREADY_SIGNED");
+  assert.equal(await code(desk.start(jobId, ctx.auth(1, "start", jobId), ctx.keepers[0])), "NO_PARTNER");
+  const again = await desk.start(jobId, ctx.auth(1, "start", jobId));
+  assert.deepEqual([again.pair, again.second, again.signedBefore], ["12", ctx.keepers[2], [ctx.keepers[0]]]);
+  // Given up again after B signed, nobody is left to pair with C: the job waits for the agent to ask anew.
+  await consoles[1]!.signFirst(jobId, "attest");
+  await desk.cancel(jobId, ctx.auth(2, "cancel", jobId));
+  assert.equal(await code(desk.start(jobId, ctx.auth(2, "start", jobId))), "NO_PARTNER");
+  assert.deepEqual(desk.payment(jobId)!.signedBefore, [ctx.keepers[0]]);
+});
+
+test("two keepers withdraw from the treasury to an address they both read, and to no other", async (t) => {
+  const ctx = await setup(t);
+  const { desk } = ctx.server;
+  const [a, b] = [consoleOf(0, ctx), consoleOf(1, ctx)];
+  await a.share();
+  await b.share();
+  const server = hex(xOnly(ctx.conn.keys.server));
+  const point = () => hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()));
+  const payee = `5120${point()}`;
+  const address = arkAddress(ctx.conn.deployment.network, server, payee);
+  const start = (i: number, to: string, amountSats: number, partner?: string) => {
+    const at = now();
+    const script = to === address ? payee : ctx.record.treasuryScript;
+    const id = withdrawalId(ctx.hive, script, amountSats, at);
+    const auth = { ...ctx.auth(i, "withdraw", id), at };
+    auth.signature = hex(schnorr.sign(deskAuthDigest(ctx.hive, "withdraw", id, at), ctx.secrets[i]!));
+    return desk.startWithdrawal(auth, { address: to, amountSats }, partner);
+  };
+  // Not an address, one on another Operator, the treasury's own, or dust: nothing is planned.
+  assert.equal(await code(start(0, "ark1notanaddress", 5_000)), "INVALID_DESTINATION");
+  const elsewhere = arkAddress(ctx.conn.deployment.network, point(), payee);
+  assert.equal(await code(start(0, elsewhere, 5_000)), "INVALID_DESTINATION");
+  assert.equal(await code(start(0, ctx.record.treasuryAddress, 5_000)), "INVALID_DESTINATION");
+  assert.equal(await code(start(0, address, 10)), "INVALID");
+  // A request signed for other terms than it carries is not this keeper's.
+  const other = ctx.auth(0, "withdraw", withdrawalId(ctx.hive, payee, 9_000, now()));
+  assert.equal(await code(desk.startWithdrawal(other, { address, amountSats: 5_000 })), "AUTH_INVALID");
+
+  const started = await start(0, address, 5_000, ctx.keepers[1]);
+  const id = started.jobId;
+  assert.deepEqual(
+    [started.withdrawal?.destination, started.withdrawal?.amountSats, started.address, started.pair],
+    [payee, 5_000, address, "01"],
+  );
+  assert.equal(await code(start(2, address, 7_000)), "WITHDRAWAL_STARTED");
+  assert.equal(desk.overview().withdrawals.length, 1);
+  // A console that showed its keeper another amount or address signs nothing.
+  const session = desk.sessions(started).attest as SessionRequest;
+  const view = keeperView(ctx.keepers, ctx.record.treasury);
+  const shown = (over: object) =>
+    code(
+      checkKeeperWithdrawal(
+        view,
+        ctx.conn,
+        session,
+        { withdrawal: { ...started.withdrawal!, ...over } },
+        now(),
+      ),
+    );
+  assert.equal(await shown({ amountSats: 4_000 }), "UNAPPROVED_WITHDRAWAL");
+  assert.equal(await shown({ destination: `5120${hex(randomBytes(32))}` }), "UNAPPROVED_WITHDRAWAL");
+  assert.equal(await shown({}), "ok");
+
+  await a.signFirst(id, "attest");
+  await b.signSecond(id, "attest");
+  await b.signFirst(id, "register");
+  const done = await a.signSecond(id, "register");
+  assert.equal(done.status, "submitted");
+  await desk.drive(id);
+  assert.equal(desk.payment(id)!.status, "done");
+  assert.equal(ctx.fake.balance(payee), 5_000);
+  assert.equal(ctx.fake.balance(ctx.record.treasuryScript), 45_000);
+  // The job waiting for funding is still there, and still fundable from what is left.
+  assert.equal(desk.overview().payments.length, 1);
 });
 
 test("each keeper signs the hive's listing in their console, and the third signature lists the hive", async (t) => {

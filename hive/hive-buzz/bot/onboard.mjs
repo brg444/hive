@@ -104,7 +104,17 @@ export function onboardingPlan(record, cfg) {
         next.keysIn = true;
     }
 
-    const treasury = state?.treasury?.address && !state.demo ? state.treasury : null;
+    // The treasury the host reports is announced only when it is this hive's: built from the keepers
+    // this channel confirmed and the keys they posted here and, on a shared service, kept there
+    // under this bot's own key. A host that answers for some other hive is not taken at its word.
+    const same = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
+    const ours = (s) => {
+        if (s.hive?.bot && s.hive.bot !== bot) return false;
+        const g = s.governance;
+        if (!g?.keeperKeys) return true;
+        return same(g.keepers ?? [], next.keepers) && same(g.keeperKeys.map(String), next.keepers.map((k) => String(keys[k] ?? "")));
+    };
+    const treasury = state?.treasury?.address && !state.demo && ours(state) ? state.treasury : null;
     const chipIn = (t) => {
         const ln = state?.chipIn?.lightningAddress;
         return `The treasury is ready. ${ln ? `Chip in at ${ln}, or send to ${t.address}` : `Chip in by sending to ${t.address}`} from any Lightning or Arkade wallet. Every chip-in lands in the treasury as Bitcoin.`;

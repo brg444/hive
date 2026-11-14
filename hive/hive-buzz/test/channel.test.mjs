@@ -1,12 +1,13 @@
 // The channel as members' plugins forward it to a hive's host: only what the channel itself would
 // show counts. A deletion only removes its author's own event, an event dated ahead of the clock is
-// refused, one author cannot crowd the store, and a member's node counts once HiveBot vouched for it.
+// refused, one author cannot crowd the store, any number of strangers' keys cannot push the hive's own
+// events out of it, and a member's node counts once HiveBot or a keeper vouched for it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { schnorr } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha2";
 import { bytesToHex } from "@noble/hashes/utils";
-import { governanceFrom, MAX_PER_AUTHOR, mergeEvents } from "../api/src/channel.mjs";
+import { governanceFrom, MAX_EVENTS, MAX_PER_AUTHOR, MAX_UNVOUCHED, mergeEvents, mergeForwarded, vouchedAuthors } from "../api/src/channel.mjs";
 import { formatProposal } from "../shared/proposal.mjs";
 
 const channel = "1a2b3c4d-0000-4000-8000-0000000000cc";
@@ -53,4 +54,43 @@ test("events dated ahead of the clock are refused, and one author keeps only a s
     const { events } = mergeEvents(base, flood, channel, now);
     assert.equal(events.filter((e) => e.pubkey === pub(stranger)).length, MAX_PER_AUTHOR);
     assert.equal(governanceFrom(events, cfg).governance.proposals[0].state, "running", "the real channel is untouched");
+});
+
+test("a flood from many strangers' keys fills only the strangers' share: the hive's own events stay", () => {
+    const trust = { bot: pub(bot) };
+    let events = mergeEvents([], base, channel, now, trust).events;
+    // Thirty keys, a thousand reactions each, all dated after everything real. Their signatures are
+    // taken as good here: an attacker's would be.
+    let n = 0;
+    for (let key = 0; key < 30; key++) {
+        const author = key.toString(16).padStart(64, "0");
+        const batch = Array.from({ length: 1000 }, () => ({ id: (n++).toString(16).padStart(64, "f"), pubkey: author, created_at: now, kind: 7,
+            tags: [["h", channel], ["e", proposal.id]], content: "👍", sig: "00".repeat(64) }));
+        events = mergeEvents(events, batch, channel, now, trust, () => true).events;
+    }
+    assert.ok(events.length <= MAX_EVENTS);
+    assert.equal(events.filter((e) => !vouchedAuthors(events, trust).has(e.pubkey)).length, MAX_UNVOUCHED);
+    for (const e of base) assert.ok(events.some((x) => x.id === e.id), "every event of the bot, the keepers and the member they answered is still there");
+    const { governance } = governanceFrom(events, cfg);
+    assert.equal(governance.proposals[0].state, "running");
+    assert.deepEqual(governance.keepers, [k0, k1, k2].map(pub));
+});
+
+test("a server checks forwarded signatures a few at a time and merges the same events", async () => {
+    const forged = { ...base[2], id: "ab".repeat(32), content: "❌" };
+    const repeated = [...base, ...base, forged, null, "text"];
+    const merged = await mergeForwarded([], repeated, channel, { bot: pub(bot) }, now);
+    assert.deepEqual([merged.added, merged.refused], [base.length, 2]);
+    assert.deepEqual(merged.events.map((e) => e.id).sort(), base.map((e) => e.id).sort());
+    assert.equal((await mergeForwarded(merged.events, base, channel, { bot: pub(bot) }, now)).added, 0);
+});
+
+test("on a host that names its keepers and knows no bot, a node counts once a keeper reacted ✅ to it", () => {
+    const named = { channelId: channel, keepers: [k0, k1, k2].map(pub), threshold: 2, smallSats: 20000, discussionSeconds: 600, now };
+    const strangerNode = sign(stranger, 9, `Hive node: ${"aa".repeat(32)}`, now - 50);
+    const memberNode = sign(member, 9, `Hive node: ${"bb".repeat(32)}`, now - 40);
+    let { events } = mergeEvents([], [...base, strangerNode, memberNode], channel, now);
+    assert.deepEqual(governanceFrom(events, named).members.members, {});
+    events = mergeEvents(events, [sign(k2, 7, "✅", now - 30, [["e", memberNode.id]]), sign(stranger, 7, "✅", now - 20, [["e", strangerNode.id]])], channel, now).events;
+    assert.deepEqual(Object.keys(governanceFrom(events, named).members.members), ["bb".repeat(32)]);
 });

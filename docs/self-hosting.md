@@ -32,8 +32,8 @@ on their own device, behind a passkey.
 ## The host
 
 `deploy/setup.sh` sets the host up on Debian 12 or Ubuntu 24.04: Node, Go, Postgres and Caddy, the
-service, the delegatee built at its pinned commit, the keeper console, TLS for two host names, and a
-backup timer. Run it as root from a checkout of your fork:
+service, the delegatee built at its pinned commit, the keeper console, TLS for two host names, a
+backup timer and a check that runs every five minutes. Run it as root from a checkout of your fork:
 
 ```bash
 sudo deploy/setup.sh          # writes /etc/hive/hive.env and stops
@@ -54,6 +54,21 @@ mempool.space every five minutes and passes on with each hive's state; nothing t
 depends on it. `HIVE_PRICE_URL` in `hive.env` names another source answering `{ "USD": <price> }`, and
 `HIVE_PRICE_URL=off` stops the service from asking.
 
+Two users run the host, so that what faces the network holds as little as it can. `hive` runs the
+service and each hive's agent node, and keeps the channels, the desks and the agents' receipt keys.
+`hive-delegatee` runs the delegatee, and alone reads the delegate key and the delegatee's database.
+The code in `/opt/hive` belongs to root, and neither user can change it; both services run under
+systemd's sandbox, with only their own state writable. The agent nodes are the service's children
+and share its user, so a hive that wants its agent apart from every other hive's runs its own
+(see [The community's own agent](#the-meshllm-nodes)). Node and Go are installed only when their
+downloads match the checksums their publishers list, which `setup.sh` carries for the releases it
+names, and dependencies come at the versions the lockfiles name, with no install script run.
+
+The keys on the host are files, readable by their own user only: the delegate key, each agent's
+receipt key, and nothing that moves a treasury. A file whose mode lets other users read it is
+refused. To keep them encrypted at rest as well, put the host on an encrypted disk, or hand the
+delegate key to the delegatee through systemd's encrypted credentials.
+
 Mainnet stays off until you uncomment `BUZZ_MAINNET=enabled` in `hive.env` and restart the service.
 The Operator's key and exit delay and the Emulator's key are pinned in
 `packages/ark/src/deployment.ts`, so a delegatee that served another Operator or Emulator is refused,
@@ -66,8 +81,50 @@ can no longer renew those coins, and they have to leave through the keepers. The
 `tools/backup.sh` every six hours, and setup runs it once before any coin arrives. It puts the
 delegate key, the delegatee's database and the service's state into one archive encrypted to an age
 key whose secret half you keep off the server, refuses to write one that holds no delegate key, and
-keeps thirty days in `.local/backups`. Copy that directory off the server as well; the script's header
-shows how to restore on a fresh host.
+keeps thirty days in `/var/backups/hive`. Copy that directory off the server as well: a backup on
+the same disk is no backup.
+
+To restore on a fresh host, run `deploy/setup.sh` up to its first stop, fill in `hive.env` as it was,
+and before the second run put the archive's contents back:
+
+```bash
+sudo systemctl stop hive-service hive-delegatee 2>/dev/null
+age -d -i <secret key file> hive-<stamp>.tar.age | sudo tar xf - -C /opt/hive
+sudo install -d -o hive-delegatee -g hive-delegatee -m 700 /var/lib/hive-delegatee
+sudo mv /opt/hive/delegatee/.secrets /var/lib/hive-delegatee/.secrets && sudo rmdir /opt/hive/delegatee
+sudo chown -R hive-delegatee: /var/lib/hive-delegatee/.secrets
+sudo deploy/setup.sh
+sudo -u hive-delegatee pg_restore --clean --if-exists -d "<DELEGATEE_DATABASE_URL>" /opt/hive/delegatee.dump
+sudo rm /opt/hive/delegatee.dump && sudo systemctl restart hive-delegatee hive-service
+```
+
+The users exist after the first run of `setup.sh` on the new host, so run it once before these
+commands if it has not been. Rehearse a restore before the treasury holds anything that matters.
+
+### Watching the host
+
+`tools/check.sh` runs every five minutes from `hive-check.timer`. It says, one line each, whether
+the service and the delegatee answer, whether the delegatee still signs with the delegate key
+`hive.env` names, whether the keeper console being served is byte for byte the one that was built,
+whether there is a backup from the last thirteen hours, and whether the disk has room. Each finding
+goes to the journal at error priority (`journalctl -p err -u hive-check`), and with `HIVE_ALERT_URL`
+set in `hive.env` it is also posted there as plain text, to an ntfy topic or any address that takes
+a POST. The services' own logs are in `journalctl -u hive-service -u hive-delegatee`.
+
+The service turns away more than a client's share of requests: a few requests for a hive a minute
+from one address, some dozens of forwarded channels, a few hundred reads. Members behind one address
+share its allowance, so raise the numbers in `tools/service.ts` if a large community sits behind one.
+
+### When the host is gone
+
+The treasury's coins need the Operator, the Emulator and two keepers to move, and the delegatee to
+renew them. If the host is lost, restore it from a backup: the keepers' keys were never on it, and
+the delegate key and the delegatee's database are in the archive. Until it is back, the keepers can
+sign nothing, since the desk is where they meet, and the treasury's coins are not renewed. A coin
+that is not renewed before its batch expires is swept by the Operator, so a host that stays down for
+weeks puts the treasury at risk: bring a host back, on any server, well before that. If the delegate
+key is lost for good, with no backup, no host can renew the treasury again, and the keepers move its
+funds out to a new treasury with a withdrawal (below) while the coins are still live.
 
 ## The MeshLLM nodes
 
@@ -78,8 +135,10 @@ covers the plugin's flags, packaging and the installers.
 each hive once its treasury is built, and restarts it if it stops. The setting names the MeshLLM
 binary, the plugin and its worker, the model, the cap and length of each job, and any buyer flag to
 pass on with `--agent-arg`, such as `--network bitcoin`, the escrows' delegate service and the
-providers the agent may pay (`--allow-peer <node id>`). Its mesh invite is served at
-`https://<service host>/c/<channel ID>/hive/v1/invite`, for providers and members to join.
+providers the agent may pay (`--allow-peer <node id>`). With `HIVE_SERVE_INVITE=1` in `hive.env`
+its mesh invite is served at `https://<service host>/c/<channel ID>/hive/v1/invite`, for providers
+and members to join. Whoever holds an invite can join that hive's mesh, though not spend, so it is
+off unless you turn it on; without it, hand the invite to providers and members yourself.
 
 **The community's own agent.** A community that would rather run its agent itself sets up a MeshLLM
 node with the plugin as buyer, its `--treasury-program` set to the program the hive's page shows.
@@ -126,12 +185,21 @@ delegatee accepts.
 The founder creates the community and a channel for the hive in Buzz, installs the plugin with
 Settings → Plugins → Add from Git, creates a Hive bot on the Agents page and adds it to the channel,
 then mentions it with "set up with 3 keepers". HiveBot asks the service for a hive for this channel,
-proving it with its first message there, and the hive waits until the host's operator opens it:
+with its first message there, and the hive waits until the host's operator opens it:
 
 ```bash
 cd /opt/hive && sudo -u hive pnpm ops service-list --network bitcoin
-sudo -u hive pnpm ops service-approve <hive> --network bitcoin
+sudo -u hive pnpm ops service-approve <hive> --bot <HiveBot's npub> --network bitcoin
 ```
+
+Anyone can sign a request for any channel, and the key the operator approves is the one whose
+messages name the hive's keepers. So the operator names HiveBot's key with `--bot`, and takes it
+from the channel itself: HiveBot's profile in Buzz shows its npub, and the founder can post it.
+`service-list` shows every key that asked for the channel, and a key copied from that list proves
+nothing. A request that should not be there is removed with `pnpm ops service-reject <hive>`. Until
+a hive is approved the service keeps nothing of its channel and does not list it to the community's
+plugins; once it is, HiveBot checks that the hive the service opened is its own, built from the
+keepers and the keys in its channel, before it announces the treasury.
 
 HiveBot then asks for keepers; three people react ✅, and the founder confirms them.
 
@@ -155,7 +223,9 @@ names the community's own. HiveBot posts the treasury's address, and the plugin 
 Every hive has its signing desk on the service, under `https://<service host>/c/<channel ID>`, the
 address the console asks for, and the plugin's Keepers tab links each keeper to the console with it
 filled in. Each keeper opens it once and unlocks it with their passkey, which shares the nonces their
-later signatures need and pins the treasury's address in that browser. A keeper who opens the desk
+later signatures need and pins the treasury's address in that browser. Only a keeper reads the hive's
+payments at the desk: each read carries the keeper's signature, as starting or cancelling a payment
+does. A keeper who opens the desk
 later from another browser has none of the nonces the first one shared, so a payment paired with them
 there is cancelled by the other keeper and started again.
 
@@ -186,7 +256,11 @@ console.
 ### 7. Two keepers sign
 
 The first keeper opens the console, checks the job (the escrow is rebuilt from the job's terms and
-gives back to this treasury, and the amount fits what approved work has left) and signs. The second
+gives back to this treasury, and the amount fits what approved work has left) and signs. The console
+shows the key of the agent that signs the job's receipts, remembers it, and asks before it signs for
+a job that names another: a hive changes its agent node rarely, and says so in its channel. What
+approved work has left is the desk's count, which the console cannot check against the channel, so
+a keeper looks at the proposal there before signing. The second
 keeper does the same later, signing both remaining steps, and the first comes back once to finish.
 The desk then hands the payment to the delegatee, and the escrow holds exactly the job's cap.
 
@@ -195,6 +269,40 @@ The desk then hands the payment to the delegatee, and the escrow holds exactly t
 The member uses the model. The provider claims the latest receipt before the deadline, and the rest
 goes back to the treasury. A job nobody claims returns whole once its deadline passes, with nobody
 signing.
+
+### 9. Withdrawing from the treasury
+
+Two keepers can send the treasury's Bitcoin to an Arkade address: to move the hive to a new
+treasury or a new host, or to wind it down. They agree on the address and the amount in the hive's
+channel. One opens the console, enters both under Withdraw from the treasury and signs; the other
+reads the same address and amount in their own console, which works out what the address pays
+itself, and signs both remaining steps; the first finishes. A withdrawal waits at most 23 hours for
+its second signature, one is under way at a time, and the address must be on the hive's Operator.
+Nothing in the console judges the destination. That is the keepers' own decision, which is why it
+takes two of them.
+
+## A keeper who trusts no host with the console
+
+The console holds a keeper's key while it is unlocked, and the host serves the console. The host's
+check compares what is served with what was built every five minutes, and anyone can do the same
+from a checkout at the host's commit:
+
+```bash
+cd hive/hive-buzz && npm ci
+node keeper/verify.mjs https://<console host> --mainnet
+```
+
+That shows what the host serves to whoever asks, when they ask. A keeper who wants no host in the
+way of their key at all builds the console and serves it from their own machine:
+
+```bash
+node keeper/build.mjs dist/keeper --mainnet
+node keeper/serve.mjs dist/keeper        # http://localhost:8788
+```
+
+A passkey belongs to the address it was made at, so this console gets a passkey of its own: the
+keeper restores their key there from its backup file. The hive's desk takes calls from a console
+served on the keeper's own machine.
 
 ## Trying it locally first
 
@@ -213,4 +321,4 @@ the delegatee from `tools/delegatee.sh`, MeshLLM 0.79 with a small GGUF model, p
 Playwright's Chromium; [Running Hive](running.md) lists the stack. Each run writes its steps and
 outcome to `.local/rehearsal/service-<run>/result.json`. `test/rehearsal.ts` does the same for one
 hive on a host of its own, and `test/keeper-console-e2e.ts` runs the keepers' part alone against the
-in-memory network.
+in-memory network: two keepers fund a job, then withdraw from the treasury.

@@ -2,9 +2,9 @@
 // the Operator and the job's own terms, then sign it, and nothing else. The checks and the signing
 // are the hive's own code (packages/steward), bundled into the console, so the console decides for
 // itself; the signing desk only carries messages between keepers.
-import { Arkd, deriveAccount, jobEscrow, MAINNET_PINS, sendMessages, treasuryArguments } from "../../../packages/ark/src/index.ts";
-import { checkPayment, keeperView } from "../../../packages/steward/src/policy.ts";
-import { deskAuthDigest, nonceBatch, signOver, signShared } from "../../../packages/steward/src/keeper.ts";
+import { Arkd, deriveAccount, jobEscrow, MAINNET_PINS, parseArkAddress, sendMessages, treasuryArguments } from "../../../packages/ark/src/index.ts";
+import { checkKeeperWithdrawal, checkPayment, keeperView } from "../../../packages/steward/src/policy.ts";
+import { deskAuthDigest, nonceBatch, signOver, signShared, withdrawalId } from "../../../packages/steward/src/keeper.ts";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 
 const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -62,6 +62,18 @@ export function escrowFacts(conn, hive, request) {
     };
 }
 
+/**
+ * The script an Arkade address pays, worked out here from the address the keeper reads: a
+ * withdrawal is signed for this script and no other. An address on another Operator is refused.
+ */
+export function withdrawalScript(conn, address) {
+    let decoded;
+    try { decoded = parseArkAddress(String(address)); } catch { throw new Error("This is not an Arkade address."); }
+    if (decoded.serverKey !== conn.keys.server.slice(-64)) throw new Error("This address belongs to another Operator than the hive's.");
+    if (!/^5120[0-9a-f]{64}$/.test(decoded.pkScript)) throw new Error("This address does not pay a taproot script.");
+    return decoded.pkScript;
+}
+
 /** The keeper's public key, as the hive lists it. */
 export const publicKeyOf = (secret) => hex(secp256k1.getPublicKey(secret, true));
 
@@ -88,8 +100,12 @@ export function signListing(secret, listingId) {
 export async function checkSession(conn, hive, session, shown, remainingSats) {
     const view = keeperView(hive.keepers, hive.treasury.terms);
     const treasury = hive.treasury.script;
-    // The keeper approves the request the console showed them; the session must carry exactly it.
-    const checked = await checkPayment(view, conn, session, { request: shown, remainingSats }, Math.floor(Date.now() / 1000));
+    // The keeper approves what the console showed them, a job's funding or a withdrawal's address and
+    // amount; the session must carry exactly it.
+    const now = Math.floor(Date.now() / 1000);
+    const checked = session.purpose.kind === "withdrawal"
+        ? await checkKeeperWithdrawal(view, conn, session, { withdrawal: shown }, now)
+        : await checkPayment(view, conn, session, { request: shown, remainingSats }, now);
     // The treasury these keys build must be the hive's, as its channel and listing name it.
     const plan = session.purpose.plan;
     if (!plan.coins.every((c) => c.script === treasury)) throw Object.assign(new Error("These coins are not the hive's treasury."), { code: "NOT_OUR_TREASURY" });
@@ -106,4 +122,4 @@ export function signSecond(pairSession, secret, messages, kept) {
     return signShared(pairSession, secret, messages, kept);
 }
 
-export { sendMessages };
+export { sendMessages, withdrawalId };

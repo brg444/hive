@@ -249,23 +249,29 @@ test("the page serves the view and refuses malformed or hurried payment requests
   const { fake, operatorKey, register, local, endpoint, treasuryScript, treasuryAddress } = await setup(t);
   const registration = await register();
   fake.mint(treasuryScript, 7_000);
+  let readings = 0;
+  const counted = <T>(view: T): T => {
+    readings += 1;
+    return view;
+  };
   const page = await startHivePage({
-    view: async () => ({
-      schema: "hive-view/v4",
-      generatedAt: new Date().toISOString(),
-      treasury: {
-        address: treasuryAddress,
-        script: treasuryScript,
-        lightningAddress: registration.lightningAddress,
-        balanceSats: 7_000,
-        coins: [],
-      },
-      contributions: [],
-      renewals: [],
-      unattributed: [],
-      escrows: [],
-      totals: { contributedSats: 7_000, inEscrowSats: 0, paidSats: 0, refundedSats: 0 },
-    }),
+    view: async () =>
+      counted({
+        schema: "hive-view/v4",
+        generatedAt: new Date().toISOString(),
+        treasury: {
+          address: treasuryAddress,
+          script: treasuryScript,
+          lightningAddress: registration.lightningAddress,
+          balanceSats: 7_000,
+          coins: [],
+        },
+        contributions: [],
+        renewals: [],
+        unattributed: [],
+        escrows: [],
+        totals: { contributedSats: 7_000, inEscrowSats: 0, paidSats: 0, refundedSats: 0 },
+      }),
     intake: {
       endpoint,
       network: "regtest",
@@ -281,6 +287,9 @@ test("the page serves the view and refuses malformed or hurried payment requests
       .balanceSats,
     7_000,
   );
+  // Many visitors at once share one reading of the view: it is not worked out for each of them.
+  await Promise.all(Array.from({ length: 20 }, () => fetch(`${page.url}/api/view`).then((r) => r.json())));
+  assert.equal(readings, 1);
   const pour = (body: unknown) =>
     fetch(`${page.url}/api/pour`, {
       method: "POST",

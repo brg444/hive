@@ -25,7 +25,12 @@ export async function readJsonBody(request: IncomingMessage, limit: number): Pro
 
 export function sendJson(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent || response.destroyed) return;
-  response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+  response.writeHead(status, {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+    // JSON is never read as a page, whatever it carries.
+    "x-content-type-options": "nosniff",
+  });
   response.end(JSON.stringify(value));
 }
 
@@ -65,6 +70,53 @@ export function isBrowserRequest(request: IncomingMessage): boolean {
 
 export function isLoopbackHost(hostname: string): boolean {
   return ["127.0.0.1", "localhost", "[::1]"].includes(hostname);
+}
+
+/**
+ * Who a request comes from: the peer, or, when the peer is this host's own TLS proxy, the address the
+ * proxy saw. Only the last forwarded entry counts, the one the proxy added itself: a client can put
+ * anything before it.
+ */
+export function clientAddress(request: IncomingMessage): string {
+  const peer = request.socket.remoteAddress ?? "";
+  const local = peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1";
+  const forwarded = request.headers["x-forwarded-for"];
+  if (local && forwarded) {
+    const last = String(Array.isArray(forwarded) ? forwarded[forwarded.length - 1] : forwarded)
+      .split(",")
+      .pop()
+      ?.trim();
+    if (last) return last;
+  }
+  return peer;
+}
+
+export interface RateLimit {
+  /** Takes `cost` from the key's allowance; false when it has run out. */
+  take(key: string, cost?: number): boolean;
+}
+
+/**
+ * A token bucket per key: `perMinute` on average, `burst` at once. Kept in memory and bounded, so
+ * the limiter itself cannot be filled up; when it is full the keys idle longest make room.
+ */
+export function rateLimit(perMinute: number, burst = perMinute, maxKeys = 10_000): RateLimit {
+  const buckets = new Map<string, { tokens: number; at: number }>();
+  return {
+    take(key, cost = 1) {
+      const now = Date.now();
+      const bucket = buckets.get(key) ?? { tokens: burst, at: now };
+      bucket.tokens = Math.min(burst, bucket.tokens + ((now - bucket.at) / 60_000) * perMinute);
+      bucket.at = now;
+      // Re-inserted, so the map stays in order of last use.
+      buckets.delete(key);
+      buckets.set(key, bucket);
+      if (buckets.size > maxKeys) buckets.delete(buckets.keys().next().value as string);
+      if (bucket.tokens < cost) return false;
+      bucket.tokens -= cost;
+      return true;
+    },
+  };
 }
 
 export async function listenLocal(server: Server, port = 0): Promise<{ url: string; port: number }> {

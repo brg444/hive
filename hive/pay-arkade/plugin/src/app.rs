@@ -72,7 +72,23 @@ pub struct Config {
     pub expire_grace_secs: u64,
     /// The most the agent may have committed at once, across every job not yet settled.
     pub max_open_sats: u64,
+    /// The output a request is held to when it names no limit: the most the agent receipts for it,
+    /// and the limit members' requests are given.
+    pub max_unnamed_output_tokens: u64,
 }
+
+/// One request on its way through a buyer's node.
+#[derive(Debug, Clone, Default)]
+pub struct Exchange {
+    /// The provider it went to, once one was chosen.
+    pub peer: Option<String>,
+    /// The most tokens it can come to, from its own body; unknown when the body was not seen.
+    pub most_tokens: Option<u64>,
+    pub at: u64,
+}
+
+/// A request that never finishes is forgotten after this long.
+const EXCHANGE_TTL_SECS: u64 = 3_600;
 
 pub struct App {
     pub cfg: Config,
@@ -80,8 +96,10 @@ pub struct App {
     pub book: Mutex<Book>,
     /// This node's key in the worker: the claim key on a seller, the receipt key on a buyer.
     pub pubkey: String,
-    /// Buyer: which provider each in-flight exchange went to.
-    pub exchanges: Mutex<HashMap<String, String>>,
+    /// Buyer: each in-flight exchange, with the provider it went to and the most it can cost.
+    pub exchanges: Mutex<HashMap<String, Exchange>>,
+    /// Buyer: what each member has spent today and has in flight.
+    pub usage: Mutex<crate::gateway::Usage>,
     /// Peers or jobs with work in progress that must not start twice (an offer, a claim).
     pub busy: Mutex<HashSet<String>>,
 }
@@ -117,6 +135,16 @@ impl App {
     /// Claim a guard on `key`; `None` when someone already holds it.
     pub fn guard(self: &Arc<Self>, key: &str) -> Option<Guard> {
         self.busy.lock().unwrap().insert(key.to_string()).then(|| Guard { app: self.clone(), key: key.to_string() })
+    }
+
+    /// Notes something about an in-flight exchange, forgetting those that never finished.
+    pub fn note_exchange(&self, id: &str, note: impl FnOnce(&mut Exchange)) {
+        let mut exchanges = self.exchanges.lock().unwrap();
+        let t = crate::book::now();
+        if exchanges.len() >= 256 {
+            exchanges.retain(|_, e| e.at + EXCHANGE_TTL_SECS >= t);
+        }
+        note(exchanges.entry(id.to_string()).or_insert_with(|| Exchange { at: t, ..Default::default() }));
     }
 
     pub fn allows(&self, peer: &str) -> bool {
@@ -175,6 +203,26 @@ pub fn worst_case_tokens(event: &Value, default_max_tokens: u64) -> u64 {
     input + output
 }
 
+/// Tokens a chat template may add around a request's own text.
+const TEMPLATE_TOKENS: u64 = 512;
+
+/// The most tokens a request can come to, whatever its provider reports afterwards: no tokenizer
+/// yields more tokens than bytes, so every byte of its body counts as one, with room for the chat
+/// template and the output the request allows itself, or `unnamed_output` when it names no limit.
+/// A provider is paid on its own count up to this, and no further.
+pub fn most_tokens(event: &Value, unnamed_output: u64) -> Option<u64> {
+    let body = &event["body"];
+    if body.is_null() {
+        return None;
+    }
+    let output = ["max_tokens", "max_completion_tokens", "max_output_tokens"]
+        .iter()
+        .find_map(|k| body[k].as_u64())
+        .unwrap_or(unnamed_output);
+    let answers = body["n"].as_u64().unwrap_or(1).max(1);
+    Some((body.to_string().len() as u64).saturating_add(TEMPLATE_TOKENS).saturating_add(output.saturating_mul(answers)))
+}
+
 pub fn random_hex32() -> String {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("system randomness");
@@ -183,4 +231,19 @@ pub fn random_hex32() -> String {
 
 pub fn is_hex32(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_is_bounded_by_its_own_body_and_output_limit() {
+        let body = json!({"messages": [{"role": "user", "content": "hello"}], "max_tokens": 100});
+        let bytes = body.to_string().len() as u64;
+        assert_eq!(most_tokens(&json!({"body": body}), 16_384), Some(bytes + 512 + 100));
+        let unnamed = json!({"messages": [], "n": 2});
+        assert_eq!(most_tokens(&json!({"body": unnamed}), 1_000), Some(unnamed.to_string().len() as u64 + 512 + 2_000));
+        assert_eq!(most_tokens(&json!({"phase": "request_received"}), 1_000), None);
+    }
 }

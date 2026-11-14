@@ -8,7 +8,7 @@
 // the same passkey, and each one is deleted before the signature that uses it.
 import { formatAmount, saveUnit, savedUnit, UNITS } from "../shared/amounts.mjs";
 import { nonceKeyFromPrf, openNonces, sealNonces } from "./vault.mjs";
-import { checkSession, connection, deskAuth, escrowFacts, freshNonces, publicKeyOf, signFirst, signListing, signSecond, treasuryScriptOf } from "./signing.mjs";
+import { checkSession, connection, deskAuth, escrowFacts, freshNonces, publicKeyOf, signFirst, signListing, signSecond, treasuryScriptOf, withdrawalId, withdrawalScript } from "./signing.mjs";
 
 const DESK = "hive-keeper/desk";
 const IDLE_MS = 10 * 60 * 1000;
@@ -99,6 +99,32 @@ export class Sitting {
         write(this.storeKey(), await sealNonces(this.nonceKey, this.label, secrets));
     }
 
+    /**
+     * One change to the kept nonces at a time, in this tab and across this browser's tabs: they are
+     * read, changed and written back as one step, so a nonce taken out to sign is never put back by
+     * a step that read the list before it left.
+     */
+    changeNonces(change) {
+        const step = () => {
+            const next = (this.nonceTail ?? Promise.resolve()).then(async () => {
+                const { keep, result } = await change(await this.kept());
+                if (keep) await this.keep(keep);
+                return result;
+            });
+            this.nonceTail = next.catch(() => {});
+            return next;
+        };
+        const locks = globalThis.navigator?.locks;
+        return locks ? locks.request(`hive-keeper/nonces/${this.label}`, step) : step();
+    }
+
+    /** What the desk shows only to a keeper is asked for with this keeper's signature. */
+    read(path) {
+        if (!this.secret) throw new Error("The console is locked. Unlock it with your passkey.");
+        const { keeper, at, signature } = deskAuth(this.secret, this.hive.hive, "read", "");
+        return getJson(`${this.desk}/desk/v1/${path}`, { "x-hive-keeper": `${keeper}.${at}.${signature}` });
+    }
+
     /** Shares a new batch of nonces when the desk is running low on this keeper's. */
     async topUp() {
         const info = await getJson(`${this.desk}/desk/v1/hive`);
@@ -106,24 +132,32 @@ export class Sitting {
         if ((info.nonces?.[this.me] ?? 0) >= LOW) return;
         const { batch, secrets } = freshNonces(this.secret, 32);
         // Kept before they are shared: a nonce the desk holds always has its secret here.
-        await this.keep([...(await this.kept()), ...secrets].slice(-256));
+        await this.changeNonces((kept) => ({ keep: [...kept, ...secrets].slice(-256) }));
         await post(`${this.desk}/desk/v1/nonces`, { batch });
     }
 
     async overview() {
         this.touch();
-        const [payments, listing] = await Promise.all([getJson(`${this.desk}/desk/v1/payments`), getJson(`${this.desk}/desk/v1/listing`)]);
+        const [payments, listing] = await Promise.all([this.read("payments"), this.read("listing")]);
         return { ...payments, listing: listing.pending };
     }
 
     /** What this keeper can do with a payment now, in plain words. */
     role(entry) {
         const p = entry.payment;
-        if (!p || ["expired", "cancelled", "failed"].includes(p.status)) return { action: "start", label: "Check and sign" };
         const mine = (s) => Boolean(s?.partials?.[this.me]);
+        if (p?.withdrawal && ["expired", "cancelled", "failed"].includes(p.status))
+            return { action: null, label: p.status === "cancelled" ? "Cancelled" : p.status === "expired" ? "Lapsed before two keepers signed" : "Did not go through" };
+        if (!p || ["expired", "cancelled", "failed"].includes(p.status)) {
+            // A keeper who signed an earlier payment for this job signs no other for it (see guard):
+            // starting one would only be refused, so it is not offered.
+            const signedBefore = Boolean(this.remembered()[entry.job.request.jobId]) || mine(p?.attest) || mine(p?.register) || Boolean(p?.signedBefore?.includes(this.me));
+            if (signedBefore) return { action: null, label: "You signed an earlier payment for this job, which did not go through. Two keepers who did not can fund it; otherwise the hive's agent asks for the job again after its deadline" };
+            return { action: "start", label: "Check and sign" };
+        }
         const inPair = p.first === this.me || p.second === this.me;
         if (p.status === "submitted") return { action: null, label: "Signed by two keepers, on its way" };
-        if (p.status === "done") return { action: null, label: "Funded" };
+        if (p.status === "done") return { action: null, label: p.withdrawal ? "Paid" : "Funded" };
         if (!inPair) return { action: null, label: `Two other keepers are signing it` };
         if (p.status === "attesting") {
             if (p.second === this.me && !mine(p.attest)) return { action: "second", label: "Check and sign" };
@@ -143,7 +177,7 @@ export class Sitting {
     }
 
     async detail(jobId) {
-        return getJson(`${this.desk}/desk/v1/payments/${jobId}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+        return this.read(`payments/${jobId}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     }
 
     /** Runs the checks on a session; the console signs only what this returns. */
@@ -159,11 +193,12 @@ export class Sitting {
     async act(entry) {
         this.touch();
         if (!this.secret) throw new Error("The console is locked. Unlock it with your passkey.");
-        const jobId = entry.job.request.jobId;
+        const jobId = entry.payment?.jobId ?? entry.job.request.jobId;
         const { action } = this.role(entry);
         let state = entry.payment && !["expired", "cancelled", "failed"].includes(entry.payment.status) ? await this.detail(jobId) : null;
-        // What the keeper read on screen is the request every step below must carry.
-        this.shown = entry.job.request;
+        // What the keeper read on screen is what every step below must carry: the job's request, or
+        // a withdrawal's address and amount.
+        this.shown = entry.payment?.withdrawal ?? entry.job.request;
         if (action === "start") {
             await this.topUp();
             state = await post(`${this.desk}/desk/v1/payments/${jobId}/start`, { auth: deskAuth(this.secret, this.hive.hive, "start", jobId) });
@@ -185,6 +220,21 @@ export class Sitting {
     }
 
     /**
+     * The agent key this keeper last signed for, when this job names another. The agent's key signs
+     * the receipts that pay a job's provider, so a job that names a new one is shown to the keeper
+     * before anything is signed: a hive changes its agent node rarely, and says so in its channel.
+     */
+    agentChanged(request) {
+        const seen = read(`hive-keeper/agent/${this.label}`);
+        return seen && seen !== request.params?.agentPk ? seen : null;
+    }
+
+    /** The keeper confirmed the hive's new agent key. */
+    acceptAgent(request) {
+        write(`hive-keeper/agent/${this.label}`, request.params.agentPk);
+    }
+
+    /**
      * Never two plans for one job. A pair's attestations alone can move the coins, so the job is
      * bound to the first plan this keeper signs anything for, and for good, as a steward binds it: a
      * job whose payment lapsed is asked for again by the agent, as a new job.
@@ -194,8 +244,11 @@ export class Sitting {
         const seen = all[jobId];
         if (seen && seen.holder !== checked.holder)
             throw new Error("You already signed another payment for this job, so you sign no other for it. If it lapsed, the hive's agent asks for the job again.");
+        const request = this.shown;
+        if (request?.params && this.agentChanged(request)) throw new Error("This job names another agent key than the one you signed for before. Confirm the hive's new agent with the other keepers first.");
         all[jobId] = { holder: checked.holder, until: checked.until, stages: [...new Set([...(seen?.stages ?? []), stage])] };
         write(`hive-keeper/signed/${this.label}`, all);
+        if (request?.params?.agentPk) this.acceptAgent(request);
     }
 
     async signAsFirst(state, stage) {
@@ -215,13 +268,42 @@ export class Sitting {
         same(checked.messages, pairSession.messages);
         this.guard(state.payment.jobId, checked, stage);
         const ids = pairSession.pooled[this.me] ?? [];
-        const kept = await this.kept();
-        const using = kept.filter((n) => ids.includes(n.id));
-        if (using.length !== ids.length) throw new Error("This device no longer has the nonces you shared for this payment. Ask the other keeper to cancel it and start again.");
         // A secret nonce signs once: it leaves this device's storage before the signature exists.
-        await this.keep(kept.filter((n) => !ids.includes(n.id)));
+        const using = await this.changeNonces((kept) => {
+            const found = kept.filter((n) => ids.includes(n.id));
+            if (found.length !== ids.length) throw new Error("This device no longer has the nonces you shared for this payment. Ask the other keeper to cancel it and start again.");
+            return { keep: kept.filter((n) => !ids.includes(n.id)), result: found };
+        });
         const partials = signSecond(pairSession, this.secret, checked.messages, using);
         return post(`${this.desk}/desk/v1/payments/${state.payment.jobId}/sign`, { keeper: this.me, stage, partials });
+    }
+
+    /**
+     * Starts a withdrawal from the treasury to an Arkade address and signs its first step. The other
+     * keeper reads the same address and amount in their own console before signing.
+     */
+    async startWithdrawal(address, amountSats) {
+        this.touch();
+        if (!this.secret) throw new Error("The console is locked. Unlock it with your passkey.");
+        address = String(address).trim().toLowerCase();
+        if (!Number.isSafeInteger(amountSats) || amountSats <= 0) throw new Error("The amount is a whole number of sats.");
+        const destination = withdrawalScript(this.conn, address);
+        if (destination === this.hive.treasury.script) throw new Error("This is the treasury's own address.");
+        await this.topUp();
+        const at = Math.floor(Date.now() / 1000);
+        const id = withdrawalId(this.hive.hive, destination, amountSats, at);
+        const state = await post(`${this.desk}/desk/v1/withdrawals`, { auth: deskAuth(this.secret, this.hive.hive, "withdraw", id, at), address, amountSats });
+        // The desk's record must be the withdrawal this keeper asked for and nothing else.
+        const opened = state.payment?.withdrawal;
+        if (state.payment?.jobId !== id || opened?.destination !== destination || opened?.amountSats !== amountSats)
+            throw new Error("The desk opened another withdrawal than the one you asked for. Nothing was signed.");
+        this.shown = opened;
+        return this.signAsFirst(state, "attest");
+    }
+
+    /** Whether the address a withdrawal shows is the script it pays, by this console's own reading of it. */
+    withdrawalMatches(payment) {
+        try { return withdrawalScript(this.conn, payment.address) === payment.withdrawal.destination; } catch { return false; }
     }
 
     async cancel(jobId) {
@@ -238,8 +320,8 @@ function same(a, b) {
     if (a.length !== b.length || a.some((m, i) => hex(m) !== hex(b[i]))) throw new Error("The desk's session does not match this payment. Nothing was signed.");
 }
 
-async function getJson(url) {
-    const res = await fetch(url, { headers: { accept: "application/json" } });
+async function getJson(url, headers = {}) {
+    const res = await fetch(url, { headers: { accept: "application/json", ...headers } });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(body.detail || body.error || `The desk answered ${res.status}.`), { status: res.status, code: body.error });
     return body;

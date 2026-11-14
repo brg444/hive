@@ -51,11 +51,12 @@
     "nostr-tools": "2.25.2",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
-    "ws": "8.18.3"
+    "ws": "8.21.3"
   },
   "pnpm": {
     "overrides": {
-      "@arkade-os/swap>@arkade-os/sdk": "0.4.78"
+      "@arkade-os/swap>@arkade-os/sdk": "0.4.78",
+      "ws": "8.21.3"
     }
   }
 }

@@ -45,6 +45,7 @@ import {
   type Purpose,
   type SessionRequest,
   sameWithdrawal,
+  type WithdrawalTerms,
 } from "./purpose.js";
 
 export { KEEPER_MAX_VALIDITY_SECONDS, MAX_VALIDITY_SECONDS };
@@ -307,9 +308,10 @@ export async function checkPayment(
       ensure(coin.expiresAt >= request.minCoinExpiry, "COIN_EXPIRES_TOO_SOON", `${coin.txid}:${coin.vout}`);
   }
   // A job is funded once. Anyone can send dust to a public address, so only a coin that could be
-  // the job's funding counts: one of at least the cap, unspent.
+  // the job's funding counts: one of at least the cap. Spent or not: a job already claimed or
+  // returned was funded all the same, and is not funded again.
   const funded = await conn.arkd.coins({ scripts: [escrow.pkScript] });
-  ensure(!funded.some((c) => !c.isSpent && c.amount >= cap), "ESCROW_FUNDED");
+  ensure(!funded.some((c) => c.amount >= cap), "ESCROW_FUNDED");
   const messages =
     purpose.stage === "attest" ? attest : [registration(view, session, plan, attest, purpose.signatures)];
   const holder = planHolder(plan);
@@ -319,6 +321,61 @@ export async function checkPayment(
     coins,
     until: plan.validUntil,
     binds: { key: `job:${request.jobId}`, value: holder, code: "JOB_ALREADY_FUNDED" },
+  };
+}
+
+/**
+ * The checks a keeper's console runs before it signs a withdrawal from the treasury: the terms are
+ * the ones the keeper read on screen and confirmed, the plan pays exactly that amount to exactly
+ * that address from the treasury's own coins, and the authorization ends with the withdrawal, 23
+ * hours at most after it was started. Nothing here says the destination is a good one: that is the
+ * keepers' own decision, made in the hive's channel, and the reason two of them sign.
+ */
+export async function checkKeeperWithdrawal(
+  view: TreasuryView,
+  conn: Connection,
+  session: SessionRequest,
+  approval: { withdrawal: WithdrawalTerms },
+  now: number,
+): Promise<Checked> {
+  const purpose = session.purpose;
+  ensure(purpose.kind === "withdrawal", "UNKNOWN_PURPOSE", "not a withdrawal");
+  ensure(/^[0-9a-f]{64}$/.test(session.id), "INVALID", "session id");
+  const withdrawal = purpose.withdrawal;
+  ensure(
+    sameWithdrawal(withdrawal, approval.withdrawal),
+    "UNAPPROVED_WITHDRAWAL",
+    "not the withdrawal the keeper confirmed",
+  );
+  ensure(/^5120[0-9a-f]{64}$/.test(withdrawal.destination), "PLAN_INVALID", "destination");
+  ensure(
+    Number.isSafeInteger(withdrawal.amountSats) && withdrawal.amountSats >= conn.operator.dust,
+    "PLAN_INVALID",
+    "amount",
+  );
+  ensure(now < withdrawal.expiresAt, "WITHDRAWAL_EXPIRED");
+  const plan = purpose.plan;
+  ensure(
+    plan.destination === withdrawal.destination && plan.amount === withdrawal.amountSats,
+    "PLAN_INVALID",
+    "destination or amount",
+  );
+  ensure(
+    plan.validUntil <= withdrawal.expiresAt,
+    "PLAN_INVALID",
+    "the authorization outlives the withdrawal",
+  );
+  const { attest, coins } = await checkSend(view, conn, session, plan, now, KEEPER_MAX_VALIDITY_SECONDS);
+  const messages =
+    purpose.stage === "attest" ? attest : [registration(view, session, plan, attest, purpose.signatures)];
+  const holder = planHolder(plan);
+  // A withdrawal pays once: a second plan for the same terms needs a new withdrawal, with its own label.
+  return {
+    messages,
+    holder,
+    coins,
+    until: plan.validUntil,
+    binds: { key: `withdrawal:${withdrawal.label}`, value: holder, code: "WITHDRAWAL_USED" },
   };
 }
 

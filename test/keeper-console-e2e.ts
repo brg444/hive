@@ -2,7 +2,8 @@
  * Two keepers fund a job from their own keeper consoles in a real browser, each with a virtual
  * passkey: they create their keys, the hive's treasury is built from them, and through the signing
  * desk they sign the agent's funding request in turn, until the escrow holds the cap. The third
- * keeper signs the hive's listing from Node, the other two in their consoles.
+ * keeper signs the hive's listing from Node, the other two in their consoles. The same two then
+ * withdraw from the treasury to an address each reads in their own console.
  *
  *   node --import tsx test/keeper-console-e2e.ts      (needs Playwright's Chromium)
  *
@@ -12,7 +13,7 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connect, jobEscrow } from "@hive/ark";
+import { arkAddress, connect, jobEscrow, xOnly } from "@hive/ark";
 import { hex, localPath, unhex } from "@hive/kit";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { startDesk } from "../tools/desk.js";
@@ -111,9 +112,41 @@ try {
   assert.equal(desk.desk.payment(params.jobId)?.status, "done");
   assert.equal(fake.balance(escrow.pkScript), 20_000);
   console.log("- the escrow holds the job's cap: 20,000 sats");
+
+  // A withdrawal: keeper A names the address and the amount, keeper B reads both and signs, A finishes.
+  const payee = `5120${hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()))}`;
+  const address = arkAddress(conn.deployment.network, hex(xOnly(conn.keys.server)), payee);
+  await a.page.getByRole("button", { name: "Refresh" }).click();
+  await a.page.locator("#withdraw summary").click();
+  await a.page.locator("#w-address").fill(address);
+  await a.page.locator("#w-amount").fill("5000");
+  a.page.once("dialog", (dialog: { accept(): Promise<void> }) => void dialog.accept());
+  await a.page.getByRole("button", { name: "Check and sign the withdrawal" }).click();
+  await a.page.waitForFunction(
+    () => /^Signed\./.test(document.getElementById("payments-msg")?.textContent ?? ""),
+    null,
+    { timeout: 60_000 },
+  );
+  await shoot(a.page, "keeper-console-withdrawal");
+  // Keeper B's console shows the address it worked out itself, in full, before B signs.
+  await b.page.getByRole("button", { name: "Refresh" }).click();
+  await b.page.getByRole("button", { name: "Check and sign" }).first().click();
+  assert.equal(await b.page.getByText(address).count(), 1);
+  assert.equal(
+    await b.page.getByText("The address shown is the one this withdrawal pays.").getAttribute("data-ok"),
+    "true",
+  );
+  await b.page.getByRole("button", { name: "Back" }).click();
+  assert.match(await signFirstPayment(b.page, "Check and sign"), /The other keeper finishes it/);
+  assert.match(await signFirstPayment(a.page, "Finish: sign once more"), /on its way\./);
+  const withdrawal = desk.desk.overview().withdrawals[0]!.payment;
+  await desk.desk.drive(withdrawal.jobId);
+  assert.equal(desk.desk.payment(withdrawal.jobId)?.status, "done");
+  assert.equal(fake.balance(payee), 5_000);
+  console.log("- two keepers withdrew 5,000 sats to an address both read");
   assert.deepEqual([...a.errors, ...b.errors], []);
   await desk.close();
-  console.log("ok: two keepers funded a job from their consoles");
+  console.log("ok: two keepers funded a job and made a withdrawal from their consoles");
 } finally {
   await browser.close();
   site.close();

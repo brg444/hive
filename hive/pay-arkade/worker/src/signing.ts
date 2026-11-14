@@ -3,6 +3,11 @@
 // A receipt is exactly what the escrow's claim path checks:
 //   sha256(jobId || num2bin(amountSats, 8))   (NUM2BIN is little-endian)
 // A quote is the provider's offer for one job, signed over its canonical JSON.
+//
+// The receipt's form is the covenant's, so it carries no tag of its own. What keeps it apart from
+// everything else this key signs is its shape: exactly 40 bytes, 32 of them a job id the agent drew
+// at random. A quote and a hive link message are tagged text, and RECEIPT_BYTES below keeps either
+// from ever being 40 bytes long.
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { hex } from "@scure/base";
@@ -37,8 +42,17 @@ export function canonical(value: unknown): string {
     return JSON.stringify(value);
 }
 
+/** The length of a receipt's preimage: nothing else a worker signs may be this long. */
+export const RECEIPT_BYTES = 40;
+
+function tagged(text: string): Uint8Array {
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.length === RECEIPT_BYTES) throw new Error("a message the length of a receipt is not signed");
+    return bytes;
+}
+
 export function quoteDigest(quote: unknown): Uint8Array {
-    return sha256(new TextEncoder().encode(`pay.arkade.v1/quote:${canonical(quote)}`));
+    return sha256(tagged(`pay.arkade.v1/quote:${canonical(quote)}`));
 }
 
 export function signQuote(secret: Uint8Array, quote: unknown): Uint8Array {
@@ -87,5 +101,5 @@ export function hiveLinkDigest(channelId: string, at: number, what: string): Uin
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(channelId)) throw new Error("channelId");
     if (!Number.isSafeInteger(at) || at <= 0) throw new Error("at");
     if (!(what === "members" || /^events\|\d+\|[0-9a-f]{64}$/.test(what))) throw new Error("not a hive link message");
-    return sha256(new TextEncoder().encode(`hive-agent/v1|${channelId}|${at}|${what}`));
+    return sha256(tagged(`hive-agent/v1|${channelId}|${at}|${what}`));
 }

@@ -13,7 +13,7 @@
  *                                              --allow-peer <provider node id>
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { ensure } from "@hive/kit";
@@ -98,8 +98,16 @@ export function inviteNodeId(token: string): string | null {
   }
 }
 
+interface Node {
+  child: ChildProcess | null;
+  log: string;
+  stopping: boolean;
+  /** The node's log as read so far: how far, the line cut short at that point, and the newest invite. */
+  read: { offset: number; rest: string; invite: string | null };
+}
+
 export class MeshAgents implements AgentRunner {
-  #nodes = new Map<string, { child: ChildProcess; log: string; stopping: boolean }>();
+  #nodes = new Map<string, Node>();
 
   constructor(readonly options: MeshAgentOptions) {
     for (const [name, path] of Object.entries({
@@ -112,33 +120,41 @@ export class MeshAgents implements AgentRunner {
 
   async ensure(hive: Registration, files: HiveFiles, record: HiveRecord): Promise<void> {
     if (this.#nodes.has(hive.hive)) return;
+    const log = join(files.dir, "agent-node.log");
+    // Entered before anything is awaited: a second call in the same moment finds the node here.
+    const entry: Node = { child: null, log, stopping: false, read: { offset: 0, rest: "", invite: null } };
+    this.#nodes.set(hive.hive, entry);
     const home = join(files.dir, "agent-home");
     mkdirSync(join(home, ".mesh-llm"), { recursive: true });
     writeFileSync(join(home, ".mesh-llm/config.toml"), agentConfig(this.options, files, record));
     if (!existsSync(files.agentLog)) writeFileSync(files.agentLog, "");
-    const log = join(files.dir, "agent-node.log");
     const start = async () => {
+      const ports = [await freePort(), await freePort()];
+      if (entry.stopping) return;
       const out = openSync(log, "a");
-      const child = spawn(
-        this.options.mesh,
-        [
-          "serve",
-          "--log-format",
-          "json",
-          "--port",
-          String(await freePort()),
-          "--console",
-          String(await freePort()),
-        ],
-        { env: { ...process.env, HOME: home }, stdio: ["ignore", out, out] },
-      );
-      const entry = { child, log, stopping: false };
-      this.#nodes.set(hive.hive, entry);
-      // A node that stops on its own is started again; jobs and receipts are on disk.
-      child.on("exit", () => {
-        if (!entry.stopping) setTimeout(() => void start(), 10_000);
-        else this.#nodes.delete(hive.hive);
-      });
+      let child: ChildProcess;
+      try {
+        child = spawn(
+          this.options.mesh,
+          ["serve", "--log-format", "json", "--port", String(ports[0]), "--console", String(ports[1])],
+          { env: { ...process.env, HOME: home }, stdio: ["ignore", out, out] },
+        );
+      } finally {
+        // The child has its own copy; without this every restart would leave one open here.
+        closeSync(out);
+      }
+      entry.child = child;
+      // A node that stops on its own, or could not start, is started again; jobs and receipts are on disk.
+      let over = false;
+      const ended = () => {
+        if (over) return;
+        over = true;
+        entry.child = null;
+        if (entry.stopping) return;
+        setTimeout(() => void start().catch(() => {}), 10_000).unref();
+      };
+      child.on("exit", ended);
+      child.on("error", ended);
     };
     await start();
   }
@@ -147,17 +163,38 @@ export class MeshAgents implements AgentRunner {
     const entry = this.#nodes.get(hive);
     if (!entry) return;
     entry.stopping = true;
-    entry.child.kill("SIGTERM");
+    entry.child?.kill("SIGTERM");
     this.#nodes.delete(hive);
   }
 
+  /** The newest invite the node has logged, reading only what the log gained since the last call. */
   async invite(hive: string): Promise<string | null> {
     const entry = this.#nodes.get(hive);
     if (!entry) return null;
+    let fd: number;
     try {
-      return latestInvite(readFileSync(entry.log, "utf8"));
+      fd = openSync(entry.log, "r");
     } catch {
       return null;
+    }
+    try {
+      const { size } = fstatSync(fd);
+      // A log that shrank was replaced: read again from its start.
+      if (size < entry.read.offset) entry.read = { offset: 0, rest: "", invite: null };
+      const chunk = Buffer.alloc(Math.min(size - entry.read.offset, 1024 * 1024));
+      while (entry.read.offset < size) {
+        const n = readSync(fd, chunk, 0, Math.min(chunk.length, size - entry.read.offset), entry.read.offset);
+        if (n <= 0) break;
+        entry.read.offset += n;
+        const lines = (entry.read.rest + chunk.subarray(0, n).toString("utf8")).split("\n");
+        entry.read.rest = lines.pop() ?? "";
+        entry.read.invite = latestInvite(lines.join("\n")) ?? entry.read.invite;
+      }
+      return entry.read.invite;
+    } catch {
+      return null;
+    } finally {
+      closeSync(fd);
     }
   }
 

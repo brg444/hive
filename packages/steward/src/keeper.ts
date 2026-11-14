@@ -27,6 +27,13 @@ export const DESK_TAG = "hive-desk/v1";
 export const deskAuthDigest = (hive: string, action: string, jobId: string, at: number): Uint8Array =>
   unhex(sha256Hex(`${DESK_TAG}|${hive}|${action}|${jobId}|${at}`));
 
+/**
+ * A keepers' withdrawal's id at the desk: the hash of where it pays, how much, and when the keeper
+ * who started it asked. The console works it out itself, so a desk cannot file other terms under it.
+ */
+export const withdrawalId = (hive: string, destination: string, amountSats: number, at: number): string =>
+  sha256Hex(`${DESK_TAG}|${hive}|withdrawal|${destination}|${amountSats}|${at}`);
+
 /** One shared nonce, as the coordinator holds it. */
 export interface SharedNonce {
   id: string;

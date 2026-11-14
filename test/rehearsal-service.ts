@@ -117,6 +117,7 @@ const server = await startService({
   consoleUrl: site.url,
   discussionSeconds: 60,
   agents,
+  serveInvite: true,
   root,
   port,
   host: "127.0.0.1",
@@ -139,7 +140,7 @@ try {
       call,
     });
     assert.equal(asked.status, 200, JSON.stringify(asked.body));
-    await server.service.approve(hiveIdFor(channel));
+    await server.service.approve(hiveIdFor(channel), hex(schnorr.getPublicKey(bot)));
     const devices = [
       await keeperDevice(browser, site.url, ARKD),
       await keeperDevice(browser, site.url, ARKD),
@@ -366,7 +367,7 @@ try {
   await until(
     "the own node's job at its desk",
     async () =>
-      ((await http(`${service}/c/${own.channel}/desk/v1/payments`)).body.payments as unknown[])?.length > 0,
+      (await server.service.desk(server.service.registration(own.channel))).overview().payments.length > 0,
     60,
   );
   for (const h of hives) {
@@ -388,11 +389,8 @@ try {
     await until(
       `${h.name}'s payment executed`,
       async () =>
-        (
-          (await http(`${service}/c/${h.channel}/desk/v1/payments/${h.jobId}`)).body.payment as {
-            status: string;
-          }
-        )?.status === "done",
+        (await server.service.desk(server.service.registration(h.channel))).payment(h.jobId!)?.status ===
+        "done",
       300,
     );
     await until(

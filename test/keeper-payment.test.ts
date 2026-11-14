@@ -172,7 +172,10 @@ test("a payment is refused above the remaining budget, on a request the keeper d
   hive.fake.mint(jobEscrow(hive.conn, request.params).pkScript, 330);
   await checkPayment(view, hive.conn, attest, approval, now());
   // Once the escrow holds the cap, the job is funded and nobody signs again.
-  hive.fake.mint(jobEscrow(hive.conn, request.params).pkScript, 20_000);
+  const funding = hive.fake.mint(jobEscrow(hive.conn, request.params).pkScript, 20_000);
+  await assert.rejects(checkPayment(view, hive.conn, attest, approval, now()), hasCode("ESCROW_FUNDED"));
+  // Nor once that funding has been claimed or returned: a job is funded once, not once at a time.
+  funding.isSpent = true;
   await assert.rejects(checkPayment(view, hive.conn, attest, approval, now()), hasCode("ESCROW_FUNDED"));
 });
 
