@@ -1703,8 +1703,10 @@ async function main(argv: string[]): Promise<void> {
 }
 
 const { pathToFileURL } = await import("node:url");
+// Not awaited: the service imports this module back, and a module still waiting on its own top-level
+// await would hold that import, and the service, forever.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main(process.argv.slice(2)).catch((error) => {
+  void main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`ops stopped: ${(error as { code?: string }).code ?? String(error)}\n`);
     process.exitCode = 1;
   });
