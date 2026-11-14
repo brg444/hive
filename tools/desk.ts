@@ -23,6 +23,7 @@
 
 import { closeSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import type { Pair } from "@hive/ark";
 import { jobEscrow, PAIRS, pairMembers, parseArkAddress, sendMessages, xOnly } from "@hive/ark";
 import type { RouteName } from "@hive/executor";
@@ -169,6 +170,8 @@ export class AgentLog {
   #offset = 0;
   #rest = "";
   #jobs = new Map<string, AgentJob>();
+  // A character cut across two reads is put back together, not read as two broken halves.
+  #decoder = new StringDecoder("utf8");
 
   constructor(readonly path: string) {}
 
@@ -187,13 +190,14 @@ export class AgentLog {
         this.#offset = 0;
         this.#rest = "";
         this.#jobs = new Map();
+        this.#decoder = new StringDecoder("utf8");
       }
       const chunk = Buffer.alloc(Math.min(size - this.#offset, 1024 * 1024));
       while (this.#offset < size) {
         const n = readSync(fd, chunk, 0, Math.min(chunk.length, size - this.#offset), this.#offset);
         if (n <= 0) break;
         this.#offset += n;
-        const lines = (this.#rest + chunk.subarray(0, n).toString("utf8")).split("\n");
+        const lines = (this.#rest + this.#decoder.write(chunk.subarray(0, n))).split("\n");
         // A line still being written is kept for the next look.
         this.#rest = lines.pop() ?? "";
         for (const line of lines) takeLine(this.#jobs, line);
