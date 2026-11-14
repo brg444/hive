@@ -1,0 +1,1925 @@
+// Hive for Buzz (API v1): a hive inside its community. Members follow the treasury, propose work and
+// use their allowances; keepers see what waits for them. It shows and routes and holds no keys: every
+// proposal, support and approval is an ordinary Buzz message or reaction signed by its author.
+//
+// Where proposals stand, the plugin works out itself from the hive's channel, with the same rules
+// the hive's bot uses. The treasury, jobs and payouts come from the hive's host over the one origin
+// its manifest declares.
+export const inject = ["react", "pages", "host", "notifications", "agents", "conversation", "relay", "navigation", "settingsCards"];
+
+// One hive's own host, or, with SERVICE, the shared Hive service, where each hive lives under its
+// channel: the plugin then finds its community's hive and talks to `<service>/c/<channel ID>`.
+const SERVICE = null;
+let hiveApi = SERVICE ? null : "https://brg444.github.io/hive/demo";
+const PLUGIN_ID = "hive-demo.hive";
+const HIVE_NAME = "Hive demo";
+// The hive's channel and keepers, when the plugin was built with them; otherwise the host says.
+const CONFIG = {"channelId":"7c745ff4-02b3-47c1-b081-8b321828f390","keepers":["1e8e42649059b5885f4d35302f3a3a7e161c2e40d5e82f550341138741bd253f","647c09f5295635acc82988a65283bce2caefb3b296dac5e658b0891873d803e2"],"threshold":2,"smallSats":20000};
+const POLL_MS = 30_000;
+const LOOKBACK_DAYS = 90;
+
+// A proposal is an ordinary Buzz message in the hive's channel, readable in any client:
+//
+//   Proposal: Translate the Buzz docs into Spanish and Portuguese
+//   Budget: 30,000 sats from 2026-11-15 to 2026-12-10
+//   For: only me, 2,000 sats a day
+//   Purpose: Buzz's docs exist only in English. The translated pages go to the docs repo.
+//   Work: About 2.4 million tokens on llama-3.3-70b.
+//   Provider: Lena's node, for the 70B model
+//   Report: A link to the merged pull request.
+//
+// The plugin draws it as a card, the bot reads it as the record, and both use these two
+// functions, so the text a member sends is exactly what the hive acts on. This file is also
+// inlined into the plugin, so it imports nothing.
+
+const FIELDS = ["proposal", "budget", "for", "purpose", "work", "provider", "report"];
+const LABEL = { proposal: "Proposal", budget: "Budget", for: "For", purpose: "Purpose", work: "Work", provider: "Provider", report: "Report" };
+const DAY = 86400;
+const isoDay = /^\d{4}-\d{2}-\d{2}$/;
+const toUnix = (d) => Math.floor(Date.parse(`${d}T00:00:00Z`) / 1000);
+const num = (s) => Number(String(s).replace(/[,\s_]/g, ""));
+
+/** The proposal in a message's text, or null when the text is not a well-formed proposal. */
+function parseProposal(text, mentions = []) {
+    if (typeof text !== "string" || text.length > 6000) return null;
+    const lines = text.replace(/\r/g, "").split("\n");
+    const fields = {};
+    let current = null;
+    for (const raw of lines) {
+        const m = /^\s*(?:\*\*)?([A-Za-z]+)(?:\*\*)?\s*:\s*(.*)$/.exec(raw);
+        const key = m && m[1].toLowerCase();
+        if (key && FIELDS.includes(key) && !(key in fields)) {
+            current = key;
+            fields[key] = m[2].trim();
+        } else if (current && raw.trim()) {
+            fields[current] += (fields[current] ? "\n" : "") + raw.trim();
+        }
+    }
+    if (!fields.proposal || !fields.budget || !fields.purpose) return null;
+    if (!/^\s*(?:\*\*)?proposal(?:\*\*)?\s*:/i.test(lines.find((l) => l.trim()) ?? "")) return null;
+
+    const b = /^([\d,\s_]+)\s*sats?\b(?:\s+from\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2}))?/i.exec(fields.budget);
+    if (!b) return null;
+    const budgetSats = num(b[1]);
+    if (!Number.isSafeInteger(budgetSats) || budgetSats <= 0) return null;
+    let start = null, end = null;
+    if (b[2] && b[3] && isoDay.test(b[2]) && isoDay.test(b[3])) {
+        start = toUnix(b[2]);
+        end = toUnix(b[3]) + DAY - 1;
+        if (!(end > start)) return null;
+    }
+
+    const f = (fields.for ?? "only me").toLowerCase();
+    const who = /every/.test(f) ? "everyone" : /named|@|members/.test(f) && mentions.length ? "named" : "me";
+    const a = /([\d,\s_]+)\s*sats?\s*(?:a|per)\s*day/i.exec(fields.for ?? "");
+    const allowanceSats = a ? num(a[1]) : null;
+
+    return {
+        title: fields.proposal.slice(0, 200),
+        budgetSats,
+        start,
+        end,
+        days: start && end ? Math.round((end + 1 - start) / DAY) : null,
+        who,
+        named: who === "named" ? [...mentions] : [],
+        allowanceSats: Number.isSafeInteger(allowanceSats) && allowanceSats > 0 ? allowanceSats : null,
+        purpose: fields.purpose,
+        work: fields.work ?? "",
+        provider: fields.provider ?? "",
+        report: fields.report ?? "",
+    };
+}
+
+/** The message text for a proposal; `parseProposal(formatProposal(p))` gives `p` back. */
+function formatProposal(p) {
+    const fmt = (n) => Number(n).toLocaleString("en-US");
+    const day = (unix) => new Date(unix * 1000).toISOString().slice(0, 10);
+    const forText = p.who === "everyone" ? "everyone" : p.who === "named" ? "named members" : "only me";
+    const lines = [
+        `${LABEL.proposal}: ${p.title.trim()}`,
+        `${LABEL.budget}: ${fmt(p.budgetSats)} sats${p.start && p.end ? ` from ${day(p.start)} to ${day(p.end)}` : ""}`,
+        `${LABEL.for}: ${forText}${p.allowanceSats ? `, ${fmt(p.allowanceSats)} sats a day` : ""}`,
+        `${LABEL.purpose}: ${p.purpose.trim()}`,
+    ];
+    if (p.work?.trim()) lines.push(`${LABEL.work}: ${p.work.trim()}`);
+    if (p.provider?.trim()) lines.push(`${LABEL.provider}: ${p.provider.trim()}`);
+    if (p.report?.trim()) lines.push(`${LABEL.report}: ${p.report.trim()}`);
+    return lines.join("\n");
+}
+
+/** A member tells the hive which MeshLLM node is theirs: `Hive node: <64 hex>`. */
+function parseNodeClaim(text) {
+    const m = /^\s*hive node\s*:\s*([0-9a-f]{64})\s*$/i.exec(text ?? "");
+    return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * A keeper tells the hive which treasury key is theirs: `Hive keeper key: <compressed key>`, the line
+ * the keeper console gives them. Sent from their Buzz identity, it ties the key to the person.
+ */
+function parseKeeperKey(text) {
+    // Pasting can wrap the line in Markdown, such as `code` or **bold**: that is dropped first.
+    const plain = String(text ?? "").replace(/[`*_]/g, "");
+    const m = /^\s*hive keeper key\s*:\s*(0[23][0-9a-f]{64})\s*$/i.exec(plain);
+    return m ? m[1].toLowerCase() : null;
+}
+
+/** How long discussion stays open: 48 hours, or 24 under the small-proposal threshold. */
+/**
+ * A keeper naming the MeshLLM node that runs the hive's agent, when the community runs its own:
+ * `Hive agent: <the agent's x-only key>`, the key its pay-arkade plugin prints. Formatting the
+ * line as code is fine; anything else is not a claim.
+ */
+function parseAgentKey(text) {
+    const plain = String(text ?? "").replace(/[`*_]/g, "");
+    const m = /^\s*hive agent\s*:\s*([0-9a-f]{64})\s*$/i.exec(plain);
+    return m ? m[1].toLowerCase() : null;
+}
+
+function discussionSeconds(budgetSats, smallSats) {
+    return budgetSats < smallSats ? DAY : 2 * DAY;
+}
+
+/**
+ * A proposal from the Propose form's fields, as the message text to send, or the first thing missing.
+ * fields: { title, purpose, budget, start, end, who, allowance, work, provider, report }, all strings
+ * as typed; dates are YYYY-MM-DD and go together.
+ */
+function proposalFromForm(fields) {
+    const f = (k) => String(fields[k] ?? "").trim();
+    const budgetSats = num(f("budget"));
+    const allowance = f("allowance") ? num(f("allowance")) : null;
+    if (!f("title")) return { text: null, problem: "Give the work a title." };
+    if (!Number.isSafeInteger(budgetSats) || budgetSats <= 0) return { text: null, problem: "Set a budget in sats." };
+    if (!f("purpose")) return { text: null, problem: "Say what the work is for and what it produces." };
+    if (Boolean(f("start")) !== Boolean(f("end"))) return { text: null, problem: "Give both dates, or neither for 30 days from approval." };
+    let start = null, end = null;
+    if (f("start")) {
+        if (!isoDay.test(f("start")) || !isoDay.test(f("end"))) return { text: null, problem: "Dates are YYYY-MM-DD." };
+        start = toUnix(f("start"));
+        end = toUnix(f("end")) + DAY - 1;
+        if (!(end > start)) return { text: null, problem: "The end date comes after the start." };
+    }
+    if (allowance !== null && (!Number.isSafeInteger(allowance) || allowance <= 0)) return { text: null, problem: "A daily allowance is a whole number of sats." };
+    const who = ["me", "everyone", "named"].includes(f("who")) ? f("who") : "me";
+    const text = formatProposal({ title: f("title"), budgetSats, start, end, who, allowanceSats: allowance,
+        purpose: f("purpose").replace(/\s*\n+\s*/g, " "), work: f("work"), provider: f("provider"), report: f("report") });
+    return { text, problem: null };
+}
+
+
+const { coordinate } = (() => {
+// The hive's coordinator, run by its bot: it reads the hive's Buzz channel and works out where each
+// proposal stands. Everything it decides comes from signed Buzz events: a proposal is a member's
+// message, support is members' 👍, approval is two keepers' ✅, a decline is a keeper's ❌ with the
+// reason they reply in the thread. Pure, so it can be tested without a relay.
+
+
+const DAY = 86400;
+const SUPPORT = new Set(["👍", "+", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤️", "🙌"]);
+const APPROVE = new Set(["✅", "✔️", "☑️"]);
+const DECLINE = new Set(["❌", "✖️"]);
+const DEFAULT_PERIOD = 30 * DAY;
+
+const proposalId = (eventId) => `p-${eventId.slice(0, 8)}`;
+
+/** The events their own authors deleted: a deletion counts only for its author's own events. */
+function deletedIds(events) {
+    const author = new Map(events.map((e) => [e.id, e.pubkey]));
+    return new Set(events.filter((e) => e.kind === 5)
+        .flatMap((d) => (d.tags ?? []).filter((t) => t[0] === "e" && author.get(t[1]) === d.pubkey).map((t) => t[1])));
+}
+const tagValues = (e, name) => (e.tags ?? []).filter((t) => t[0] === name).map((t) => t[1]);
+/** The message a reply or reaction points at: its root `e` tag, else the last one. */
+function target(e) {
+    const es = (e.tags ?? []).filter((t) => t[0] === "e");
+    return (es.find((t) => t[3] === "root") ?? es.find((t) => t[3] === "reply") ?? es[es.length - 1])?.[1] ?? null;
+}
+
+/**
+ * Where every proposal stands at `now`.
+ *
+ * events: the channel's kind 9 messages, kind 7 reactions and kind 5 deletions, in any order.
+ * cfg: { keepers: [pubkey], threshold, smallSats, now, usage: { [proposalId]: usedSats }, discussionSeconds, bot }
+ *   discussionSeconds: one discussion length for every proposal, for a test hive; 48 or 24 hours otherwise.
+ *   bot: HiveBot's key, when the events may come from outside the channel (forwarded to a host): a
+ *     member's node then counts only once HiveBot, which reads the channel itself, acknowledged it.
+ *   forwarded: the events may come from outside the channel, whether or not the host knows a bot: a
+ *     member's node then also counts once a keeper reacted ✅ to the message that names it.
+ */
+function coordinate(events, cfg) {
+    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {}, discussionSeconds: fixed, bot = null, forwarded = Boolean(bot) } = cfg;
+    const keeperSet = new Set(keepers);
+    const deleted = deletedIds(events);
+    const live = events.filter((e) => !deleted.has(e.id)).sort((a, b) => a.created_at - b.created_at);
+    // The node claims HiveBot acknowledged, when it vouches for them.
+    const acked = new Set(live.filter((e) => e.kind === 9 && e.pubkey === bot)
+        .flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "node-ack").map((t) => t[2])));
+    for (const e of live) if (e.kind === 7 && keeperSet.has(e.pubkey) && APPROVE.has(e.content.trim())) acked.add(target(e));
+
+    const nodes = {};
+    const keys = {};
+    let agent = null;
+    const proposals = new Map();
+    for (const e of live) {
+        if (e.kind !== 9) continue;
+        const node = parseNodeClaim(e.content);
+        if (node) { if (!forwarded || acked.has(e.id)) nodes[e.pubkey] = { node, at: e.created_at, eventId: e.id }; continue; }
+        // A keeper's treasury key counts only from that keeper; a later post replaces an earlier one.
+        const key = parseKeeperKey(e.content);
+        if (key) { if (keeperSet.has(e.pubkey)) keys[e.pubkey] = { key, at: e.created_at, eventId: e.id }; continue; }
+        // The community's own agent node, named by a keeper; the latest naming stands.
+        const agentKey = parseAgentKey(e.content);
+        if (agentKey) { if (keeperSet.has(e.pubkey)) agent = { key: agentKey, by: e.pubkey, at: e.created_at }; continue; }
+        if (target(e)) continue; // replies are read below
+        const p = parseProposal(e.content, tagValues(e, "p"));
+        if (!p) continue;
+        proposals.set(e.id, { id: proposalId(e.id), eventId: e.id, by: e.pubkey, postedAt: e.created_at, ...p, reportPlan: p.report,
+            support: new Set(), approvals: new Map(), declines: new Map(), replies: 0, reason: null, report: null, withdrawn: false });
+    }
+    for (const e of live) {
+        const p = proposals.get(target(e));
+        if (!p) continue;
+        if (e.kind === 7) {
+            const emoji = e.content.trim();
+            if (SUPPORT.has(emoji) && e.pubkey !== p.by) p.support.add(e.pubkey);
+            if (APPROVE.has(emoji) && keeperSet.has(e.pubkey)) p.approvals.set(e.pubkey, e.created_at);
+            if (DECLINE.has(emoji) && keeperSet.has(e.pubkey)) p.declines.set(e.pubkey, e.created_at);
+        } else if (e.kind === 9) {
+            p.replies += 1;
+            const text = e.content.trim();
+            if (keeperSet.has(e.pubkey) && /^declined\s*:/i.test(text)) p.reason = text.replace(/^declined\s*:\s*/i, "");
+            if (e.pubkey === p.by && /^withdraw(n)?\b/i.test(text)) p.withdrawn = true;
+            if (e.pubkey === p.by && /^report\s*:/i.test(text)) p.report = { text: text.replace(/^report\s*:\s*/i, ""), at: e.created_at };
+        }
+    }
+
+    const out = [];
+    for (const p of proposals.values()) {
+        const discussionEnds = p.postedAt + (fixed ?? discussionSeconds(p.budgetSats, smallSats));
+        const approvalTimes = [...p.approvals.values()].sort((a, b) => a - b);
+        const approvedAt = approvalTimes.length >= threshold ? Math.max(discussionEnds, approvalTimes[threshold - 1]) : null;
+        const starts = approvedAt === null ? null : Math.max(approvedAt, p.start ?? approvedAt);
+        const ends = approvedAt === null ? null : p.end ?? starts + DEFAULT_PERIOD;
+        const used = usage[p.id] ?? 0;
+        let state;
+        if (p.withdrawn) state = "withdrawn";
+        else if (p.declines.size) state = "declined";
+        else if (approvedAt === null || now < approvedAt) state = "open";
+        else if (now < starts) state = "approved";
+        else if (now < ends && used < p.budgetSats) state = "running";
+        else state = p.report ? "completed" : "lapsed";
+        out.push({
+            id: p.id, eventId: p.eventId, by: p.by, postedAt: p.postedAt,
+            title: p.title, budgetSats: p.budgetSats, start: p.start, end: p.end, who: p.who, named: p.named,
+            allowanceSats: p.allowanceSats, purpose: p.purpose, work: p.work, provider: p.provider, reportPlan: p.reportPlan,
+            state, discussionEnds, approvedAt, starts, ends, usedSats: used,
+            support: p.support.size, replies: p.replies,
+            approvals: [...p.approvals.keys()], declinedBy: [...p.declines.keys()], reason: p.reason,
+            report: p.report,
+        });
+    }
+    out.sort((a, b) => b.postedAt - a.postedAt);
+    return { proposals: out, nodes, keys, agent };
+}
+
+/**
+ * The agent's members file: each member's node with the running proposal it may use and that
+ * proposal's daily allowance. A member on several running proposals uses the most recently approved.
+ */
+function membersFile(result, { defaultAllowanceSats = 500, model } = {}) {
+    const members = {};
+    const running = result.proposals.filter((p) => p.state === "running").sort((a, b) => a.approvedAt - b.approvedAt);
+    const memberKeys = Object.keys(result.nodes);
+    for (const p of running) {
+        const who = p.who === "everyone" ? memberKeys : p.who === "named" ? p.named : [p.by];
+        for (const pubkey of who) {
+            const n = result.nodes[pubkey];
+            if (!n) continue;
+            members[n.node] = { name: pubkey.slice(0, 12), proposal: p.id, allowance_sats_per_day: p.allowanceSats ?? defaultAllowanceSats };
+        }
+    }
+    return { ...(model ? { model } : {}), members };
+}
+
+return { coordinate };
+})();
+
+const { onboardingPlan, recordFromChannel, keepersKeys } = (() => {
+
+// Setting up a hive in its community's channel, one message or reaction at a time. The bot asks,
+// members answer with ✅ or a message, and every answer is a signed Buzz event, so nobody copies
+// anyone else's key or a channel ID:
+//
+//   1. Keepers: the bot asks who will keep the treasury; each keeper reacts ✅.
+//   2. Confirm: once enough have, the member who authorized the bot confirms them with ✅.
+//   3. Plugin and keys: the bot says where to get the plugin, and asks each keeper to create a
+//      treasury key in the keeper console and post the line it gives them.
+//   4. Treasury: once every keeper's key is in, the bot says so, and posts the address once the
+//      host reports one.
+//   5. First proposal: the bot shows the format and closes the setup when one arrives.
+//
+// Pure, like the announcer: it reads the channel's events and the record of what it already said,
+// and returns what to say next. The caller posts, then stores each message's event ID.
+
+const YES = new Set(["✅", "✔️", "☑️"]);
+
+const tagValues = (e, name) => (e.tags ?? []).filter((t) => t[0] === name).map((t) => t[1]);
+/** Who reacted ✅ to `eventId`, in the order they first did, with removed reactions left out. */
+function yesVotes(events, eventId, { exclude = [], until = Infinity } = {}) {
+    // A deletion counts only for its author's own events.
+    const author = new Map(events.map((e) => [e.id, e.pubkey]));
+    const deleted = new Set(events.filter((e) => e.kind === 5).flatMap((d) => tagValues(d, "e").filter((id) => author.get(id) === d.pubkey)));
+    const first = new Map();
+    for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
+        if (e.kind !== 7 || deleted.has(e.id) || !YES.has(e.content.trim()) || e.created_at > until) continue;
+        if (!tagValues(e, "e").includes(eventId) || exclude.includes(e.pubkey) || first.has(e.pubkey)) continue;
+        first.set(e.pubkey, e.created_at);
+    }
+    return [...first.keys()];
+}
+
+/** "@A", "@A and @B", "@A, @B and @C". */
+function people(keys, name) {
+    const at = keys.map((k) => `@${name(k)}`);
+    return at.length <= 1 ? at.join("") : `${at.slice(0, -1).join(", ")} and ${at[at.length - 1]}`;
+}
+
+const EMPTY = Object.freeze({ v: 1, posts: {}, keepers: null, treasuryReady: false, done: false });
+
+/**
+ * What to post next.
+ *
+ * record: what the bot has said and decided (EMPTY to start).
+ * cfg: { events, bot, founder, needed, threshold, smallSats, state, proposals, name(pubkey), botName, install, console }
+ *   events: the channel's kind 9, 7 and 5 events; state: hive-api's state or null;
+ *   proposals: the coordinator's proposals, once keepers are set; name: a display name for a key.
+ * Returns { posts: [{ key, text, mentions, plugin }], record }: the record as it stands once the
+ * posts are sent; the caller adds each post's event ID under record.posts[key].
+ */
+function onboardingPlan(record, cfg) {
+    const { events = [], bot, founder, needed = 3, threshold = 2, smallSats = 20000, state = null, proposals = [], name = (k) => k.slice(0, 8), botName = "Hive",
+        install = "Download the attachment and unzip it, then in Buzz open Settings → Plugins → Manage plugins → Add → Browse and pick the folder.",
+        console: consoleUrl = null } = cfg;
+    const next = { ...record, posts: { ...record.posts } };
+    const posts = [];
+    if (next.done) return { posts, record: next };
+
+    if (!next.posts.call) {
+        posts.push({ key: "call", text: [
+            `Hi, I'm ${botName}. I'll set up a shared treasury for this community here in this channel, and each step is a message or a reaction.`,
+            "",
+            `First, keepers. Keepers hold the treasury's keys together: any ${threshold} of them approve work and sign payments, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅ to this message. It needs ${needed}.`,
+        ].join("\n") });
+        return { posts, record: next };
+    }
+
+    if (!next.keepers) {
+        const volunteers = yesVotes(events, next.posts.call, { exclude: [bot] });
+        if (!next.posts.confirm) {
+            if (volunteers.length >= needed) {
+                posts.push({ key: "confirm", mentions: [...volunteers, founder], text:
+                    `${volunteers.length} keepers so far: ${people(volunteers, name)}. ${people([founder], name)}, react ✅ here to confirm them. If someone is missing, have them react ✅ above first.` });
+            }
+            return { posts, record: next };
+        }
+        // Confirmed by the member who authorized the bot; keepers are whoever had volunteered by then.
+        const confirmedAt = events.find((e) => e.kind === 7 && e.pubkey === founder && YES.has(e.content.trim()) && tagValues(e, "e").includes(next.posts.confirm))?.created_at;
+        if (!yesVotes(events, next.posts.confirm, { exclude: [bot] }).includes(founder) || confirmedAt === undefined) return { posts, record: next };
+        const keepers = yesVotes(events, next.posts.call, { exclude: [bot], until: confirmedAt });
+        if (keepers.length < Math.max(needed, threshold)) return { posts, record: next };
+        next.keepers = keepers;
+        next.threshold = threshold;
+        posts.push({ key: "plugin", plugin: true, mentions: keepers, text: [
+            `Keepers are set: ${people(keepers, name)}. Any ${threshold} of them approve.`,
+            "",
+            `Next, the Hive plugin. It shows proposals as cards and adds a Propose button to this channel. ${install} Anyone here can install it, and the hive works without it too.`,
+        ].join("\n") });
+        posts.push({ key: "keys", mentions: keepers, text: [
+            `Keepers, your treasury keys next. Each of you creates one in the keeper console${consoleUrl ? ` at ${consoleUrl}` : ", which the Hive team shares with you"}. It stays on your own device, locked with your passkey, and signs only the payments you approve there yourself.`,
+            "",
+            "The console then asks you to save an encrypted backup. Put the file in iCloud Drive or Google Drive, and its passphrase somewhere else, such as your password manager: together they are the only way back to your key if this device or your passkey is lost.",
+            "",
+            "Then post the line the console gives you here, starting with “Hive keeper key:”.",
+        ].join("\n") });
+    }
+
+    // Each keeper's latest key, from that keeper only.
+    const keys = keepersKeys(events, next.keepers);
+    if (!next.posts["keys-in"] && Object.keys(keys).length === next.keepers.length) {
+        posts.push({ key: "keys-in", mentions: next.keepers, text:
+            `All ${next.keepers.length} keys are in, from ${people(next.keepers, name)}. The treasury is built from them, and any ${threshold} keepers sign its payments together.` });
+        next.keysIn = true;
+    }
+
+    // The treasury the host reports is announced only when it is this hive's: built from the keepers
+    // this channel confirmed and the keys they posted here and, on a shared service, kept there
+    // under this bot's own key. A host that answers for some other hive is not taken at its word.
+    const same = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
+    const ours = (s) => {
+        if (s.hive?.bot && s.hive.bot !== bot) return false;
+        const g = s.governance;
+        if (!g?.keeperKeys) return true;
+        return same(g.keepers ?? [], next.keepers) && same(g.keeperKeys.map(String), next.keepers.map((k) => String(keys[k] ?? "")));
+    };
+    const treasury = state?.treasury?.address && !state.demo && ours(state) ? state.treasury : null;
+    const chipIn = (t) => {
+        const ln = state?.chipIn?.lightningAddress;
+        return `The treasury is ready. ${ln ? `Chip in at ${ln}, or send to ${t.address}` : `Chip in by sending to ${t.address}`} from any Lightning or Arkade wallet. Every chip-in lands in the treasury as Bitcoin.`;
+    };
+    if (!next.posts.treasury && (next.keysIn || next.posts["keys-in"])) {
+        next.treasuryReady = Boolean(treasury);
+        posts.push({ key: "treasury", text: treasury
+            ? chipIn(treasury)
+            : "Next, the treasury: the address chip-ins go to and approved work is paid from. During the beta, the Hive team sets it up from the keepers' keys, and I'll post its address here once it's ready." });
+    } else if (next.posts.treasury && !next.treasuryReady && treasury) {
+        next.treasuryReady = true;
+        posts.push({ key: "treasury-ready", text: chipIn(treasury) });
+    }
+
+    if (!next.posts.propose) {
+        posts.push({ key: "propose", text: [
+            "Last step, the first proposal. Press Propose under the message box, or post a message like this one:",
+            "",
+            "Proposal: What the work is, in a few words",
+            "Budget: 20,000 sats",
+            "For: everyone, 500 sats a day",
+            "Purpose: Why it serves this community and what it produces",
+            "",
+            `Members react 👍 to support it. Discussion runs 48 hours, or 24 under ${smallSats.toLocaleString("en-US")} sats, and then ${threshold} keepers' ✅ approve it.`,
+        ].join("\n") });
+    } else if (proposals.length) {
+        const first = [...proposals].sort((a, b) => a.postedAt - b.postedAt)[0];
+        next.done = true;
+        posts.push({ key: "done", text: `The first proposal is in: “${first.title}”. That's the setup done. From here I'll post approvals, payouts and chip-ins in this channel.` });
+    }
+    return { posts, record: next };
+}
+
+/**
+ * The record, read back from the bot's own messages in the channel: each onboarding post carries a
+ * ["hive", key] tag, and the plugin post names the keepers in its "p" tags. So a bot that keeps no
+ * state of its own picks up where it left off.
+ */
+function recordFromChannel(events, bot, threshold) {
+    const record = { ...EMPTY, posts: {} };
+    for (const e of [...events].filter((e) => e.kind === 9 && e.pubkey === bot).sort((a, b) => a.created_at - b.created_at)) {
+        const tag = (e.tags ?? []).find((t) => t[0] === "hive");
+        if (!tag || record.posts[tag[1]]) continue;
+        record.posts[tag[1]] = e.id;
+        if (tag[1] === "plugin") {
+            record.keepers = (e.tags ?? []).filter((t) => t[0] === "p").map((t) => t[1]);
+            record.threshold = threshold;
+        }
+        if (tag[1] === "treasury-ready" || (tag[1] === "treasury" && tag[2] === "ready")) record.treasuryReady = true;
+        if (tag[1] === "done") record.done = true;
+    }
+    return record;
+}
+
+/** Each keeper's latest `Hive keeper key:` post, keyed by the keeper, ignoring everyone else's. */
+function keepersKeys(events, keepers) {
+    const out = {};
+    for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
+        if (e.kind !== 9 || !keepers.includes(e.pubkey)) continue;
+        const key = parseKeeperKey(e.content);
+        if (key) out[e.pubkey] = key;
+    }
+    return out;
+}
+
+return { onboardingPlan, recordFromChannel, keepersKeys };
+})();
+
+// What the Hive guide knows about how a hive works, and the instructions it starts with. The guide
+// is a Goose agent the community owner adds in Buzz; the Hive plugin gives it this through the
+// hive_guide tool and live figures through hive_status and hive_proposals. Inlined into the plugin.
+
+const GUIDE_NAME = "Hive guide";
+const GOOSE_TYPE = "buzz.goose/goose";
+
+/** How a hive works, in the plugin's own words: what the guide answers questions from. */
+const HOW_IT_WORKS = `
+How a hive works
+
+A hive is a community's shared Bitcoin treasury for open AI. Members chip in, propose work, and
+spend approved budgets on AI models that MeshLLM providers serve. Keepers hold the treasury's keys
+together; any two of them sign each payment.
+
+Proposals. A member posts a message starting with "Proposal:" in the hive's channel, with Budget,
+For and Purpose lines (Work, Provider and Report are optional), or presses the hexagon button under
+the message box. Members react 👍 to support it. Discussion runs 48 hours, or 24 hours under the
+small-proposal threshold (20,000 sats unless the hive set another). Then two keepers react ✅ to
+approve it; one keeper's ❌ with "Declined: <reason>" in the thread declines it. The proposer can
+reply "Withdrawn" to stop it, and "Report: <link or text>" to close it out. An approved budget runs
+from its dates, or 30 days from approval.
+
+Allowances. A running proposal for "everyone", for named members or for the proposer gives each
+of them a daily allowance. A member spends it through the hive's agent: from their own MeshLLM node
+after posting "Hive node: <node id>" in the channel, or by asking the hive's agent.
+
+Keepers. Keepers volunteer when HiveBot asks during setup, by reacting ✅, and the community owner
+confirms them. Each keeper creates a treasury key in the keeper console: it is made on their own
+device and locked with their passkey, and the key never leaves the device. The console then has
+them save an encrypted backup file; the best place is iCloud Drive or Google Drive, with the
+passphrase kept somewhere else, such as a password manager. File and passphrase together restore
+the key on another device. A keeper then posts the line the console gives them, "Hive keeper key:
+<key>", in the channel from their own account, which ties the key to them.
+
+Payments. Approving a proposal and paying for its work are separate decisions. When a job needs
+funding, keepers are notified in Buzz, open the request in the keeper console, check the amount,
+the escrow, the provider and what is left of the budget, and sign with their passkey. Two keepers
+sign; the first confirms once more to send it. Nobody, and nothing, signs for a keeper. Each job's
+money sits in an escrow: the provider is paid what the agent's signed receipts show, the rest goes
+back to the treasury, and an unclaimed escrow returns whole at its deadline with no one's signature.
+
+Chipping in. Anyone can send sats to the hive's Lightning address or its treasury address from any
+Lightning or Arkade wallet. Chip-ins are donations toward the hive's purpose and land in the
+treasury as Bitcoin.
+
+What nobody can do. No one moves treasury funds alone, keepers included. The plugin, HiveBot and the
+guide hold no keys and cannot sign or move money.
+`.trim();
+
+/** The instructions the guide is created with. */
+const GUIDE_INSTRUCTIONS = `
+You are the Hive guide for this community's hive: a shared Bitcoin treasury for open AI, kept in
+this Buzz community. You answer members' and keepers' questions about how the hive works and where
+it stands, and help them take the next step themselves.
+
+Before you answer, call hive_guide for how the hive works, and hive_status or hive_proposals for
+anything about the treasury, proposals, budgets, jobs or keepers. For details the guide does not
+cover, such as safeguards, escrows, providers or the keeper console, call hive_docs with a topic: it
+reads Hive's own documentation, and you can point people to the repository it comes from. Never state a number, a date, a
+name or a decision you did not just read from those tools. If they do not have it, say you do not
+know and who would: the keepers, or the community owner.
+
+You cannot sign, move money or decide anything, and you never will. Never ask for, accept or repeat
+a private key, a backup file, a passphrase or a recovery phrase; if someone shares one, tell them to
+treat it as exposed and to create a new key in the keeper console. Point keepers to the keeper
+console for keys and payments, and members to the Propose button or a "Proposal:" message for
+proposals.
+
+Write the way Buzz does: plain, second person and short, a few sentences at most, in flowing prose
+rather than lists unless someone asks for steps, never opening a sentence with "And" or "But", and
+always writing "Bitcoin" with a capital B.
+`.trim();
+
+
+const { UNITS, savedUnit, saveUnit, amountParts, formatAmount } = (() => {
+// How Hive shows an amount, in the unit the viewer chose: ₿ (Bitcoin's smallest unit written the way
+// Spiral proposes, so ₿1 is one sat and ₿20,000 is twenty thousand of them), sats, BTC, or US dollars
+// at the current Bitcoin price. Amounts are kept and sent in sats everywhere; only the display changes.
+// The Buzz plugin build inlines this file, and the keeper console bundles it.
+
+/** The units a viewer can choose, with a sample of each. */
+const UNITS = [
+    { id: "bitcoin", label: "Bitcoin (₿)", sample: "₿20,000", note: "Bitcoin's smallest unit, as Spiral writes it: ₿1 is one sat." },
+    { id: "sats", label: "Sats", sample: "20,000 sats", note: "The same unit, by its usual name." },
+    { id: "btc", label: "BTC", sample: "0.0002 BTC", note: "Whole Bitcoin, to eight decimal places." },
+    { id: "usd", label: "US dollars", sample: "$13.45", note: "At the current Bitcoin price, rounded to the cent." },
+];
+const DEFAULT_UNIT = "bitcoin";
+const UNIT_KEY = "hive.amounts.v1";
+const known = (u) => UNITS.some((x) => x.id === u);
+
+/** The viewer's unit, kept in this browser. */
+function savedUnit(storage = globalThis.localStorage) {
+    try {
+        const u = storage?.getItem(UNIT_KEY);
+        return known(u) ? u : DEFAULT_UNIT;
+    } catch {
+        return DEFAULT_UNIT;
+    }
+}
+
+function saveUnit(u, storage = globalThis.localStorage) {
+    if (!known(u)) return;
+    try {
+        storage?.setItem(UNIT_KEY, u);
+    } catch {
+        // private browsing: the choice lasts until the page closes
+    }
+}
+
+const whole = new Intl.NumberFormat();
+const btc = new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 });
+const usd = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * An amount in sats as its parts, so a page can set the number apart from its unit. `exact` asks for a
+ * unit that states the amount to the sat: dollars then give way to ₿, as they do with no price.
+ */
+function amountParts(sats, unit, usdPerBtc, exact = false) {
+    if (sats === null || sats === undefined || !Number.isFinite(sats)) return { pre: "", num: "–", post: "" };
+    const u = unit === "usd" && (exact || !(usdPerBtc > 0)) ? DEFAULT_UNIT : unit;
+    if (u === "sats") return { pre: "", num: whole.format(sats), post: " sats" };
+    if (u === "btc") return { pre: "", num: btc.format(sats / 1e8), post: " BTC" };
+    if (u === "usd") {
+        const v = (sats / 1e8) * usdPerBtc;
+        return v > 0 && v < 0.01 ? { pre: "<$", num: "0.01", post: "" } : { pre: "$", num: usd.format(v), post: "" };
+    }
+    return { pre: "₿", num: whole.format(sats), post: "" };
+}
+
+function formatAmount(sats, unit, usdPerBtc, exact = false) {
+    const p = amountParts(sats, unit, usdPerBtc, exact);
+    return `${p.pre}${p.num}${p.post}`;
+}
+
+return { UNITS, savedUnit, saveUnit, amountParts, formatAmount };
+})();
+
+// Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
+const INSTALL = "https://github.com/brg444/hive#plugin";
+// The keeper console, where keepers create their treasury keys and sign payments, when built with --console.
+const KEEPER_CONSOLE = "https://brg444.github.io/hive/keeper/";
+// The repository's documentation as one Markdown file, for the Hive guide, when built with --docs.
+const HIVE_DOCS = "https://brg444.github.io/hive/docs/hive-docs.md";
+
+const STATUS = {
+    offered: "Offered",
+    awaiting_funding: "Awaiting funding",
+    open: "Open",
+    closing: "Closing",
+    claimed: "Paid",
+    returned: "Returned",
+    declined: "Declined",
+    lapsed: "Lapsed",
+};
+const STAGE = {
+    open: "Open for discussion",
+    approved: "Approved",
+    running: "Running",
+    completed: "Completed",
+    lapsed: "Ended",
+    declined: "Declined",
+    withdrawn: "Withdrawn",
+};
+const APPROVE = ["✅", "✔️", "☑️"];
+const SUPPORT = ["👍", "+", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤️", "🙌"];
+
+const nf = new Intl.NumberFormat();
+// Sats for what agents read and what the bot posts, the unit every client parses. What a member sees
+// on screen reads in the unit they chose in Settings, through `amount`.
+const sats = (n) => (n === null || n === undefined ? "–" : `${nf.format(n)} sats`);
+let unit = savedUnit();
+let usdPerBtc = null;
+const amount = (n, exact = false) => formatAmount(n, unit, usdPerBtc, exact);
+const short = (s, head = 10, tail = 6) => (!s ? "–" : s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`);
+const modelName = (m) => (m ? (m.startsWith("local-gguf/sha256-") ? `local model ${m.slice(18, 26)}` : m) : "–");
+const RAIL = { lightning: "Lightning", arkade: "Arkade", onchain: "on-chain Bitcoin" };
+const rail = (r) => RAIL[r] ?? (r?.startsWith("ff-") ? "a stablecoin deposit" : r ?? "–");
+const when = (unix) => (unix ? new Date(unix * 1000).toLocaleString() : "–");
+const stamp = (unix) => (unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
+const day = (unix) => (unix ? new Date(unix * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "–");
+const nowS = () => Math.floor(Date.now() / 1000);
+function until(unix) {
+    if (!unix) return "–";
+    const s = unix - nowS();
+    const abs = Math.abs(s);
+    const text = abs < 3600 ? `${Math.max(1, Math.round(abs / 60))} min` : abs < 172800 ? `${Math.round(abs / 3600)} h` : `${Math.round(abs / 86400)} days`;
+    return s >= 0 ? `in ${text}` : `${text} ago`;
+}
+
+/** Proposals a member may spend from: everyone's, those naming them, and their own. */
+function allowancesFor(gov, viewer) {
+    if (!gov || !viewer) return [];
+    return gov.proposals.filter((p) => p.state === "running" && (p.who === "everyone" || p.by === viewer || (p.who === "named" && p.named.includes(viewer))));
+}
+
+/** The hive's channel and keepers: built into the plugin, or as the host reports them. */
+function configFrom(state) {
+    const c = CONFIG ?? (state?.governance?.channelId ? state.governance : null);
+    if (!c?.channelId) return null;
+    return { channelId: c.channelId, keepers: c.keepers ?? [], threshold: c.threshold ?? 2, smallSats: c.smallSats ?? 20000,
+        // A test hive discusses every proposal for the same short time.
+        ...(Number.isSafeInteger(c.discussionSeconds) ? { discussionSeconds: c.discussionSeconds } : {}) };
+}
+
+/**
+ * Where proposals stand. From the channel's own events when the plugin can read them, which is
+ * live and needs nothing else running; from the host's record otherwise.
+ */
+function governanceFrom(state, events) {
+    const cfg = configFrom(state);
+    if (!cfg) return null;
+    if (events) {
+        const usage = Object.fromEntries((state?.proposals ?? []).map((b) => [b.proposal, b.usedSats]));
+        const r = coordinate(events, { ...cfg, now: nowS(), usage });
+        const members = Object.fromEntries(Object.entries(r.nodes).map(([k, v]) => [k, { node: v.node }]));
+        const keys = Object.fromEntries(Object.entries(r.keys ?? {}).map(([k, v]) => [k, v.key]));
+        return { ...cfg, proposals: r.proposals, members, keys, source: "channel" };
+    }
+    const g = state?.governance;
+    if (g?.channelId === cfg.channelId) {
+        // The host lists each keeper's treasury key in the keepers' order.
+        const keys = Object.fromEntries((g.keepers ?? []).map((k, i) => [k, g.keeperKeys?.[i]]).filter(([, key]) => key));
+        return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, keys, source: "host" };
+    }
+    return { ...cfg, proposals: [], members: {}, source: "none" };
+}
+
+/** A one-line account of the hive, for agents in the community. */
+function summarize(state, gov) {
+    if (!state && !gov) return "The hive's state has not loaded yet.";
+    const lines = [];
+    if (state) {
+        const open = state.jobs.filter((j) => j.status === "open");
+        lines.push(
+            `${state.name}: treasury ${sats(state.treasury.balanceSats)}.`,
+            state.chipIn?.lightningAddress ? `Chip in at ${state.chipIn.lightningAddress}.` : null,
+            `${open.length} open job(s), ${state.funding.length} awaiting funding by keepers.`,
+            ...state.funding.map((j) => `- Fund ${sats(j.capSats)} to ${j.escrowAddress} for ${modelName(j.model)} (deadline ${when(j.deadline)}).`),
+        );
+    }
+    lines.push(...(gov?.proposals ?? []).filter((p) => ["open", "approved", "running"].includes(p.state)).map((p) =>
+        `- Proposal ${p.id} "${p.title}": ${STAGE[p.state]}, ${sats(p.budgetSats)}${p.state === "running" ? `, ${sats(p.usedSats)} used` : ""}, ${p.support} support, ${p.approvals.length} keeper approval(s).`));
+    if (state) {
+        lines.push(
+            ...(gov ? [] : (state.proposals ?? []).map((b) => `- Budget ${b.proposal}: ${sats(b.usedSats)} used by ${b.members} member(s) over ${b.requests} request(s).`)),
+            state.agent ? `Members install with the hive's agent's node id ${state.agent.nodeId}.` : null,
+            ...state.providers.map((p) => `- Provider ${short(p.providerPk ?? p.providerPeer)}: earned ${sats(p.earnedSats)}, ${p.openJobs} open.`),
+        );
+    }
+    lines.push(`Members propose work in the hive's channel with a message starting "Proposal:"; 👍 supports it and ${gov?.threshold ?? 2} keepers' ✅ approve it.`);
+    return lines.filter(Boolean).join("\n");
+}
+
+export function apply(ctx) {
+    const React = ctx.react;
+    const h = React.createElement;
+
+    // One snapshot shared by every view, the agent tool and notifications.
+    let snapshot = { state: null, error: null, loadedAt: 0, gov: null };
+    let channelEvents = null;
+    const listeners = new Set();
+    const publish = (next) => {
+        if (next.state?.price?.usdPerBtc > 0) usdPerBtc = next.state.price.usdPerBtc;
+        snapshot = { ...next, gov: governanceFrom(next.state, channelEvents) };
+        for (const listener of listeners) listener(snapshot);
+        notify();
+    };
+    function useSnapshot() {
+        const [view, setView] = React.useState(snapshot);
+        React.useEffect(() => {
+            listeners.add(setView);
+            setView(snapshot);
+            return () => listeners.delete(setView);
+        }, []);
+        return view;
+    }
+    /** The Buzz key of whoever is looking, when the community is connected. */
+    function viewer() {
+        try {
+            const s = ctx.relay?.snapshot?.();
+            return s?.viewer ?? s?.session?.viewer ?? null;
+        } catch {
+            return null;
+        }
+    }
+    const isHiveChannel = (channelId) => Boolean(channelId && snapshot.gov?.channelId === channelId);
+
+    const funding = ctx.notifications.register({ id: "funding", label: "Hive funding requests" });
+    const decisions = ctx.notifications.register({ id: "decisions", label: "Hive proposals waiting for keepers" });
+    const announced = new Set();
+    const pageTarget = { version: 1, kind: "plugin", pluginId: PLUGIN_ID, pageId: "main" };
+
+    /** Each job that needs keepers, and each proposal waiting on this keeper, is announced once. */
+    function notify() {
+        const { state, gov } = snapshot;
+        const name = state?.name ?? HIVE_NAME;
+        for (const job of state?.funding ?? []) {
+            if (announced.has(`f:${job.jobId}`)) continue;
+            announced.add(`f:${job.jobId}`);
+            funding.submit({ sourceKey: `funding:${job.jobId}`, target: pageTarget,
+                title: `${name}: a job needs funding`, body: `${amount(job.capSats)} for ${modelName(job.model)}, before ${when(job.deadline)}.` })?.catch?.(() => {});
+        }
+        const me = viewer();
+        if (!me || !gov?.keepers.includes(me)) return;
+        for (const p of gov.proposals) {
+            if (p.state !== "open" || p.discussionEnds > nowS() || p.approvals.includes(me) || announced.has(`d:${p.id}`)) continue;
+            announced.add(`d:${p.id}`);
+            decisions.submit({ sourceKey: `decide:${p.id}`, target: pageTarget,
+                title: `${name}: “${p.title}” is ready for keepers`, body: `${amount(p.budgetSats)}, ${p.support} members support it. React ✅ to approve or ❌ to decline.` })?.catch?.(() => {});
+        }
+    }
+
+    // ---- Finding the hive on the shared service ---------------------------------------------
+    // The community's hive is the one HiveBot set up in one of its channels. The plugin asks the
+    // service for its community's hives, and checks each channel it is shown, once.
+    const probed = new Set();
+    const community = () => {
+        try { return String(ctx.relay?.snapshot?.()?.scope ?? ""); } catch { return ""; }
+    };
+    async function tryChannel(channelId) {
+        if (!SERVICE || hiveApi || !channelId || probed.has(channelId)) return false;
+        probed.add(channelId);
+        try {
+            const res = await ctx.host.request({ url: `${SERVICE}/c/${channelId}/hive/v1/state`, timeoutMs: 15_000 });
+            if (res.status !== 200) return false;
+            hiveApi = `${SERVICE}/c/${channelId}`;
+            return true;
+        } catch { return false; }
+    }
+    async function findHive() {
+        if (!SERVICE || hiveApi) return;
+        try {
+            const res = await ctx.host.request({ url: `${SERVICE}/hives?community=${encodeURIComponent(community())}`, timeoutMs: 15_000 });
+            if (res.status === 200) for (const h of JSON.parse(res.body).hives ?? []) if (await tryChannel(h.channelId)) return;
+        } catch { /* asked again on the next poll */ }
+    }
+    /** A channel the member is looking at: the hive's, perhaps. */
+    function noteChannel(channelId) {
+        if (SERVICE && !hiveApi && channelId && !probed.has(channelId)) void tryChannel(channelId).then((found) => found && load());
+    }
+    /** HiveBot's setup asks the service for a hive in its channel, with its first setup message as proof. */
+    async function askForHive(handle, channelId, events) {
+        if (!SERVICE) return;
+        const call = events.find((e) => e.pubkey === handle.pubkey && (e.tags ?? []).some((t) => t[0] === "hive" && t[1] === "call"));
+        if (!call?.sig) return;
+        try {
+            const res = await ctx.host.request({ url: `${SERVICE}/hives`, method: "POST", headers: { "content-type": "application/json" },
+                body: JSON.stringify({ channelId, community: community(), name: HIVE_NAME, call }), timeoutMs: 15_000 });
+            // A hive the service opened in this channel under another key is not this bot's: left alone.
+            const asked = res.status === 200 ? JSON.parse(res.body) : null;
+            if (asked?.status === "approved" && asked.bot !== handle.pubkey) return;
+            probed.delete(channelId);
+            if (await tryChannel(channelId)) void load();
+        } catch { /* asked again on the next pass */ }
+    }
+
+    async function load() {
+        try {
+            if (!hiveApi) await findHive();
+            if (!hiveApi) return publish({ ...snapshot, state: null, error: null, loadedAt: Date.now() });
+            const res = await ctx.host.request({ url: `${hiveApi}/hive/v1/state`, timeoutMs: 15_000 });
+            if (res.status !== 200) throw new Error(`the hive's host answered ${res.status}`);
+            const state = JSON.parse(res.body);
+            if (state?.v !== 1) throw new Error("the hive's host speaks another version");
+            // A new hive has no treasury until its keepers' keys are in.
+            state.treasury ??= { address: null, balanceSats: null };
+            publish({ ...snapshot, state, error: null, loadedAt: Date.now() });
+            // Whatever the host has not taken yet is sent again: a hive just opened on the service
+            // gets its channel without waiting for the next message in it.
+            if (channelEvents) forward(channelEvents);
+        } catch (e) {
+            publish({ ...snapshot, error: String(e?.message ?? e) });
+        }
+    }
+
+    ctx.effect(() => {
+        let timer;
+        let stopped = false;
+        const tick = async () => {
+            await load();
+            // A little jitter so a community's clients do not all ask the host at once.
+            if (!stopped) timer = setTimeout(tick, POLL_MS + Math.floor(Math.random() * 5_000));
+        };
+        timer = setTimeout(tick, Math.floor(Math.random() * 1_000));
+        return () => {
+            stopped = true;
+            clearTimeout(timer);
+        };
+    });
+
+    // The hive's host has no Buzz key of its own, so each member's plugin forwards the channel's
+    // signed events to it: the host checks every signature and works out proposals and members
+    // itself. Only events it has not been sent are sent, a few seconds after they arrive.
+    const forwarded = new Set();
+    let forwardTimer = null;
+    let forwarding = true;
+    function forward(events) {
+        if (!forwarding) return;
+        // A hive still waiting for the service's operator keeps nothing: sent once it is open.
+        if (snapshot.state?.hive && snapshot.state.hive.status !== "approved") return;
+        clearTimeout(forwardTimer);
+        forwardTimer = setTimeout(async () => {
+            const fresh = events.filter((e) => e.sig && e.id && !forwarded.has(e.id));
+            if (!fresh.length) return;
+            try {
+                if (!hiveApi) return;
+                const res = await ctx.host.request({ url: `${hiveApi}/hive/v1/channel`, method: "POST", headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ events: fresh.map(({ id, pubkey, created_at, kind, tags, content, sig }) => ({ id, pubkey, created_at, kind, tags, content, sig })) }),
+                    timeoutMs: 30_000 });
+                // A host that does not take the channel says so once; this plugin then stops asking.
+                if (res.status === 404) { forwarding = false; return; }
+                if (res.status === 200) for (const e of fresh) forwarded.add(e.id);
+            } catch { /* tried again with the next event */ }
+        }, 3_000 + Math.floor(Math.random() * 4_000));
+    }
+
+    // The hive's channel, read through the community connection Buzz already has: proposals,
+    // reactions and deletions from the last few months, kept live as new ones arrive.
+    ctx.effect(() => {
+        let view = null;
+        let stopView = null;
+        let key = null;
+        const recompute = () => {
+            const events = (view?.snapshot().events ?? []).filter((e) => e.delivery !== "failed");
+            channelEvents = view ? events : null;
+            publish(snapshot);
+            if (view) forward(events);
+        };
+        const detach = () => {
+            stopView?.();
+            view?.dispose?.();
+            view = stopView = null;
+            if (channelEvents) {
+                channelEvents = null;
+                publish(snapshot);
+            }
+        };
+        const attach = () => {
+            let relay;
+            try { relay = ctx.relay?.snapshot?.(); } catch { relay = null; }
+            const cfg = configFrom(snapshot.state);
+            const session = relay?.session;
+            const next = cfg && typeof session?.observe === "function" ? `${relay.scope ?? relay.generation}:${cfg.channelId}` : null;
+            if (next === key) return;
+            key = next; // before detaching, which publishes and calls back here
+            detach();
+            if (!next) return;
+            const since = nowS() - LOOKBACK_DAYS * 86400;
+            const channel = [cfg.channelId];
+            try {
+                view = session.observe([
+                    { kinds: [9], "#h": channel, since, limit: 1000 },
+                    { kinds: [7], "#h": channel, since, limit: 2000 },
+                    { kinds: [5], "#h": channel, since, limit: 500 },
+                ]);
+            } catch {
+                view = null;
+                return;
+            }
+            stopView = view.subscribe(recompute);
+            recompute();
+            view.refresh?.();
+        };
+        const stopRelay = ctx.relay?.subscribe?.(attach);
+        listeners.add(attach);
+        attach();
+        // Live events reach the view while Buzz follows the channel; a refresh catches the rest.
+        const refresher = setInterval(() => view?.refresh?.(), 120_000);
+        return () => {
+            clearInterval(refresher);
+            listeners.delete(attach);
+            stopRelay?.();
+            detach();
+        };
+    });
+
+    // ---- HiveBot: an agent of the plugin's own type --------------------------------------
+    // The owner creates it on the Agents page and adds it to the hive's channel. Buzz holds its key
+    // and signs it into the community, so it posts as itself wherever the community requires
+    // sign-in. It needs no model: it answers mentions with the hive's status, and says hello once.
+    const BOT_TYPE = `${PLUGIN_ID}/bot`;
+    const botTag = (key) => ["hive", key];
+    /** A line or two about where the hive stands, for a mention or the hello. */
+    function statusText() {
+        const { state, gov } = snapshot;
+        const open = (gov?.proposals ?? []).filter((p) => p.state === "open");
+        const running = (gov?.proposals ?? []).filter((p) => p.state === "running");
+        const parts = [
+            state ? `The treasury holds ${sats(state.treasury.balanceSats)}.` : null,
+            open.length ? `${open.length} proposal${open.length === 1 ? " is" : "s are"} open: ${open.map((p) => `“${p.title}”`).join(", ")}.` : "No proposal is open.",
+            running.length ? `${running.length} budget${running.length === 1 ? " is" : "s are"} running.` : null,
+            state?.funding.length ? `${state.funding.length} job${state.funding.length === 1 ? " is" : "s are"} waiting for keepers to fund.` : null,
+        ];
+        return parts.filter(Boolean).join(" ");
+    }
+    /** Reply tags for a message: its thread's root, the message itself, and its author. */
+    function replyTags(event, channelId) {
+        const root = (event.tags ?? []).find((t) => t[0] === "e" && t[3] === "root")?.[1] ?? event.id;
+        return [["h", channelId], ["e", root, "", "root"], ["e", event.id, "", "reply"], ["p", event.pubkey]];
+    }
+    ctx.agents.register?.({
+        id: "bot",
+        title: "Hive bot",
+        description: "Posts what happens in the hive into its channel as itself, and answers mentions with the hive's status. It needs no model and runs while Buzz is open on this computer.",
+        defaults: () => ({ config: {} }),
+        summary: () => "Hive bot",
+        async run(delivery) {
+            const t = delivery.trigger;
+            if (t?.type !== "mention" || !delivery.channelId) {
+                delivery.ignored?.();
+                return;
+            }
+            delivery.acknowledged?.();
+            if (!snapshot.state) await load();
+            const handle = delivery.agent;
+            if (SETUP.test(t.event.content ?? "")) {
+                if (t.event.pubkey !== handle.owner) {
+                    await handle.publish({ kind: 9, content: "Only the member who created me can start a hive's setup.", tags: replyTags(t.event, delivery.channelId) });
+                    return;
+                }
+                const needed = Math.max(2, Math.min(9, Number(/(\d+)\s*keepers?/i.exec(t.event.content)?.[1] ?? 3)));
+                const posted = await onboardIn({ pubkey: handle.pubkey, name: handle.name, owner: handle.owner }, handle, delivery.channelId, { start: true, needed });
+                if (!posted) await handle.publish({ kind: 9, content: "Setup is already under way in this channel: react ✅ to my message above if you'll keep the treasury.", tags: replyTags(t.event, delivery.channelId) });
+                return;
+            }
+            if (ADD_GUIDE.test(t.event.content ?? "")) {
+                await handle.publish({ kind: 9, content: await addGuide(handle, t.event), tags: replyTags(t.event, delivery.channelId) });
+                return;
+            }
+            if (UPDATE_GUIDE.test(t.event.content ?? "")) {
+                await handle.publish({ kind: 9, content: await updateGuide(handle, t.event), tags: replyTags(t.event, delivery.channelId) });
+                return;
+            }
+            // Questions go to the guide, when the owner has one; HiveBot itself only states where the hive stands.
+            const guide = guideFor(handle.owner);
+            if (guide && !STATUS.test(t.event.content ?? "")) {
+                const root = replyTags(t.event, delivery.channelId)[1][1];
+                ctx.agents.wake(guide.key, { channel: delivery.channelId, root, text:
+                    `A member asked HiveBot in this thread: “${(t.event.content ?? "").slice(0, 2000)}”. Answer them here, using the hive tools.` });
+                await handle.publish({ kind: 7, content: "👀", tags: [["h", delivery.channelId], ["e", t.event.id], ["p", t.event.pubkey]] }).catch(() => {});
+                return;
+            }
+            await handle.publish({ kind: 9, content: guide ? statusText() : `${statusText()} For other questions, the community owner can add a guide: mention me with “add a guide”.`,
+                tags: replyTags(t.event, delivery.channelId) });
+        },
+    });
+    const STATUS = /\b(status|where|treasury|balance|budget)\b/i;
+    const ADD_GUIDE = /\badd\b.*\bguide\b/i;
+    const UPDATE_GUIDE = /\bupdate\b.*\bguide\b/i;
+    /** Asks Buzz, for the owner to review, to give the guide the current instructions. */
+    async function updateGuide(handle, event) {
+        if (event.pubkey !== handle.owner) return "Only the member who created me can update the guide.";
+        if (!guideFor(handle.owner)) return `There is no ${GUIDE_NAME} here yet: mention me with “add a guide”.`;
+        if (typeof handle.updateAgent !== "function") return `This Buzz can't change agents for me. Paste the instructions from shared/guide.mjs in the Hive repository into ${GUIDE_NAME}'s settings.`;
+        await handle.updateAgent({ agent: GUIDE_NAME, instructions: GUIDE_INSTRUCTIONS });
+        return `I've asked Buzz to give ${GUIDE_NAME} the current instructions. Review the change on the Agents page.`;
+    }
+    /** The owner's Hive guide running on this computer: a Goose agent by that name. */
+    function guideFor(owner) {
+        if (typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.wake !== "function") return null;
+        return (ctx.agents.snapshot()?.running ?? []).find((a) => a.type === GOOSE_TYPE && a.name === GUIDE_NAME && (!owner || a.owner === owner)) ?? null;
+    }
+    /** Asks Buzz, for the owner to review, to create the guide with its instructions. */
+    async function addGuide(handle, event) {
+        if (event.pubkey !== handle.owner) return "Only the member who created me can add a guide.";
+        if (guideFor(handle.owner)) return `${GUIDE_NAME} is already here. Mention it, or me, with a question; mention me with “update the guide” to give it the current instructions.`;
+        if (typeof handle.createAgent !== "function") {
+            return `This Buzz can't create agents for me. Create a Goose agent named ${GUIDE_NAME} on the Agents page, give it the Hive guide instructions from the Hive repository, and add it to this channel.`;
+        }
+        await handle.createAgent({ type: GOOSE_TYPE, name: GUIDE_NAME, instructions: GUIDE_INSTRUCTIONS });
+        return `I've asked Buzz to create ${GUIDE_NAME}, a Goose agent with the hive's instructions and tools. Review it on the Agents page and add it to this channel; from then on I'll pass questions to it.`;
+    }
+    // Onboarding: the owner mentions HiveBot asking to set up, and HiveBot walks the channel through
+    // keepers, the plugin, the treasury and the first proposal. Where it stands is read back from
+    // its own tagged messages, so a restart, another computer or a reload picks up where it left off.
+    const SETUP = /\b(set\s*up|setup|onboard)\b/i;
+    function installText() {
+        if (!INSTALL) return "The community owner shares it; in Buzz it installs from Settings → Plugins → Manage plugins → Add.";
+        const [repository, ref] = INSTALL.split("#");
+        return `In Buzz, open Settings → Plugins → Manage plugins → Add → Add from Git, with ${repository} and the branch ${ref}.`;
+    }
+    /** Display names from Buzz profiles, as the bot reads them. */
+    async function profileNames(handle, keys) {
+        if (!keys.length) return {};
+        const events = await handle.query([{ kinds: [0], authors: keys, limit: keys.length * 2 }]).catch(() => []);
+        const out = {};
+        for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
+            try {
+                const p = JSON.parse(e.content);
+                const name = p.display_name || p.displayName || p.name;
+                if (name) out[e.pubkey] = String(name).slice(0, 60);
+            } catch { /* not a profile */ }
+        }
+        return out;
+    }
+    const busy = new Set();
+    /** One onboarding pass in a channel; returns how many messages it posted. */
+    async function onboardIn(bot, handle, channelId, { start = false, needed: asked } = {}) {
+        const key = `${bot.pubkey}:${channelId}`;
+        if (busy.has(key)) return 0;
+        busy.add(key);
+        try {
+            const since = nowS() - 30 * 86400;
+            const channel = [channelId];
+            const events = await handle.query([
+                { kinds: [9], "#h": channel, since, limit: 500 },
+                { kinds: [7], "#h": channel, since, limit: 1000 },
+                { kinds: [5], "#h": channel, since, limit: 200 },
+            ]);
+            const cfg = configFrom(snapshot.state);
+            const threshold = cfg?.channelId === channelId ? cfg.threshold : 2;
+            const smallSats = cfg?.smallSats ?? 20000;
+            const record = recordFromChannel(events, bot.pubkey, threshold);
+            if (!record.posts.call && !start) return 0;
+            if (record.done) return 0;
+            const call = events.find((e) => e.id === record.posts.call);
+            const needed = Number(/needed=(\d+)/.exec((call?.tags ?? []).find((t) => t[0] === "hive")?.[2] ?? "")?.[1] ?? asked ?? 3);
+            const proposals = record.keepers ? coordinate(events, { keepers: record.keepers, threshold, smallSats }).proposals : [];
+            const founder = handle.owner ?? bot.owner;
+            const names = await profileNames(handle, [...new Set([founder, ...events.filter((e) => e.kind === 7).map((e) => e.pubkey)])]);
+            const { posts, record: next } = onboardingPlan(record, { events, bot: bot.pubkey, founder, needed, threshold, smallSats,
+                state: snapshot.state, proposals, name: (k) => names[k] ?? k.slice(0, 8), botName: bot.name, install: installText(), console: KEEPER_CONSOLE });
+            for (const post of posts) {
+                const extra = post.key === "call" ? [`needed=${needed}`] : post.key === "treasury" && next.treasuryReady ? ["ready"] : [];
+                await handle.publish({ kind: 9, content: post.text,
+                    tags: [["h", channelId], ["hive", post.key, ...extra], ...(post.mentions ?? []).map((k) => ["p", k])] });
+            }
+            // On the shared service, the setup asks for this channel's hive, proving it with HiveBot's first message.
+            if (SERVICE && !hiveApi) {
+                const mine = posts.some((p) => p.key === "call")
+                    ? await handle.query([{ kinds: [9], "#h": channel, authors: [bot.pubkey], since, limit: 50 }]).catch(() => [])
+                    : events;
+                await askForHive({ ...handle, pubkey: handle.pubkey ?? bot.pubkey }, channelId, mine);
+            }
+            return posts.length;
+        } finally {
+            busy.delete(key);
+        }
+    }
+    /** Every channel where a bot of this type has a setup under way. */
+    async function driveOnboarding() {
+        if (typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.handle !== "function") return;
+        for (const bot of (ctx.agents.snapshot()?.running ?? []).filter((a) => a.type === BOT_TYPE)) {
+            const handle = ctx.agents.handle(bot.pubkey);
+            if (!handle) continue;
+            const mine = await handle.query([{ kinds: [9], authors: [bot.pubkey], since: nowS() - 30 * 86400, limit: 200 }]).catch(() => []);
+            const tagged = (key) => new Set(mine.filter((e) => (e.tags ?? []).some((t) => t[0] === "hive" && t[1] === key))
+                .map((e) => (e.tags ?? []).find((t) => t[0] === "h")?.[1]).filter(Boolean));
+            const done = tagged("done");
+            for (const channelId of tagged("call")) {
+                if (!done.has(channelId)) await onboardIn(bot, handle, channelId).catch(() => {});
+            }
+            // Keys: the hive's own channel, and every channel this bot set up.
+            const channels = new Set([...tagged("call"), ...(snapshot.gov?.channelId ? [snapshot.gov.channelId] : [])]);
+            for (const channelId of channels) {
+                await acknowledgeKeys(bot, handle, channelId, mine).catch(() => {});
+                await acknowledgeNodes(bot, handle, channelId, mine).catch(() => {});
+            }
+        }
+    }
+
+    /**
+     * Answers each "Hive keeper key:" post once, in its thread: whether it counts and how many keepers
+     * have theirs in. The answers carry the post they answer, so the bot reads back what it has done.
+     */
+    async function acknowledgeKeys(bot, handle, channelId, mine) {
+        const since = nowS() - 30 * 86400;
+        const events = await handle.query([{ kinds: [9], "#h": [channelId], since, limit: 500 }]);
+        const answered = new Set(mine.flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "key-ack").map((t) => t[2])));
+        const posts = events.filter((e) => e.pubkey !== bot.pubkey && parseKeeperKey(e.content) && !answered.has(e.id)).sort((a, b) => a.created_at - b.created_at);
+        if (!posts.length) return;
+        // Keepers: those this bot's setup confirmed in the channel, else the hive's own.
+        const record = recordFromChannel(events, bot.pubkey, 2);
+        const gov = snapshot.gov;
+        const keepers = record.keepers ?? (gov?.channelId === channelId ? gov.keepers : null);
+        const names = await profileNames(handle, [...new Set(posts.map((e) => e.pubkey))]);
+        for (const post of posts) {
+            const name = `@${names[post.pubkey] ?? post.pubkey.slice(0, 8)}`;
+            let text;
+            if (!keepers) {
+                text = `${name}, this channel has no keepers yet, so the key doesn't count. Keepers are set during setup: the community owner mentions me with “set up”.`;
+            } else if (!keepers.includes(post.pubkey)) {
+                text = `${name}, only this hive's keepers post treasury keys here, so this one doesn't count.`;
+            } else {
+                const upTo = events.filter((e) => e.created_at <= post.created_at);
+                const keys = keepersKeys(upTo, keepers);
+                const earlier = keepersKeys(upTo.filter((e) => e.id !== post.id), keepers)[post.pubkey];
+                const count = Object.keys(keys).length;
+                text = `Got it, ${name}: your keeper key is in${earlier && earlier !== keys[post.pubkey] ? ", replacing the one you posted before" : ""}. ${count} of ${keepers.length} keepers have posted theirs${count === keepers.length ? ", so every key is in." : "."}`;
+            }
+            await handle.publish({ kind: 9, content: text, tags: [...replyTags(post, channelId), ["hive", "key-ack", post.id]] });
+        }
+    }
+    /**
+     * Members' nodes, acknowledged once each. HiveBot reads the channel itself, so its acknowledgement
+     * tells the hive's host, which gets the channel forwarded, that the member really posted it here.
+     */
+    async function acknowledgeNodes(bot, handle, channelId, mine) {
+        const since = nowS() - 30 * 86400;
+        const events = await handle.query([{ kinds: [9], "#h": [channelId], since, limit: 500 }]);
+        const answered = new Set(mine.flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "node-ack").map((t) => t[2])));
+        const posts = events.filter((e) => e.pubkey !== bot.pubkey && parseNodeClaim(e.content) && !answered.has(e.id)).sort((a, b) => a.created_at - b.created_at);
+        if (!posts.length) return;
+        const names = await profileNames(handle, [...new Set(posts.map((e) => e.pubkey))]);
+        for (const post of posts) {
+            const name = `@${names[post.pubkey] ?? post.pubkey.slice(0, 8)}`;
+            await handle.publish({ kind: 9, content: `Got it, ${name}: your node is in, and uses the budgets running for you from now on.`,
+                tags: [...replyTags(post, channelId), ["hive", "node-ack", post.id]] });
+        }
+    }
+
+    // Once per channel, the bot introduces itself, so the owner sees it posting. What it has said
+    // is read back from the channel, so nothing is stored here.
+    const greeted = new Set();
+    const tried = new Map();
+    async function greet() {
+        const gov = snapshot.gov;
+        if (!gov?.channelId || typeof ctx.agents.snapshot !== "function" || typeof ctx.agents.handle !== "function") return;
+        const bots = (ctx.agents.snapshot()?.running ?? []).filter((a) => a.type === BOT_TYPE);
+        for (const bot of bots) {
+            const key = `${bot.pubkey}:${gov.channelId}`;
+            if (greeted.has(key) || Date.now() - (tried.get(key) ?? 0) < 60_000) continue;
+            const handle = ctx.agents.handle(bot.pubkey);
+            if (!handle) continue;
+            greeted.add(key);
+            tried.set(key, Date.now());
+            try {
+                const said = await handle.query([{ kinds: [9], authors: [bot.pubkey], "#h": [gov.channelId], limit: 50 }]);
+                if (said.some((e) => (e.tags ?? []).some((tag) => tag[0] === "hive" && (tag[1] === "hello" || tag[1] === "call")))) continue;
+                await handle.publish({ kind: 9, tags: [["h", gov.channelId], botTag("hello")], content:
+                    `Hi, I'm ${bot.name}, this hive's bot. I'll post proposals' decisions, payouts and chip-ins here as they happen. Mention me any time for where the hive stands. ${statusText()}` });
+            } catch {
+                greeted.delete(key); // not in the channel yet, or offline: try again later
+            }
+        }
+    }
+    ctx.effect(() => {
+        const stop = ctx.agents.subscribe?.(() => { greet(); driveOnboarding(); });
+        listeners.add(greet);
+        greet();
+        driveOnboarding();
+        // Reactions and replies reach the bot here every half minute, with a little jitter.
+        const steps = setInterval(() => driveOnboarding().catch(() => {}), 30_000 + Math.floor(Math.random() * 5_000));
+        const retry = setInterval(greet, 60_000);
+        return () => {
+            clearInterval(retry);
+            clearInterval(steps);
+            listeners.delete(greet);
+            stop?.();
+        };
+    });
+
+    ctx.agents.addTool({
+        name: "hive_status",
+        description: `The ${HIVE_NAME} hive's treasury, chip-in address, proposals, open jobs, jobs awaiting funding and provider earnings.`,
+        inputSchema: { type: "object", properties: {} },
+        async call() {
+            if (!snapshot.state) await load();
+            return summarize(snapshot.state, snapshot.gov);
+        },
+    });
+    /** This hive's own settings, ahead of the general account of how a hive works. */
+    function hiveFacts() {
+        const { state, gov } = snapshot;
+        return [
+            `This hive: ${state?.name ?? HIVE_NAME}.`,
+            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and sign a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their treasury key. ${gov.discussionSeconds ? `Discussion runs ${Math.round(gov.discussionSeconds / 60)} minutes on this test hive.` : `Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.`}` : "Its keepers are not set yet.",
+            KEEPER_CONSOLE ? `The keeper console is at ${KEEPER_CONSOLE}.` : null,
+            INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings. That repository is also Hive's source and documentation.` : null,
+            state?.chipIn?.lightningAddress ? `Its Lightning address is ${state.chipIn.lightningAddress}.` : null,
+            state?.demo ? "Its treasury figures are sample data for trying Hive." : null,
+        ].filter(Boolean).join(" ");
+    }
+    ctx.agents.addTool({
+        name: "hive_guide",
+        description: `How the ${HIVE_NAME} hive works: proposals and approvals, allowances, keepers, keys and their backups, payments and chip-ins, with this hive's own settings. Read it before answering any question about the hive.`,
+        inputSchema: { type: "object", properties: {} },
+        async call() {
+            return `${hiveFacts()}\n\n${HOW_IT_WORKS}`;
+        },
+    });
+    const STOP = new Set(["the", "and", "are", "what", "how", "does", "for", "with", "that", "this", "who", "why", "when", "can", "you", "our", "its", "from", "about", "work", "works", "hive"]);
+    // The repository's documentation, read once in a while and handed over a section at a time.
+    let docsCache = { at: 0, sections: null };
+    async function docSections() {
+        if (docsCache.sections && Date.now() - docsCache.at < 15 * 60_000) return docsCache.sections;
+        const res = await ctx.host.request({ url: HIVE_DOCS, timeoutMs: 15_000 });
+        if (res.status !== 200) throw new Error(`the docs answered ${res.status}`);
+        const sections = [];
+        let source = "", current = null, fenced = false;
+        for (const line of res.body.split("\n")) {
+            const src = /^<!-- source: (.+) -->$/.exec(line);
+            if (src) { source = src[1]; continue; }
+            if (/^\s*```/.test(line)) fenced = !fenced;
+            if (!fenced && /^#{1,3} /.test(line)) {
+                current = { source, title: line.replace(/^#+ /, "").trim(), lines: [] };
+                sections.push(current);
+            } else if (current) current.lines.push(line);
+        }
+        docsCache = { at: Date.now(), sections: sections.map((s) => ({ ...s, text: s.lines.join("\n").trim() })).filter((s) => s.text) };
+        return docsCache.sections;
+    }
+    ctx.agents.addTool({
+        name: "hive_docs",
+        description: `The Hive repository's documentation, for details hive_guide does not cover: how Hive works end to end, its safeguards, the plugin and HiveBot, the keeper console, and how providers serve a hive. Give a topic in a few words; without one it lists the sections.`,
+        inputSchema: { type: "object", properties: { topic: { type: "string", description: "What to look up, in a few words" } } },
+        async call(_client, _context, args) {
+            if (!HIVE_DOCS) return "This hive's plugin was built without the repository's docs.";
+            const sections = await docSections();
+            // Words of the topic, cut to their stems so "claimed" finds "claim" and "keepers" "keeper".
+            const words = String(args?.topic ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOP.has(w))
+                .map((w) => (w.length > 5 ? w.slice(0, 5) : w.replace(/s$/, "")));
+            if (!words.length) return `Sections, by document:\n${sections.map((s) => `- ${s.source}: ${s.title}`).join("\n")}`;
+            const scored = sections.map((s) => {
+                const hay = `${s.title} ${s.text}`.toLowerCase();
+                const title = s.title.toLowerCase();
+                // A word in the title counts most; mentions in the text count up to three times, so long
+                // sections do not win on length alone.
+                return { s, score: words.reduce((n, w) => n + (title.includes(w) ? 6 : 0) + Math.min(3, hay.split(w).length - 1), 0) };
+            }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+            // Sections that matter as much as the best one, not every passing mention.
+            const best = scored[0]?.score ?? 0;
+            scored.splice(0, scored.length, ...scored.filter((x) => x.score * 3 >= best));
+            if (!scored.length) return `Nothing in the docs mentions ${args.topic}.`;
+            let out = "", budget = 12_000;
+            for (const { s } of scored) {
+                const block = `## ${s.title} (${s.source})\n\n${s.text}\n\n`;
+                if (block.length > budget) { if (!out) out = block.slice(0, budget); break; }
+                out += block;
+                budget -= block.length;
+            }
+            return out.trim();
+        },
+    });
+    ctx.agents.addTool({
+        name: "hive_proposals",
+        description: `Every proposal in the ${HIVE_NAME} hive's channel: its title, budget, period, who it is for and their daily allowance, purpose, where it stands, support, keepers' approvals, discussion deadline and what it has used.`,
+        inputSchema: { type: "object", properties: {} },
+        async call() {
+            if (!snapshot.state) await load();
+            const gov = snapshot.gov;
+            if (!gov) return "The hive's channel and keepers are not set up yet, so there are no proposals to read.";
+            if (!gov.proposals.length) return "No proposal has been posted in the hive's channel yet.";
+            return gov.proposals.map((p) => [
+                `"${p.title}" (${p.id}): ${STAGE[p.state] ?? p.state}.`,
+                `Budget ${sats(p.budgetSats)}${p.start ? `, ${day(p.start)} to ${day(p.end)}` : ""}${p.state === "running" ? `, ${sats(p.usedSats)} used, until ${day(p.ends)}` : ""}.`,
+                `For ${p.who === "everyone" ? "everyone" : p.who === "named" ? `${p.named.length} named members` : "the proposer"}${p.allowanceSats ? `, ${sats(p.allowanceSats)} a day each` : ""}.`,
+                `Purpose: ${p.purpose}`,
+                `${p.support} support, ${p.approvals.length} of ${gov.threshold} keepers approved${p.state === "open" ? `, discussion ${p.discussionEnds > nowS() ? `closes ${until(p.discussionEnds)}` : "closed"}` : ""}.`,
+                p.reason ? `Declined: ${p.reason}` : null,
+                p.report ? `Report: ${p.report.text}` : null,
+            ].filter(Boolean).join(" ")).join("\n");
+        },
+    });
+
+
+    // ---- Look ---------------------------------------------------------------------------
+    // Buzz's own tokens throughout, so light and dark both hold; honey is Buzz's amber scale, used
+    // for the hive's mark, progress and anything still waiting on the community.
+
+    const C = {
+        text: "var(--text-standard)",
+        subtle: "var(--text-subtle)",
+        line: "var(--border-standard)",
+        strong: "var(--border-prominent)",
+        inset: "var(--surface-inset)",
+        panel: "var(--surface-panel)",
+        honey: "var(--amber-9)",
+        honeyTint: "var(--amber-3)",
+        honeyInk: "var(--amber-11)",
+        goodTint: "var(--surface-status-success)",
+        good: "var(--text-success)",
+        badTint: "var(--surface-status-danger)",
+        bad: "var(--text-danger)",
+        radius: "var(--radius-container)",
+        chip: "var(--radius-chip)",
+        pill: "var(--radius-pill)",
+    };
+    const muted = { color: C.subtle };
+    const small = { fontSize: "0.857em" };
+    const tnum = { fontVariantNumeric: "tabular-nums" };
+    const row = { display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "baseline", justifyContent: "space-between" };
+    const stack = (gap = "var(--space-2)") => ({ display: "flex", flexDirection: "column", gap });
+    const list = { listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column" };
+    const item = { padding: "var(--space-3) 0", borderTop: `1px solid ${C.line}`, display: "flex", flexDirection: "column", gap: 6 };
+    const p0 = { margin: 0 };
+
+    /** The hive's mark: one cell of the comb. */
+    function Hex({ size = 14, filled = true, color = C.honey, title }) {
+        return h("svg", { width: size, height: size, viewBox: "0 0 24 24", role: title ? "img" : undefined, "aria-hidden": title ? undefined : true,
+            "aria-label": title, style: { flex: "none", display: "block" } },
+            h("path", { d: "M12 1.8 21 7v10l-9 5.2L3 17V7z", fill: filled ? color : "none", stroke: color, strokeWidth: filled ? 0 : 1.8, strokeLinejoin: "round" }));
+    }
+
+    const TONE = {
+        honey: { background: C.honeyTint, color: C.honeyInk },
+        good: { background: C.goodTint, color: C.good },
+        bad: { background: C.badTint, color: C.bad },
+        quiet: { background: C.inset, color: C.subtle },
+    };
+    const STAGE_TONE = { open: "honey", approved: "good", running: "good", completed: "quiet", lapsed: "quiet", declined: "bad", withdrawn: "quiet" };
+    function Pill({ tone = "quiet", children }) {
+        return h("span", { style: { ...TONE[tone], padding: "2px 10px", borderRadius: C.pill, fontSize: "0.8em", fontWeight: 550, whiteSpace: "nowrap", lineHeight: 1.6 } }, children);
+    }
+
+    function Meter({ value, total, tone = "honey", label }) {
+        const pct = total > 0 ? Math.max(0, Math.min(100, (100 * value) / total)) : 0;
+        return h("div", { role: "img", "aria-label": label, style: { height: 6, borderRadius: C.pill, background: C.inset, overflow: "hidden" } },
+            h("div", { style: { width: `${pct}%`, minWidth: pct > 0 ? 6 : 0, height: "100%", borderRadius: C.pill, background: tone === "good" ? C.good : C.honey } }));
+    }
+
+    /** n of `of` keepers approved, as cells filling in. */
+    function Pips({ n, of }) {
+        return h("span", { style: { display: "inline-flex", gap: 3, alignItems: "center" }, "aria-hidden": true },
+            Array.from({ length: Math.max(of, n) }, (_, i) => h(Hex, { key: i, size: 12, filled: i < n, color: i < n ? C.honey : C.strong })));
+    }
+
+    function Card({ title, aside, children, tight }) {
+        return h("section", { className: "ui-card", style: { padding: tight ? "var(--space-3) var(--space-4)" : "var(--space-panel-inset)", ...stack("var(--space-3)"), minWidth: 0 } },
+            title ? h("div", { style: { ...row, alignItems: "center" } }, h("h2", { style: { ...p0, fontSize: "1.07em" } }, title), aside ?? null) : null,
+            children);
+    }
+
+    function Empty({ children }) {
+        return h("p", { style: { ...p0, ...muted } }, children);
+    }
+
+    function Copy({ text, label = "Copy" }) {
+        const [done, setDone] = React.useState(false);
+        return h("button", {
+            type: "button",
+            style: { flex: "none" },
+            onClick: async () => {
+                try { await navigator.clipboard.writeText(text); setDone(true); setTimeout(() => setDone(false), 1500); } catch { /* clipboard refused */ }
+            },
+        }, done ? "Copied" : label);
+    }
+
+    /** A value to send or paste, in a well with its copy button. */
+    function Well({ label, value, copy, mono = true }) {
+        return h("div", { style: stack(4) },
+            label ? h("span", { style: { ...muted, ...small } }, label) : null,
+            h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "center", background: C.inset, borderRadius: C.chip, padding: "6px 6px 6px 12px", minWidth: 0 } },
+                h(mono ? "code" : "span", { style: { flex: 1, minWidth: 0, overflowWrap: "anywhere", fontSize: mono ? "0.86em" : undefined } }, value),
+                copy ? h(Copy, { text: copy }) : null));
+    }
+
+    const btn = {
+        primary: { background: "var(--affordance-prominent)", color: "var(--text-on-prominent)", border: "1px solid transparent", borderRadius: C.pill, padding: "6px 16px", fontWeight: 550, cursor: "pointer" },
+        quiet: { background: "transparent", color: C.subtle, border: 0, padding: "2px 4px", cursor: "pointer", font: "inherit" },
+    };
+
+    // ---- Proposals as cards in the channel ------------------------------------------------
+
+    const reactors = (message, emojis) =>
+        new Set((message.reactions ?? []).filter((r) => emojis.includes(r.content)).flatMap((r) => r.events.map((e) => e.authorId)));
+
+    function ProposalCard({ message }) {
+        const { gov } = useSnapshot();
+        const [open, setOpen] = React.useState(false);
+        const p = parseProposal(message.content, message.mentions ?? []);
+        if (!p) return h("p", { style: p0 }, message.content);
+        const record = gov?.proposals.find((x) => x.eventId === message.id);
+        const keepers = gov?.keepers ?? [];
+        const threshold = gov?.threshold ?? 2;
+        // Live from the message itself, so a reaction shows at once; the record says what was decided.
+        const support = [...reactors(message, SUPPORT)].filter((k) => k !== message.authorId).length;
+        const approvals = [...reactors(message, APPROVE)].filter((k) => keepers.includes(k)).length;
+        const stage = record?.state ?? "open";
+        const postedAt = record?.postedAt ?? message.createdAt;
+        const ends = record?.discussionEnds ?? postedAt + (gov?.discussionSeconds ?? discussionSeconds(p.budgetSats, gov?.smallSats ?? 20000));
+        const forText = p.who === "everyone" ? "Everyone in the hive" : p.who === "named" ? `${p.named.length || "Named"} member${p.named.length === 1 ? "" : "s"}` : "The proposer";
+        const period = p.start ? `${day(p.start)} – ${day(p.end)}` : record?.starts ? `${day(record.starts)} – ${day(record.ends)}` : "30 days from approval";
+        const extra = [["Work", p.work], ["Provider", p.provider], ["Report", p.report]].filter(([, v]) => v);
+
+        let progress = null;
+        if (stage === "open") {
+            const left = ends - nowS();
+            progress = h("div", { style: stack(6) },
+                h(Meter, { value: nowS() - postedAt, total: ends - postedAt, label: "Discussion time used" }),
+                h("span", { style: { ...small, ...muted } },
+                    left > 0 ? `Discussion closes ${until(ends)}` : approvals >= threshold ? "Approved, recorded on the bot's next pass" : "Discussion closed, waiting for keepers"));
+        } else if (stage === "running" && record) {
+            progress = h("div", { style: stack(6) },
+                h(Meter, { value: record.usedSats, total: p.budgetSats, tone: "good", label: `${amount(record.usedSats)} of ${amount(p.budgetSats)} used` }),
+                h("div", { style: { ...row, ...small, ...muted } },
+                    h("span", { style: tnum }, `${amount(record.usedSats)} used of ${amount(p.budgetSats)}`),
+                    h("span", null, `until ${day(record.ends)}`)));
+        } else if (stage === "approved" && record) {
+            progress = h("p", { style: { ...p0, ...small, ...muted } }, `Approved. The budget opens ${day(record.starts)}, once keepers fund its first job.`);
+        } else if (stage === "declined") {
+            progress = h("p", { style: { ...p0, ...small, color: C.bad } }, record?.reason ? `Declined: ${record.reason}` : "Declined by a keeper.");
+        } else if (stage === "completed" && record?.report) {
+            progress = h("p", { style: { ...p0, ...small } }, h("span", { style: muted }, "Report: "), record.report.text);
+        }
+
+        return h("div", { className: "ui-card", style: { ...stack("var(--space-3)"), padding: "var(--space-3) var(--space-4) var(--space-3)", maxWidth: 560, boxSizing: "border-box" } },
+            h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "flex-start", justifyContent: "space-between" } },
+                h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "flex-start", minWidth: 0 } },
+                    h("div", { style: { paddingTop: 3 } }, h(Hex, { size: 16, title: "Hive proposal" })),
+                    h("strong", { style: { fontSize: "1.07em", lineHeight: 1.35 } }, p.title)),
+                h(Pill, { tone: STAGE_TONE[stage] }, STAGE[stage] ?? stage)),
+            h("div", { style: { display: "flex", flexWrap: "wrap", columnGap: "var(--space-4)", rowGap: 4 } },
+                h("span", { style: { fontWeight: 600, ...tnum } }, amount(p.budgetSats)),
+                h("span", { style: muted }, period),
+                h("span", { style: muted }, `${forText}${p.allowanceSats ? `, ${amount(p.allowanceSats)} a day` : ""}`)),
+            h("p", { style: { ...p0, lineHeight: 1.5 } }, p.purpose),
+            open && extra.length ? h("dl", { style: { ...p0, display: "grid", gridTemplateColumns: "auto 1fr", columnGap: "var(--space-3)", rowGap: 4 } },
+                extra.flatMap(([k, v]) => [h("dt", { key: `${k}t`, style: muted }, k), h("dd", { key: `${k}d`, style: p0 }, v)])) : null,
+            progress,
+            h("div", { style: { ...row, alignItems: "center", paddingTop: "var(--space-2)", borderTop: `1px solid ${C.line}` } },
+                h("span", { style: { display: "inline-flex", gap: "var(--space-3)", alignItems: "center", ...small } },
+                    h("span", { style: tnum, title: "Members who support it" }, `👍 ${support}`),
+                    h("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, title: "Keepers who approved it" },
+                        h(Pips, { n: approvals, of: threshold }), h("span", { style: { ...muted, ...tnum } }, `${approvals} of ${threshold} keepers`))),
+                extra.length ? h("button", { type: "button", style: { ...btn.quiet, ...small }, "aria-expanded": open, onClick: () => setOpen(!open) }, open ? "Less" : "Details") : null),
+            stage === "open" ? h("span", { style: { ...muted, ...small } }, "React 👍 to support it. Keepers react ✅ to approve, or ❌ with the reason in the thread.") : null);
+    }
+
+    ctx.conversation.registerMessage({
+        id: "proposal",
+        title: "Hive proposal",
+        // Only in the hive's own channel once known; any well-formed proposal until then.
+        matches: (message) => {
+            const gov = snapshot.gov;
+            if (gov?.channelId && message.channelId !== gov.channelId) return false;
+            return parseProposal(message.content) !== null;
+        },
+        component: ProposalCard,
+    });
+
+    // ---- In the hive's channel: Propose opens a form above the composer ---------------------
+
+    // The composer tool owns insertText; the form above the composer borrows it while both are up.
+    const composers = new Map();
+    let proposing = null;
+    const proposingListeners = new Set();
+    const setProposing = (channelId) => {
+        proposing = channelId;
+        for (const listener of proposingListeners) listener(channelId);
+    };
+    function useProposing() {
+        const [value, setValue] = React.useState(proposing);
+        React.useEffect(() => {
+            proposingListeners.add(setValue);
+            setValue(proposing);
+            return () => proposingListeners.delete(setValue);
+        }, []);
+        return value;
+    }
+
+    function ProposeTool(props) {
+        useSnapshot(); // shown once the hive's channel is known
+        const open = useProposing() === props.channelId;
+        const here = isHiveChannel(props.channelId) && !props.threadRootId;
+        React.useEffect(() => {
+            if (!here) return undefined;
+            const entry = { insertText: props.insertText, focus: props.focus };
+            composers.set(props.channelId, entry);
+            return () => { if (composers.get(props.channelId) === entry) composers.delete(props.channelId); };
+        }, [here, props.channelId, props.insertText, props.focus]);
+        if (!here) return null;
+        // Just the hive's mark, like the composer's other tools; its name is in the label and tooltip.
+        return h("button", {
+            type: "button",
+            title: "Propose work to the hive",
+            "aria-label": "Propose work to the hive",
+            "aria-pressed": open,
+            disabled: props.disabled,
+            style: { display: "inline-grid", placeItems: "center", width: 28, height: 28, padding: 0, border: 0, borderRadius: C.pill, cursor: "pointer",
+                background: open ? C.honeyTint : "transparent" },
+            onClick: () => setProposing(open ? null : props.channelId),
+        }, h(Hex, { size: 16 }));
+    }
+    ctx.conversation.registerTool({ id: "propose", title: "Propose work to the hive", order: 50, component: ProposeTool });
+
+    const field = { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 };
+    const input = { font: "inherit", color: "inherit", background: C.panel, border: `1px solid ${C.strong}`, borderRadius: C.chip, padding: "7px 10px", minWidth: 0, width: "100%", boxSizing: "border-box" };
+    const label = { ...small, ...muted, fontWeight: 550 };
+    const WHO = [["me", "Only me"], ["everyone", "Everyone"], ["named", "Named members"]];
+
+    function ProposeForm({ channelId }) {
+        const { state, gov } = useSnapshot();
+        const [f, setF] = React.useState({ title: "", purpose: "", budget: "", start: "", end: "", who: "me", allowance: "", work: "", provider: "", report: "" });
+        const [more, setMore] = React.useState(false);
+        const [tried, setTried] = React.useState(false);
+        const [failed, setFailed] = React.useState(null);
+        const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+        const { text, problem } = proposalFromForm(f);
+        const budget = Number(String(f.budget).replace(/[,\s_]/g, ""));
+        const hours = budget > 0 ? (gov?.discussionSeconds ?? discussionSeconds(budget, gov?.smallSats ?? 20000)) / 3600 : null;
+        const submit = (e) => {
+            e?.preventDefault?.();
+            setTried(true);
+            if (!text) return;
+            const c = composers.get(channelId);
+            if (c?.insertText(text + (f.who === "named" ? "\n" : ""))) {
+                c.focus?.();
+                setProposing(null);
+            } else {
+                setFailed("The message box is not ready. Click into it and try again.");
+            }
+        };
+        const control = (k, props = {}) => h(props.multiline ? "textarea" : "input", {
+            id: `hive-${k}`, value: f[k], onChange: set(k), style: { ...input, ...(props.multiline ? { resize: "vertical", minHeight: 56 } : {}) },
+            ...(props.multiline ? { rows: 2 } : { type: props.type ?? "text", inputMode: props.inputMode }), placeholder: props.placeholder,
+        });
+        const labelled = (k, text, el, flex) => h("label", { htmlFor: `hive-${k}`, style: { ...field, ...(flex ? { flex } : {}) } }, h("span", { style: label }, text), el);
+        return h("form", { onSubmit: submit, style: { ...stack("var(--space-3)"), padding: "var(--space-3) var(--space-4)", margin: "0 0 var(--space-2)", background: C.panel,
+            border: `1px solid ${C.line}`, borderRadius: C.radius, boxShadow: "var(--shadow-xs)" } },
+            h("div", { style: { ...row, alignItems: "center" } },
+                h("strong", { style: { display: "inline-flex", gap: 8, alignItems: "center" } }, h(Hex, { size: 16 }), `Propose work to ${state?.name ?? HIVE_NAME}`),
+                h("button", { type: "button", style: { ...btn.quiet, ...small }, onClick: () => setProposing(null) }, "Cancel")),
+            labelled("title", "Title", control("title", { placeholder: "What the work is, in a few words" })),
+            labelled("purpose", "Purpose and output", control("purpose", { multiline: true, placeholder: "Why it serves the hive, what it produces and where the results go" })),
+            h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
+                labelled("budget", unit === "bitcoin" ? "Budget in ₿" : "Budget in sats", control("budget", { inputMode: "numeric", placeholder: "20,000" }), "1 1 120px"),
+                labelled("start", "Starts", control("start", { type: "date" }), "1 1 140px"),
+                labelled("end", "Ends", control("end", { type: "date" }), "1 1 140px")),
+            h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "flex-end" } },
+                h("div", { role: "radiogroup", "aria-label": "Who uses it", style: { ...field, flex: "2 1 260px" } },
+                    h("span", { style: label }, "Who uses it"),
+                    h("div", { style: { display: "inline-flex", flexWrap: "wrap", gap: 4, padding: 3, background: C.inset, borderRadius: C.pill, alignSelf: "flex-start" } },
+                        WHO.map(([k, text]) => h("button", { key: k, type: "button", role: "radio", "aria-checked": f.who === k,
+                            style: { border: 0, borderRadius: C.pill, padding: "4px 12px", font: "inherit", cursor: "pointer", fontSize: "0.93em",
+                                background: f.who === k ? C.panel : "transparent", color: f.who === k ? C.text : C.subtle, boxShadow: f.who === k ? "var(--shadow-xs)" : "none" },
+                            onClick: () => setF({ ...f, who: k }) }, text)))),
+                labelled("allowance", "Daily allowance per member", control("allowance", { inputMode: "numeric", placeholder: "500" }), "1 1 150px")),
+            more ? h(React.Fragment, null,
+                labelled("work", "Work", control("work", { placeholder: "The model and roughly how much, for example 2 million tokens on llama-3.3-70b" })),
+                labelled("provider", "Provider", control("provider", { placeholder: "A member's node, if the work needs one" })),
+                labelled("report", "Report", control("report", { placeholder: "How the community sees the result" }))) : null,
+            h("div", { style: { ...row, alignItems: "center" } },
+                h("span", { style: { display: "inline-flex", gap: "var(--space-3)", alignItems: "center", flexWrap: "wrap" } },
+                    h("button", { type: "submit", style: btn.primary }, "Add to message"),
+                    more ? null : h("button", { type: "button", style: { ...btn.quiet, ...small }, onClick: () => setMore(true) }, "Add work, provider and report")),
+                h("span", { style: { ...small, ...(tried && problem ? { color: C.bad } : muted) }, role: tried && problem ? "alert" : undefined },
+                    failed ?? (tried && problem ? problem
+                        : `${hours ? `Discussion runs ${hours >= 1 ? `${Math.round(hours)} hours` : `${Math.round(hours * 60)} minutes`}, then ` : ""}${gov?.threshold ?? 2} keepers' ✅ approve it.${f.who === "named" ? " Mention the members before you send." : ""}`))));
+    }
+
+    function ChannelStatus(props) {
+        noteChannel(props.channelId);
+        const { state, gov } = useSnapshot();
+        const form = useProposing();
+        if (!gov || !isHiveChannel(props.channelId) || props.threadRootId) return null;
+        if (form === props.channelId) return h(ProposeForm, { channelId: props.channelId });
+        const open = gov.proposals.filter((p) => p.state === "open");
+        const running = gov.proposals.filter((p) => p.state === "running");
+        const soonest = open.map((p) => p.discussionEnds).filter((t) => t > nowS()).sort((a, b) => a - b)[0];
+        const parts = [
+            state ? h("span", { key: "t", style: tnum }, h("span", { style: { color: C.text, fontWeight: 600 } }, amount(state.treasury.balanceSats)), " in the treasury") : null,
+            open.length ? h("span", { key: "o" }, `${open.length} proposal${open.length === 1 ? "" : "s"} open${soonest ? `, next decision ${until(soonest)}` : ""}`) : null,
+            !open.length && running.length ? h("span", { key: "r" }, `${running.length} budget${running.length === 1 ? "" : "s"} running`) : null,
+            state?.funding.length ? h("span", { key: "f", style: { color: C.honeyInk } }, `${state.funding.length} job${state.funding.length === 1 ? "" : "s"} waiting for keepers`) : null,
+            !open.length && !running.length && !state ? h("span", { key: "n" }, "Propose work with the button below") : null,
+        ].filter(Boolean);
+        return h("div", { style: { display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", ...muted, ...small, padding: "4px 6px 4px 12px", margin: "0 0 var(--space-2)",
+            background: C.inset, borderRadius: C.pill } },
+            h(Hex, { size: 13 }),
+            h("span", { style: { display: "inline-flex", gap: "var(--space-3)", flexWrap: "wrap", flex: 1, minWidth: 0 } },
+                parts.flatMap((part, i) => (i ? [h("span", { key: `s${i}`, "aria-hidden": true }, "·"), part] : [part]))),
+            h("button", { type: "button", style: { ...btn.quiet, ...small, color: C.text, fontWeight: 550 }, onClick: () => ctx.navigation.open(pageTarget) }, `Open ${state?.name ?? HIVE_NAME}`));
+    }
+    ctx.conversation.registerAccessory({ id: "status", title: "Hive status", order: 50, component: ChannelStatus });
+
+    // ---- The hive's page ------------------------------------------------------------------
+
+    function Head({ state, loadedAt }) {
+        const chip = state?.chipIn ?? {};
+        return h("header", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-4)", alignItems: "flex-end", justifyContent: "space-between" } },
+            h("div", { style: { display: "flex", gap: "var(--space-3)", alignItems: "center", minWidth: 0 } },
+                h(Hex, { size: 40 }),
+                h("div", { style: stack(2) },
+                    h("h1", { style: { ...p0, lineHeight: 1.15, display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" } }, state?.name ?? HIVE_NAME,
+                        state?.demo ? h(Pill, { tone: "quiet" }, "Sample data") : null),
+                    h("span", { style: { ...muted, ...small } },
+                        loadedAt ? `Updated ${new Date(loadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ` : "",
+                        h("button", { type: "button", style: { ...btn.quiet, ...small, padding: 0, textDecoration: "underline", textUnderlineOffset: 3 }, onClick: () => load() }, "Refresh")))),
+            state ? h("div", { style: { ...stack(2), alignItems: "flex-end", textAlign: "right" } },
+                h("span", { style: { ...muted, ...small } }, "Treasury"),
+                (() => {
+                    // The number large, its unit small: "₿1,284,500", "1,284,500 sats", "0.012845 BTC", "$863.71".
+                    const a = amountParts(state.treasury.balanceSats, unit, usdPerBtc);
+                    const unitStyle = { fontSize: "0.5em", fontWeight: 500, ...muted };
+                    return h("span", { style: { fontSize: "1.9em", fontWeight: 650, lineHeight: 1.1, letterSpacing: "-0.01em", ...tnum } },
+                        a.pre ? h("span", { style: { ...unitStyle, fontSize: "0.8em", marginRight: "0.05em" } }, a.pre) : null,
+                        a.num,
+                        a.post ? h("span", { style: unitStyle }, a.post) : null);
+                })(),
+                chip.lightningAddress ? h("span", { style: { ...small, ...muted } }, "Chip in at ", h("span", { style: { color: C.text } }, chip.lightningAddress)) : null) : null);
+    }
+
+    function Treasury({ state }) {
+        const chip = state.chipIn ?? {};
+        return h(Card, { title: "Chip in" },
+            chip.lightningAddress ? h(Well, { label: "Lightning address", value: chip.lightningAddress, copy: chip.lightningAddress }) : null,
+            state.treasury.address
+                ? h(Well, { label: "Treasury address", value: short(state.treasury.address, 14, 8), copy: state.treasury.address })
+                : h(Empty, null, "The treasury is built once every keeper's key is in, and its address shows here."),
+            h("p", { style: { ...p0, ...muted, ...small } },
+                "Pay from any Lightning or Arkade wallet. Chip-ins are donations toward the hive's purpose, and every one lands in the treasury as Bitcoin."));
+    }
+
+    function YourPart({ state, gov }) {
+        const me = viewer();
+        if (!gov) return null;
+        const mine = allowancesFor(gov, me);
+        const node = me ? gov.members?.[me]?.node : null;
+        return h(Card, { title: "Your allowances", aside: mine.length ? h("span", { style: { ...muted, ...small } }, `${mine.length} running`) : null },
+            !me ? h(Empty, null, "Connect to the community to see your allowances.")
+                : mine.length === 0 ? h(Empty, null, "No running proposal includes you yet. Propose work from the hive's channel, or ask to be named on one.")
+                : h("ul", { style: list }, mine.map((p, i) => h("li", { key: p.id, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
+                    h("div", { style: row }, h("strong", null, p.title), h("span", { style: { fontWeight: 600, ...tnum } }, `${amount(p.allowanceSats ?? 500)} a day`)),
+                    h(Meter, { value: p.usedSats, total: p.budgetSats, tone: "good", label: `${amount(p.usedSats)} of ${amount(p.budgetSats)} used` }),
+                    h("div", { style: { ...row, ...muted, ...small } }, h("span", { style: tnum }, `${amount(p.usedSats)} of ${amount(p.budgetSats)} used by the hive`), h("span", null, `until ${day(p.ends)}`))))),
+            me ? h("div", { style: { ...small, ...muted, padding: "var(--space-2) var(--space-3)", background: C.inset, borderRadius: C.chip } },
+                node
+                    ? ["Your node ", h("code", { key: "n" }, short(node)), " calls the model ", h("code", { key: "m" }, "hive"), " from any OpenAI-compatible tool. You can also ask the hive's agent in the channel."]
+                    : ["To spend from your own MeshLLM node, set it up as a member",
+                        state.agent ? [" with ", h("code", { key: "c" }, `install-member.sh --agent ${state.agent.nodeId}`)] : null,
+                        ", then post ", h("code", { key: "p" }, "Hive node: <your node id>"), " in the hive's channel. You can always ask the hive's agent instead."]) : null);
+    }
+
+    /** Before the bot coordinates, budgets are known only by what members used from them. */
+    function Budgets({ state }) {
+        const used = state.proposals ?? [];
+        return h(Card, { title: "Budgets in use" },
+            used.length === 0
+                ? h(Empty, null, "No member has used a budget yet.")
+                : h("ul", { style: list }, used.map((b, i) => h("li", { key: b.proposal, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
+                    h("div", { style: row }, h("code", null, b.proposal), h("span", { style: { fontWeight: 600, ...tnum } }, `${amount(b.usedSats)} used`)),
+                    h("span", { style: { ...muted, ...small } }, `${b.members} member${b.members === 1 ? "" : "s"}, ${b.requests} request${b.requests === 1 ? "" : "s"}, last ${when(b.lastUsedAt)}`)))),
+            state.agent ? h("p", { style: { ...p0, ...muted, ...small } }, "Members set up their node with ", h("code", null, `install-member.sh --agent ${state.agent.nodeId}`), ".") : null);
+    }
+
+    function ProposalRow({ p, gov, me, first }) {
+        const keeper = Boolean(me && gov.keepers.includes(me));
+        const needsMe = keeper && p.state === "open" && p.discussionEnds <= nowS() && !p.approvals.includes(me);
+        const right = p.state === "open" ? (p.discussionEnds > nowS() ? `closes ${until(p.discussionEnds)}` : "waiting for keepers")
+            : p.state === "running" ? `until ${day(p.ends)}`
+            : p.state === "approved" ? `opens ${day(p.starts)}`
+            : day(p.postedAt);
+        return h("li", { style: { ...item, ...(first ? { borderTop: 0, paddingTop: 0 } : {}) } },
+            h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "flex-start", justifyContent: "space-between" } },
+                h("strong", { style: { lineHeight: 1.35 } }, p.title),
+                h(Pill, { tone: needsMe ? "honey" : STAGE_TONE[p.state] }, needsMe ? "Needs your decision" : STAGE[p.state] ?? p.state)),
+            p.state === "running" ? h(Meter, { value: p.usedSats, total: p.budgetSats, tone: "good", label: `${amount(p.usedSats)} of ${amount(p.budgetSats)} used` }) : null,
+            h("div", { style: { ...row, ...muted, ...small, alignItems: "center" } },
+                h("span", { style: { display: "inline-flex", gap: "var(--space-3)", alignItems: "center", flexWrap: "wrap", ...tnum } },
+                    h("span", { style: { color: C.text, fontWeight: 600 } }, p.state === "running" ? `${amount(p.usedSats)} of ${amount(p.budgetSats)}` : amount(p.budgetSats)),
+                    h("span", null, `👍 ${p.support}`),
+                    h("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" } }, h(Pips, { n: p.approvals.length, of: gov.threshold }), `${p.approvals.length} of ${gov.threshold}`)),
+                h("span", null, right)),
+            p.state === "declined" && p.reason ? h("span", { style: { ...small, color: C.bad } }, p.reason) : null);
+    }
+
+    function Proposals({ state, gov, filter, title = "Proposals", empty }) {
+        const me = viewer();
+        if (!gov) return state ? h(Budgets, { state }) : null;
+        const shown = gov.proposals.filter(filter);
+        return h(Card, { title, aside: h("span", { style: { ...muted, ...small } }, `${shown.length}`) },
+            shown.length === 0
+                ? h(Empty, null, empty ?? "Nothing here. Propose work with the Propose button in the hive's channel.")
+                : h("ul", { style: list }, shown.map((p, i) => h(ProposalRow, { key: p.id, p, gov, me, first: i === 0 }))));
+    }
+
+    /** Where keepers sign: the keeper console, opened on this hive's signing desk. */
+    function consoleLink(state) {
+        const desk = state?.keepersDesk?.desk;
+        const page = state?.keepersDesk?.console ?? KEEPER_CONSOLE;
+        return desk && page ? `${page}${page.includes("?") ? "&" : "?"}desk=${encodeURIComponent(desk)}` : null;
+    }
+
+    function Funding({ state }) {
+        const link = consoleLink(state);
+        return h(Card, { title: "Jobs to fund", aside: state.funding.length ? h(Pill, { tone: "honey" }, `${state.funding.length} waiting`) : null },
+            state.funding.length && link
+                ? h("div", { style: { marginBottom: "var(--space-4)" } },
+                    h(Well, { label: "Sign in the keeper console", value: link, copy: link }),
+                    h("p", { style: { ...p0, ...muted, ...small, marginTop: "var(--space-2)" } },
+                        "Open it in your browser and unlock it with your passkey. It checks each job against the escrow's own terms before you sign, and any two keepers' signatures send the payment."))
+                : null,
+            state.funding.length === 0
+                ? h(Empty, null, "No job is waiting for funding.")
+                : h("ul", { style: list }, state.funding.map((j, i) => h("li", { key: j.jobId, style: { ...item, gap: "var(--space-3)", ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
+                    h("div", { style: { ...row, alignItems: "center" } },
+                        h("strong", { style: tnum }, `${amount(j.capSats)} for ${modelName(j.model)}`),
+                        h("span", { style: { ...muted, ...small } }, `deadline ${until(j.deadline)}`)),
+                    h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
+                        h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: amount(j.capSats, true), copy: String(j.capSats), mono: false })),
+                        h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
+                    h("p", { style: { ...p0, ...muted, ...small } },
+                        link
+                            ? `For provider ${short(j.providerPk)}. Whatever the job does not use comes back to the treasury after the deadline.`
+                            : `For provider ${short(j.providerPk)}. Send it in one payment from the treasury; anything else comes back after the deadline.${j.minCoinExpiry ? ` The coins you send must be valid until ${day(j.minCoinExpiry)}, so renew the wallet first if it has not renewed in a few weeks.` : ""}`)))));
+    }
+
+    function Keepers({ gov }) {
+        if (!gov) return null;
+        const me = viewer();
+        return h(Card, { title: "Keepers", aside: h("span", { style: { ...muted, ...small } }, `${gov.threshold} of ${gov.keepers.length} approve`) },
+            h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-2)" } },
+                gov.keepers.map((k) => h("span", { key: k, style: { display: "inline-flex", gap: 8, alignItems: "center", padding: "5px 12px 5px 8px", background: C.inset, borderRadius: C.pill } },
+                    h(Hex, { size: 14, filled: Boolean(gov.keys?.[k]) }), h("code", { style: small }, short(k, 8, 4)),
+                    h("span", { style: { ...small, ...muted } }, `${k === me ? "you, " : ""}${gov.keys?.[k] ? "key in" : "no key yet"}`)))),
+            me && gov.keepers.includes(me) && !gov.keys?.[me]
+                ? h("p", { style: { ...p0, ...small } }, "Create your treasury key in the keeper console", KEEPER_CONSOLE ? [" at ", h("code", { key: "c" }, KEEPER_CONSOLE)] : null,
+                    ", then post the line it gives you, starting with “Hive keeper key:”, in the hive's channel.")
+                : null,
+            h("p", { style: { ...p0, ...muted, ...small } }, `Keepers approve proposals with ✅ in the channel, and each payment from the treasury with their own key in the keeper console. Any ${gov.threshold} of them sign together.`));
+    }
+
+    function Jobs({ state }) {
+        const shown = state.jobs.slice(0, 20);
+        const tone = { claimed: "good", returned: "quiet", open: "honey", awaiting_funding: "honey", declined: "bad", lapsed: "quiet" };
+        return h(Card, { title: "Jobs" },
+            shown.length === 0
+                ? h(Empty, null, "No jobs yet.")
+                : h("ul", { style: list }, shown.map((j, i) => h("li", { key: j.jobId, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
+                    h("div", { style: { ...row, alignItems: "center" } }, h("strong", null, modelName(j.model)), h(Pill, { tone: tone[j.status] }, STATUS[j.status] ?? j.status)),
+                    h("div", { style: { ...row, ...muted, ...small } },
+                        h("span", null, `Provider ${short(j.providerPk ?? j.providerPeer)}`),
+                        h("span", { style: tnum }, j.status === "claimed" ? `paid ${amount(j.paidSats)}, returned ${amount(j.returnedSats)}`
+                            : j.status === "returned" ? `returned ${amount(j.returnedSats)}` : `used ${amount(j.usedSats)} of ${amount(j.capSats)}`))))));
+    }
+
+    function Providers({ state }) {
+        return h(Card, { title: "Providers" },
+            state.providers.length === 0
+                ? h(Empty, null, "No provider has served this hive yet.")
+                : h("ul", { style: list }, state.providers.map((p, i) => h("li", { key: p.providerPk ?? p.providerPeer, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
+                    h("div", { style: row }, h("code", null, short(p.providerPk ?? p.providerPeer)), h("span", { style: { fontWeight: 600, ...tnum } }, `earned ${amount(p.earnedSats)}`)),
+                    h("div", { style: { ...row, ...muted, ...small } }, h("span", null, p.models.map(modelName).join(", ")), h("span", null, `${p.openJobs} open, ${p.jobs} total`))))));
+    }
+
+    function Flows({ state }) {
+        const recent = [
+            ...state.contributions.map((c) => ({ at: c.at, sats: c.sats, in: true, text: `Chip-in over ${rail(c.rail)}`, key: `c${c.reference}${c.at}` })),
+            ...state.payouts.map((p) => ({ at: p.at, sats: p.sats, in: false, text: `Paid provider ${short(p.providerPk)}`, key: `p${p.txid}` })),
+        ].sort((a, b) => b.at - a.at).slice(0, 15);
+        return h(Card, { title: "Chip-ins and payouts" },
+            recent.length === 0
+                ? h(Empty, null, "Nothing yet.")
+                : h("ul", { style: list }, recent.map((r, i) => h("li", { key: r.key, style: { ...item, ...row, flexDirection: "row", alignItems: "baseline", ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
+                    h("span", { style: stack(2) }, h("span", null, r.text), h("span", { style: { ...muted, ...small } }, stamp(r.at))),
+                    h("span", { style: { fontWeight: 600, ...tnum, color: r.in ? C.good : C.text } }, `${r.in ? "+" : "−"}${amount(r.sats)}`)))));
+    }
+
+    const TABS = [["home", "Overview"], ["proposals", "Proposals"], ["keepers", "Keepers"], ["money", "Treasury"]];
+    const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: "var(--space-4)", alignItems: "start" };
+
+    function HivePage(props) {
+        const view = useSnapshot();
+        const [tab, setTab] = React.useState(TABS.some(([k]) => k === props?.initialTab) ? props.initialTab : "home");
+        React.useEffect(() => { if (!snapshot.state) load(); }, []);
+        const { state, gov, error, loadedAt } = view;
+        const me = viewer();
+        const keeper = Boolean(me && gov?.keepers.includes(me));
+        const decide = keeper ? gov.proposals.filter((p) => p.state === "open" && p.discussionEnds <= nowS() && !p.approvals.includes(me)) : [];
+        const waiting = keeper ? decide.length + (state?.funding.length ?? 0) : 0;
+        const live = (p) => ["open", "approved", "running"].includes(p.state);
+        const col = (...children) => h("div", { style: stack("var(--space-4)") }, ...children);
+        const needsHost = h(Card, null, h(Empty, null, error ? "The hive's host is out of reach, so the treasury and jobs are not shown." : "Loading the treasury…"));
+        let body = null;
+        if (state || gov) {
+            body = tab === "home" ? h("div", { style: grid },
+                    col(h(YourPart, { state: state ?? {}, gov }), gov || state ? h(Proposals, { state, gov, filter: live, title: "Live proposals" }) : null),
+                    col(state?.funding.length ? h(Funding, { state }) : null, state ? h(Treasury, { state }) : needsHost))
+                : tab === "proposals" ? col(
+                    h(Proposals, { state, gov, filter: live, title: "Live proposals" }),
+                    gov ? h(Proposals, { state, gov, filter: (p) => !live(p), title: "Past proposals", empty: "None yet." }) : null)
+                : tab === "keepers" ? col(
+                    keeper ? h(Proposals, { state, gov, filter: (p) => decide.includes(p), title: "Waiting for your decision", empty: "No proposal needs your decision." }) : null,
+                    state ? h(Funding, { state }) : needsHost, h(Keepers, { gov }))
+                : state ? h("div", { style: grid }, col(h(Flows, { state }), h(Jobs, { state })), col(h(Providers, { state })))
+                : needsHost;
+        }
+        return h("div", { style: { padding: "var(--space-panel-inset)", ...stack("var(--space-5, 20px)"), width: "100%", maxWidth: 1080, boxSizing: "border-box" } },
+            h(Head, { state, loadedAt }),
+            h("div", { role: "tablist", style: { display: "inline-flex", flexWrap: "wrap", gap: 4, padding: 3, background: C.inset, borderRadius: C.pill, alignSelf: "flex-start" } },
+                TABS.map(([k, text]) => h("button", { key: k, type: "button", role: "tab", "aria-selected": tab === k,
+                    style: { border: 0, borderRadius: C.pill, padding: "5px 14px", font: "inherit", cursor: "pointer", display: "inline-flex", gap: 6, alignItems: "center",
+                        background: tab === k ? C.panel : "transparent", color: tab === k ? C.text : C.subtle, fontWeight: tab === k ? 600 : 500, boxShadow: tab === k ? "var(--shadow-xs)" : "none" },
+                    onClick: () => setTab(k) }, text,
+                    k === "keepers" && waiting ? h("span", { style: { ...TONE.honey, borderRadius: C.pill, padding: "0 7px", fontSize: "0.8em", fontWeight: 600, ...tnum } }, `${waiting}`) : null))),
+            error ? h("p", { role: "alert", style: { ...p0, color: C.bad } }, `Could not reach the hive: ${error}`) : null,
+            !state && !gov ? h("p", { style: muted }, error ? "" : "Loading the hive…") : body);
+    }
+
+    // The hive's mark beside the page in Buzz's navigation: Buzz's amber, the same in both themes.
+    const MARK = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1.8 21 7v10l-9 5.2L3 17V7z" fill="#FFC53D"/></svg>')}`;
+    ctx.pages.register({ id: "main", title: HIVE_NAME, primary: true, icon: MARK, component: HivePage });
+
+    // ---- Settings: the unit amounts read in ---------------------------------------------------
+
+    /** Shows every amount in another unit, at once and from then on, in this app. */
+    function setUnit(next) {
+        unit = next;
+        saveUnit(next);
+        for (const listener of listeners) listener({ ...snapshot });
+    }
+
+    function AmountSettings() {
+        const { state } = useSnapshot();
+        const price = state?.price?.usdPerBtc > 0 ? state.price : null;
+        return h("div", { style: stack("var(--space-4)") },
+            h("div", { style: stack(2) },
+                h("h2", { style: { ...p0, fontSize: "1.15em" } }, "Amounts"),
+                h("p", { style: { ...p0, ...muted } },
+                    "How the Hive plugin shows amounts on this device. Proposals and the bot's messages in the channel keep sats, which every Buzz client reads.")),
+            h("div", { role: "radiogroup", "aria-label": "Show amounts in", style: stack(2) },
+                UNITS.map((u) => {
+                    const on = unit === u.id;
+                    return h("label", { key: u.id, style: { display: "flex", gap: "var(--space-3)", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer",
+                        borderRadius: C.chip, border: `1px solid ${on ? C.honey : C.line}`, background: on ? C.honeyTint : "transparent" } },
+                        h("input", { type: "radio", name: "hive-unit", value: u.id, checked: on, onChange: () => setUnit(u.id), style: { marginTop: 3 } }),
+                        h("span", { style: stack(1) },
+                            h("span", null, h("strong", null, u.label), h("span", { style: { ...muted, ...tnum } }, `  ${u.sample}`)),
+                            h("span", { style: { ...muted, ...small } }, u.note)));
+                })),
+            unit === "usd"
+                ? h("p", { style: { ...p0, ...muted, ...small } }, price
+                    ? `1 BTC = $${nf.format(Math.round(price.usdPerBtc))}, from ${price.source ?? "the hive's host"}${price.at ? ` at ${stamp(price.at)}` : ""}. Amounts to send stay in ₿, to the sat.`
+                    : "The hive's host has not sent a Bitcoin price yet, so amounts show in ₿ until it does.")
+                : null);
+    }
+
+    ctx.settingsCards.register({ id: "amounts", title: HIVE_NAME, group: "Plugins", component: AmountSettings });
+}
