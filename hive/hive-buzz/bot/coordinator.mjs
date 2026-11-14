@@ -33,15 +33,18 @@ function target(e) {
  *   discussionSeconds: one discussion length for every proposal, for a test hive; 48 or 24 hours otherwise.
  *   bot: HiveBot's key, when the events may come from outside the channel (forwarded to a host): a
  *     member's node then counts only once HiveBot, which reads the channel itself, acknowledged it.
+ *   forwarded: the events may come from outside the channel, whether or not the host knows a bot: a
+ *     member's node then also counts once a keeper reacted ✅ to the message that names it.
  */
 export function coordinate(events, cfg) {
-    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {}, discussionSeconds: fixed, bot = null } = cfg;
+    const { keepers = [], threshold = 2, smallSats = 20000, now = Math.floor(Date.now() / 1000), usage = {}, discussionSeconds: fixed, bot = null, forwarded = Boolean(bot) } = cfg;
     const keeperSet = new Set(keepers);
     const deleted = deletedIds(events);
     const live = events.filter((e) => !deleted.has(e.id)).sort((a, b) => a.created_at - b.created_at);
     // The node claims HiveBot acknowledged, when it vouches for them.
     const acked = new Set(live.filter((e) => e.kind === 9 && e.pubkey === bot)
         .flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "node-ack").map((t) => t[2])));
+    for (const e of live) if (e.kind === 7 && keeperSet.has(e.pubkey) && APPROVE.has(e.content.trim())) acked.add(target(e));
 
     const nodes = {};
     const keys = {};
@@ -50,7 +53,7 @@ export function coordinate(events, cfg) {
     for (const e of live) {
         if (e.kind !== 9) continue;
         const node = parseNodeClaim(e.content);
-        if (node) { if (!bot || acked.has(e.id)) nodes[e.pubkey] = { node, at: e.created_at, eventId: e.id }; continue; }
+        if (node) { if (!forwarded || acked.has(e.id)) nodes[e.pubkey] = { node, at: e.created_at, eventId: e.id }; continue; }
         // A keeper's treasury key counts only from that keeper; a later post replaces an earlier one.
         const key = parseKeeperKey(e.content);
         if (key) { if (keeperSet.has(e.pubkey)) keys[e.pubkey] = { key, at: e.created_at, eventId: e.id }; continue; }

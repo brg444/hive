@@ -1,0 +1,14 @@
+[Unit]
+Description=Hive check: the service, the delegatee, the console served and the last backup
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/hive
+EnvironmentFile=/etc/hive/hive.env
+Environment=HIVE_BACKUP_DIR=/var/backups/hive HIVE_CONSOLE_DIR=/srv/hive/keeper HIVE_CONSOLE_BUILD=/opt/hive/.local/keeper
+ExecStart=/opt/hive/tools/check.sh
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectHome=true

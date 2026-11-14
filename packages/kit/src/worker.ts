@@ -13,15 +13,41 @@ export interface WorkerCall {
 
 type WorkerReply = { ok: true; result: unknown } | { ok: false; code: string };
 
+/** Worker processes running at once, and requests that may wait for one. */
+const MAX_WORKERS = 4;
+const MAX_WAITING = 64;
+let running = 0;
+const waiting: (() => void)[] = [];
+
 /**
  * Run one typed request in a fresh worker process. The worker holds its own
  * private configuration; the caller sees a result or a fixed error code only.
+ *
+ * A process per request is the point: a key is in memory for one request and
+ * gone with the process. Each is a whole Node process, though, so only a few
+ * run at once and the rest wait their turn; a burst of requests queues here
+ * instead of starting a process each.
  */
-export function callWorker<T>(call: WorkerCall, request: unknown): Promise<T> {
+export async function callWorker<T>(call: WorkerCall, request: unknown): Promise<T> {
   const input = JSON.stringify(request);
   if (Buffer.byteLength(input) > (call.maxRequestBytes ?? 4 * 1024 * 1024)) {
-    return Promise.reject(new Fault("REQUEST_TOO_LARGE"));
+    throw new Fault("REQUEST_TOO_LARGE");
   }
+  if (running >= MAX_WORKERS) {
+    if (waiting.length >= MAX_WAITING) throw new Fault("WORKER_BUSY");
+    await new Promise<void>((turn) => waiting.push(turn));
+  } else running += 1;
+  try {
+    return await runWorker<T>(call, input);
+  } finally {
+    // The place goes straight to whoever waited longest, or is given up.
+    const next = waiting.shift();
+    if (next) next();
+    else running -= 1;
+  }
+}
+
+function runWorker<T>(call: WorkerCall, input: string): Promise<T> {
   const maxResponse = call.maxResponseBytes ?? 8 * 1024 * 1024;
   return new Promise<T>((resolveResult, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", call.entry, ...call.args], {

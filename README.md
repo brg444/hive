@@ -31,14 +31,19 @@ it and test it before trusting it with funds that matter.
 
 The known gaps are the ones you would expect at this stage. A hive on the Hive service gets no
 Lightning address yet, so its members chip in from an Arkade wallet until the service registers one
-the way `pnpm ops init --lnurl` does for a hive on its own host. Keepers can fund jobs and nothing else,
-so there is no keeper-signed withdrawal, no tooling for the exit path, for replacing a keeper or for
-winding a hive down. The keeper console is reproducible and hashed, though it is not published as a
-signed release. The signing desk answers anyone who asks it, the buyer trusts the usage a provider
-reports for each answer, and member allowances are counted without a lock. Pages and the desk
-rebuild their view from disk on every request, the services run from a git checkout with little
-logging, and CI does not run the test suites. Mainnet sits behind an explicit opt-in, with the
-Operator and Emulator pinned in the code and hard ceilings on escrows, chip-ins and treasury size.
+the way `pnpm ops init --lnurl` does for a hive on its own host. Keepers can fund jobs and withdraw
+to an Arkade address two of them agree on, which is how a hive moves or winds down, and that is
+all: there is no tooling for the exit path or for replacing a keeper. The keeper console is
+reproducible and hashed, and a keeper can check a host's copy against their own build or serve
+their own, though it is not published as a signed release. A keeper's console checks every
+payment's escrow, coins and amount itself, yet it takes what approved work has left from the desk,
+which it cannot check against the channel. A host that is forwarded a channel cannot see who is in
+it, so it keeps strangers' events apart from the hive's own instead of refusing them. The buyer
+signs for the usage a provider reports only as far as the request itself could have gone, and
+within that it still takes the provider's count. The services run from a git checkout, and on a
+host every hive's agent node runs as the same user as the service. Mainnet sits behind an explicit
+opt-in, with the Operator and Emulator pinned in the code and hard ceilings on escrows, chip-ins and
+treasury size. [SECURITY.md](SECURITY.md) says what each part is trusted with.
 
 ## The Buzz plugin
 
@@ -222,8 +227,9 @@ sweep its wallet to an Arkade address.
 The treasury, every job's escrow and every provider's wallet are Bitcoin
 outputs locked by rules that hold whoever runs the server:
 
-- One keeper alone moves nothing. Two keepers can fund only a job both of
-  them approved, for exactly its cap.
+- One keeper alone moves nothing. Two keepers can fund a job both of them
+  approved, for exactly its cap, or withdraw to an address both of them read
+  in their own console.
 - A job's escrow pays out one of two ways. Before the deadline the provider
   can take the amount on the buyer's latest signed receipt, up to the cap,
   with the rest going back to the hive. After the deadline the whole escrow

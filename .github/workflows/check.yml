@@ -1,0 +1,83 @@
+# Every check the repository has that needs no stack of its own, on each push and pull request:
+# the formatter, the linter, the type checker and the tests; the offline gates and the audit over
+# the recorded evidence; the Buzz plugin's and the keeper console's tests; the pay-arkade plugin's
+# tests and lints; and the known advisories against the locked dependencies. The vector checks
+# (`pnpm vectors:check`) need the delegatee's source beside the repository and stay a local step.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hive:
+    name: Format, lint, types, tests, gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The service's tests load hive-api's channel code, which reads its own dependencies.
+      - run: npm ci --no-audit --no-fund
+        working-directory: hive/hive-buzz
+      - run: pnpm check
+      - run: pnpm gates:offline
+      - run: pnpm audit:v4 --offline
+      - name: Known advisories against the locked dependencies
+        run: pnpm audit
+
+  buzz:
+    name: Buzz plugin, hive-api and keeper console
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # The console bundles the hive's own checking and signing code from packages/.
+      - run: pnpm install --frozen-lockfile
+      - run: npm ci --no-audit --no-fund
+        working-directory: hive/hive-buzz
+      - run: npm test
+        working-directory: hive/hive-buzz
+      - name: The keeper console builds the same twice
+        working-directory: hive/hive-buzz
+        run: |
+          node keeper/build.mjs "$RUNNER_TEMP/console-a" --mainnet
+          node keeper/build.mjs "$RUNNER_TEMP/console-b" --mainnet
+          cmp "$RUNNER_TEMP/console-a/index.html" "$RUNNER_TEMP/console-b/index.html"
+          cmp "$RUNNER_TEMP/console-a/console.js" "$RUNNER_TEMP/console-b/console.js"
+
+  pay-arkade:
+    name: pay-arkade plugin and worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable && rustup component add clippy
+      - run: cargo test --locked
+        working-directory: hive/pay-arkade/plugin
+      - run: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: hive/pay-arkade/plugin
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: hive/pay-arkade/worker
+      - run: bunx tsc --noEmit -p .
+        working-directory: hive/pay-arkade/worker

@@ -160,7 +160,22 @@ other stream with a 402 that says what to add, rather than serve an answer it ca
 
 A buyer also takes `--treasury-program` (required: where every return goes), `--cap-sats` and
 `--period-secs` (each job's size and life), `--max-price-msat-per-mtok`, `--funding-queue` (one
-JSON line per job for the keepers to fund) and `--expire-grace-secs`.
+JSON line per job for the keepers to fund), `--expire-grace-secs` and `--max-unnamed-output-tokens`.
+
+The provider counts the tokens of each answer, and the buyer signs for that count only as far as
+the request itself could have gone: every byte of its body as a token, room for the chat template,
+and the output limit it names, or `--max-unnamed-output-tokens` (16,384 by default) when it names
+none. A count above that is receipted at the bound and logged as `usage_capped`. Within the bound
+the count is still the provider's own, which is why a buyer names the providers it pays.
+
+A claim is the provider's word until the Operator shows the escrow's coin spent. When a provider
+reports one, the buyer holds the job as closing, sends it no more requests, and closes it once the
+coin is seen spent; if it never is, the escrow is returned after the deadline like any unclaimed one.
+
+Both roles keep their jobs in `jobs.json`, written whole on every change, and move jobs settled
+more than thirty days ago to `jobs-archive.jsonl` beside it. The worker holds the key and talks to
+the Operator; when it exits, the plugin starts it again on the next call. A key file that other
+users of the machine can read is refused.
 
 The buyer never holds treasury keys. It writes each agreed job to the funding queue and its log,
 with every term the escrow is built from, so each keeper's console can rebuild the address and see
@@ -209,7 +224,9 @@ edits apply at once:
 ```
 
 An entry may name its own `model`. What each member has spent today is kept in `usage.json` in the
-agent's state directory, so a restart does not reset it. The agent logs one `member_usage` line per
+agent's state directory, so a restart does not reset it, and a request counts against the allowance
+from the moment it is admitted, at its worst case, so a member cannot spend past it by sending many
+requests at once. The agent logs one `member_usage` line per
 request with the member, the proposal, the tokens and what they cost at the served job's quoted
 price; prompts and answers are never logged. hive-api adds these up per proposal.
 
@@ -244,6 +261,8 @@ Mainnet runs on `https://arkade.computer`, with the emulator URL each hive gives
   earliest expiry it accepts.
 - **Late funding.** An escrow funded after the provider stopped waiting is never opened, and the
   buyer returns it after the deadline.
+- **Stray coins.** Anyone can send a coin to an escrow's public address. The job's funding is the
+  escrow's largest coin, and only that coin's amount and expiry decide whether the job opens.
 - **Preflight.** The worker's `preflight` op checks that the operator is on the expected network,
   charges no offchain fee (claims and returns pay out every sat) and serves the emulator key the
   SDK expects. `install-provider.sh` runs it before writing any config.

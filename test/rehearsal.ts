@@ -229,7 +229,7 @@ try {
   );
   step("MeshLLM nodes up", { agent: agentId.slice(0, 12), member: memberId.slice(0, 12) });
 
-  // The channel: a proposal from the member, two keepers' ✅ after its discussion, the member's node.
+  // The channel: a proposal from the member, two keepers' ✅ after its discussion, the member's node and a keeper's ✅ on it.
   const proposal = signed(
     buzz[2]!,
     channel,
@@ -237,11 +237,14 @@ try {
     await proposalText("Answers for the docs channel"),
     now() - 600,
   );
+  // On a host that names its keepers itself, a member's node counts once a keeper reacts ✅ to it.
+  const claim = signed(buzz[2]!, channel, 9, `Hive node: ${memberId}`, now() - 60);
   const forwarded = [
     proposal,
     signed(buzz[0]!, channel, 7, "✅", now() - 300, [["e", proposal.id]]),
     signed(buzz[1]!, channel, 7, "✅", now() - 290, [["e", proposal.id]]),
-    signed(buzz[2]!, channel, 9, `Hive node: ${memberId}`, now() - 60),
+    claim,
+    signed(buzz[0]!, channel, 7, "✅", now() - 50, [["e", claim.id]]),
     signed(buzz[0]!, channel, 9, `Hive keeper key: ${keepers[0]}`, now() - 900),
     signed(buzz[1]!, channel, 9, `Hive keeper key: ${keepers[1]}`, now() - 890),
   ];

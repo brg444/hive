@@ -135,9 +135,8 @@ export class Escrow {
             expiresAtHeight: v.expiresAtHeight ?? null,
         }));
         const open = coins.filter((c) => !c.spent);
-        const times = open.map((c) => c.expiresAt).filter((t): t is number => t !== null);
         // Anyone can send dust to a public address: the job's funding is its largest coin, and only
-        // that coin decides whether the job is funded.
+        // that coin decides whether the job is funded and how long its funding lasts.
         const funding = open.reduce<(typeof open)[number] | null>((best, c) => (!best || c.value > best.value ? c : best), null);
         return {
             coins,
@@ -145,8 +144,9 @@ export class Escrow {
             lockedSats: open.reduce((n, c) => n + c.value, 0),
             fundingSats: funding?.value ?? 0,
             fundingCoin: funding ? `${funding.txid}:${funding.vout}` : null,
-            // The soonest expiry among unspent coins; null when none states a time.
-            expiresAt: times.length ? Math.min(...times) : null,
+            // When the funding coin's batch expires; null when it states no time. A stray coin
+            // beside it, in a batch that expires sooner, says nothing about the job's funding.
+            expiresAt: funding?.expiresAt ?? null,
         };
     }
 
@@ -184,8 +184,8 @@ export class Escrow {
 
     /** Is this the operator and emulator we think, and can the escrow's spends go through as built? */
     async preflight(operatorUrl: string, emulatorUrl: string) {
-        const operator = await (await fetch(`${operatorUrl}/v1/info`)).json();
-        const emulator = await (await fetch(`${emulatorUrl}/v1/info`)).json();
+        const operator = await (await fetch(`${operatorUrl}/v1/info`, { signal: AbortSignal.timeout(15_000) })).json();
+        const emulator = await (await fetch(`${emulatorUrl}/v1/info`, { signal: AbortSignal.timeout(15_000) })).json();
         const problems: string[] = [];
         if (operator.network !== this.network) problems.push(`operator is on ${operator.network}, worker on ${this.network}`);
         // Claims and expiries pay every sat out; a fee on offchain spends would have to come from somewhere.

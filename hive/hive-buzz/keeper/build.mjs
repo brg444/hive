@@ -51,7 +51,12 @@ const LOCAL = " http://127.0.0.1:* http://localhost:*";
 if (!page.includes(`connect-src https:${LOCAL};`)) throw new Error("the console's connect-src moved; update build.mjs");
 // The mainnet console talks to HTTPS hosts only: no desk on this device's own ports.
 const mainnetPage = page.replace(TEST_NOTE, MAINNET_NOTE).replace(`connect-src https:${LOCAL};`, "connect-src https:;");
-writeFileSync(join(out, "index.html"), process.argv.includes("--mainnet") ? mainnetPage : page);
+// The page names its one script by hash: a browser runs console.js only as this build made it.
+const SCRIPT = '<script type="module" src="console.js"></script>';
+if (!page.includes(SCRIPT)) throw new Error("the console's script tag moved; update build.mjs");
+const integrity = `sha384-${createHash("sha384").update(readFileSync(join(out, "console.js"))).digest("base64")}`;
+const pinned = (html) => html.replace(SCRIPT, `<script type="module" src="console.js" integrity="${integrity}"></script>`);
+writeFileSync(join(out, "index.html"), pinned(process.argv.includes("--mainnet") ? mainnetPage : page));
 // The build is the same byte for byte from the same commit, so keepers can compare what their host
 // serves with what they build themselves, or with the hashes published with a release.
 const sums = ["index.html", "console.js"]

@@ -4,6 +4,9 @@
   "type": "module",
   "scripts": {
     "build": "node plugin/build.mjs",
+    "keeper:build": "node keeper/build.mjs",
+    "keeper:verify": "node keeper/verify.mjs",
+    "keeper:serve": "node keeper/serve.mjs",
     "test": "HIVE_PRICE_URL=off node --test test/*.test.mjs"
   },
   "dependencies": {

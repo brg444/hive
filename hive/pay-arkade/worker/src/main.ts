@@ -5,7 +5,7 @@
 //   response {"id": 1, "ok": {...}}  or  {"id": 1, "error": "..."}
 // Requests are answered in arrival order of completion; the id ties them together.
 // Every key operation lives here, so the plugin itself carries no wallet code.
-import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { hex } from "@scure/base";
 import { schnorr } from "@noble/curves/secp256k1.js";
@@ -47,6 +47,10 @@ function loadSecret(path: string): Uint8Array {
         writeFileSync(path, hex.encode(schnorr.utils.randomSecretKey()) + "\n", { mode: 0o600 });
         chmodSync(path, 0o600);
     }
+    // The key is this file and nothing else: one that other users of the machine can read is refused
+    // rather than used, so a copy or a restore that widened its mode is noticed at once.
+    if (process.platform !== "win32" && (statSync(path).mode & 0o077) !== 0)
+        throw new Error(`${path} is readable by other users of this machine; run chmod 600 on it`);
     return hexBytes(readFileSync(path, "utf8").trim(), 32, "key file");
 }
 

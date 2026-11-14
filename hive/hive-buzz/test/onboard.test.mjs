@@ -75,6 +75,14 @@ test("the treasury is announced once the host has one, and the first proposal cl
     r = step(record, cfg([], { state: { treasury: { address: "ark1qreal" }, chipIn: { lightningAddress: "hive@example.org" } } }));
     assert.deepEqual(r.posts.map((p) => p.key), ["treasury-ready"]);
     assert.equal(r.posts[0].text, "The treasury is ready. Chip in at hive@example.org, or send to ark1qreal from any Lightning or Arkade wallet. Every chip-in lands in the treasury as Bitcoin.");
+    // A host whose hive is another bot's, or built from other keepers or keys, is not this channel's treasury.
+    const keyOf = { [A]: `02${"11".repeat(32)}`, [C]: `02${"22".repeat(32)}` };
+    const posted = [A, C].map((k, i) => ({ id: `key-${i}`, kind: 9, pubkey: k, created_at: 100 + i, tags: [], content: `Hive keeper key: ${keyOf[k]}` }));
+    const host = (over = {}) => ({ treasury: { address: "ark1qreal" }, hive: { bot: BOT }, governance: { keepers: [A, C], keeperKeys: [keyOf[A], keyOf[C]] }, ...over });
+    assert.deepEqual(step(record, cfg(posted, { state: host() })).posts.map((p) => p.key), ["treasury-ready"]);
+    assert.deepEqual(step(record, cfg(posted, { state: host({ hive: { bot: "ee".repeat(32) } }) })).posts, [], "another bot's hive");
+    assert.deepEqual(step(record, cfg(posted, { state: host({ governance: { keepers: [A, "dd".repeat(32)], keeperKeys: [keyOf[A], keyOf[C]] } }) })).posts, [], "other keepers");
+    assert.deepEqual(step(record, cfg(posted, { state: host({ governance: { keepers: [A, C], keeperKeys: [keyOf[A], `02${"33".repeat(32)}`] } }) })).posts, [], "another key");
     record = r.record;
     assert.deepEqual(step(record, cfg([], { state: { treasury: { address: "ark1qreal" } } })).posts, [], "said once");
 

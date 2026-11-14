@@ -5,12 +5,14 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import {
   callWorker,
+  clientAddress,
   decimal,
   exactObject,
   Fault,
   isFault,
   localPath,
   readJson,
+  rateLimit,
   readPrivateJson,
   runInWindow,
   secretPath,
@@ -92,6 +94,42 @@ test("workers return results or bare codes, never messages or output", async () 
     },
   );
   await assert.rejects(() => callWorker({ entry, args: [] }, { mode: "crash" }), code("WORKER_FAILED"));
+});
+
+test("a burst of worker requests is answered a few processes at a time, in full", async () => {
+  const entry = resolve(import.meta.dirname, "fixtures/echo-worker.ts");
+  const answers = await Promise.all(
+    Array.from({ length: 10 }, (_, i) =>
+      callWorker<{ payload: number }>({ entry, args: [] }, { mode: "echo", payload: i }),
+    ),
+  );
+  assert.deepEqual(
+    answers.map((a) => a.payload),
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  );
+  // A failure gives its place up like a success: the next request still runs.
+  await assert.rejects(() => callWorker({ entry, args: [] }, { mode: "crash" }), code("WORKER_FAILED"));
+  assert.deepEqual(await callWorker({ entry, args: [] }, { mode: "echo", payload: 1 }), {
+    payload: 1,
+    args: [],
+  });
+});
+
+test("a client's address is the proxy's word only from this machine, and its share of requests runs out and refills", () => {
+  const from = (peer: string, forwarded?: string) =>
+    clientAddress({
+      socket: { remoteAddress: peer },
+      headers: forwarded ? { "x-forwarded-for": forwarded } : {},
+    } as never);
+  assert.equal(from("203.0.113.9"), "203.0.113.9");
+  assert.equal(from("203.0.113.9", "198.51.100.1"), "203.0.113.9", "a header from elsewhere is not believed");
+  assert.equal(from("127.0.0.1", "198.51.100.1, 198.51.100.7"), "198.51.100.7", "the entry the proxy added");
+  const limit = rateLimit(60, 3);
+  assert.deepEqual(
+    [1, 2, 3, 4].map(() => limit.take("a")),
+    [true, true, true, false],
+  );
+  assert.equal(limit.take("b"), true, "another client has its own share");
 });
 
 test("window runs retry inside the window and stop at its end", async () => {

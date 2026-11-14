@@ -13,6 +13,8 @@ import { hex } from "@scure/base";
 import { hiveLinkDigest } from "./signing.ts";
 
 const BATCH = 500;
+/** No request to the service waits longer than this: a service that stops answering costs one pass, not the link. */
+const TIMEOUT_MS = 30_000;
 
 export interface LinkOptions {
     url: string;
@@ -40,7 +42,11 @@ export async function runHiveLink(o: LinkOptions): Promise<void> {
         try {
             // The members the hive's proposals allow, written whole so the plugin never reads half a file.
             const m = sign("members");
-            const res = await fetch(`${base}/agent/v1/members?at=${m.at}&signature=${m.signature}`);
+            // In headers, which proxies and access logs leave out, not in the address.
+            const res = await fetch(`${base}/agent/v1/members`, {
+                headers: { "x-hive-at": String(m.at), "x-hive-signature": m.signature },
+                signal: AbortSignal.timeout(TIMEOUT_MS),
+            });
             if (res.ok) {
                 const text = JSON.stringify(await res.json(), null, 2) + "\n";
                 let current = "";
@@ -61,6 +67,7 @@ export async function runHiveLink(o: LinkOptions): Promise<void> {
                     method: "POST",
                     headers: { "content-type": "application/json" },
                     body: JSON.stringify({ ...s, offset, lines: batch }),
+                    signal: AbortSignal.timeout(TIMEOUT_MS),
                 });
                 const body = (await r.json().catch(() => ({}))) as { lines?: number; error?: string; detail?: string };
                 if (r.ok && typeof body.lines === "number") offset = body.lines;

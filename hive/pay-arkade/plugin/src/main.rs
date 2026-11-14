@@ -27,6 +27,8 @@ use std::time::Duration;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TICK: Duration = Duration::from_secs(3);
+/// Jobs settled long ago leave the book for its archive this often, counted in ticks: hourly.
+const ARCHIVE_EVERY_TICKS: u64 = 1_200;
 
 struct Args(Vec<String>);
 impl Args {
@@ -92,6 +94,7 @@ async fn main() -> Result<()> {
         delegate: args.get("--delegate"),
         renew_after_secs: args.get("--renew-after-secs").map(|v| v.parse()).transpose()?,
         max_open_sats: args.num("--max-open-sats", 100_000)?,
+        max_unnamed_output_tokens: args.num("--max-unnamed-output-tokens", 16_384)?,
         price_msat_per_mtok: args.num("--price-msat-per-mtok", 2_000_000)?,
         min_cap_sats: args.num("--min-cap-sats", 1_000)?,
         max_cap_sats: args.num("--max-cap-sats", 1_000_000)?,
@@ -138,15 +141,18 @@ async fn main() -> Result<()> {
     for job in book.jobs.values_mut() {
         job.reserved.clear();
     }
+    let archived = book.archive_settled(book::now())?;
+    let usage = gateway::Usage::load(&state_dir.join("usage.json"))?;
     let app = Arc::new(App {
         book: Mutex::new(book),
         cfg,
         worker,
         pubkey,
         exchanges: Default::default(),
+        usage: Mutex::new(usage),
         busy: Default::default(),
     });
-    app.log(json!({"event": "started", "pubkey": app.pubkey, "models": app.cfg.models}));
+    app.log(json!({"event": "started", "pubkey": app.pubkey, "models": app.cfg.models, "archived_jobs": archived}));
 
     let metadata = PluginMetadata::new(
         "pay-arkade",
@@ -176,11 +182,21 @@ async fn main() -> Result<()> {
                 // Funding, claims and expiry run on a clock, not on a request.
                 let ticker = app.clone();
                 tokio::spawn(async move {
+                    let mut ticks: u64 = 0;
                     loop {
                         tokio::time::sleep(TICK).await;
                         match ticker.cfg.role {
                             Role::Seller => ticker.seller_tick(&mut context).await,
                             Role::Buyer => ticker.buyer_tick().await,
+                        }
+                        ticks += 1;
+                        if ticks.is_multiple_of(ARCHIVE_EVERY_TICKS) {
+                            let moved = ticker.book.lock().unwrap().archive_settled(book::now());
+                            match moved {
+                                Ok(0) => {}
+                                Ok(n) => ticker.log(json!({"event": "jobs_archived", "jobs": n})),
+                                Err(e) => ticker.log(json!({"event": "error", "error": format!("archiving settled jobs: {e}")})),
+                            }
                         }
                     }
                 });

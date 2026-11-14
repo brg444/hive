@@ -56,7 +56,13 @@ node api/src/server.mjs --name "Hive" --agent-log <pay-arkade buyer log> --opera
 ```
 
 `--bot` takes the keepers HiveBot recorded during setup, in the order it confirmed them, which is
-the order the treasury is built in; `--keepers` names them instead. A new hive runs without
+the order the treasury is built in; `--keepers` names them instead. Anyone can sign an event that
+names the channel, and the host cannot see who is in it. So a member's node counts once HiveBot
+acknowledged the message naming it or, on a host that knows only its keepers, once a keeper
+reacted ✅ to that message; and the events of the bot, the keepers and everyone one of them has
+mentioned, answered or acknowledged keep their place in the host's store, while everyone else's
+share a smaller space of their own that a flood can fill without pushing the hive's events out.
+hive-api also turns away more than a client's share of requests. A new hive runs without
 `--treasury` until its keepers' keys are in and its treasury is built, and is restarted with it.
 `--discussion-minutes` gives every proposal one short discussion, for a test hive. `--desk` and
 `--console` put the signing desk and the keeper console in the state, so the plugin links keepers
@@ -187,18 +193,35 @@ it. For each job waiting, it rebuilds the escrow from the job's terms with the h
 checks that it gives back to this hive's treasury, that the amount fits what approved work has left
 and that every coin is the treasury's and lasts long enough, then signs only the messages it computed
 itself. The page talks to the desk and the Arkade Operator only, and sends them signatures and public
-nonces, never the key.
+nonces, never the key. It shows the key of the agent that signs a job's receipts, remembers it, and
+asks before signing for a job that names another. What approved work has left is the desk's count:
+the console cannot check it against the channel, so a keeper looks at the proposal there.
+
+Two keepers can also withdraw from the treasury to an Arkade address on the hive's Operator, to
+move a hive or wind it down. One enters the address and the amount and signs; the other reads both
+in their own console, which works out what the address pays itself, and signs. A keeper who signed
+a payment that lapsed or was cancelled signs no other for that job, so the desk plans the next one
+around them, and the console does not offer them one that would be refused.
 
 ```bash
 node keeper/build.mjs dist/keeper [--mainnet]   # index.html and console.js, the hive's checks bundled in
+node keeper/verify.mjs https://<console host> [--mainnet]   # is the host's console the one this checkout builds?
+node keeper/serve.mjs dist/keeper               # the console from your own machine, at http://localhost:8788
 ```
+
+The build is the same byte for byte from the same commit, and the page names its script by hash,
+so a browser runs `console.js` only as that build made it. `verify.mjs` compares what a host serves
+with what the checkout builds. A keeper who wants no host between them and their key serves the
+console themselves with `serve.mjs` and restores their key there from its backup; the desk takes
+calls from a console on the keeper's own machine. Reads of a hive's payments at the desk carry the
+keeper's signature, so the desk shows them to keepers only.
 
 The repo's `Demo` workflow publishes it on GitHub Pages at `/keeper/`, for test networks; a hive's
 host serves the `--mainnet` build for real funds. A passkey belongs to one web address, so keys made
 on one console stay with it. `test/keeper.test.mjs` covers the key handling, and
 `node test/keeper-browser.mjs` runs the page in Chromium with a virtual passkey: creating a key,
 saving its backup, keeping it across a reload and restoring it on another device. The repository's
-`test/keeper-console-e2e.ts` has two keepers sign a payment in their consoles, and
+`test/keeper-console-e2e.ts` has two keepers sign a payment and a withdrawal in their consoles, and
 `test/rehearsal-service.ts` runs two whole hives on a Hive service on regtest.
 
 ## The hive's bot

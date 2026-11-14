@@ -4,16 +4,35 @@ After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
-User=hive
-WorkingDirectory=/opt/hive
+# Its own user: the delegate key and the delegatee's database are read by this service alone.
+User=hive-delegatee
+Group=hive-delegatee
+WorkingDirectory=/var/lib/hive-delegatee
+Environment=DELEGATEE_HOME=/var/lib/hive-delegatee
 EnvironmentFile=/etc/hive/hive.env
 ExecStart=/opt/hive/tools/delegatee.sh
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/hive/.local /opt/hive/.secrets
+ReadWritePaths=/var/lib/hive-delegatee
 PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 //! The hive agent's side: offer, check the quote, queue the job for funding, sign a receipt
 //! after each answer, and return whatever is left unclaimed after the deadline.
-use crate::app::{App, allow, deny, random_hex32, reported_tokens};
-use crate::book::{Job, Status, now, price_msat};
+use crate::app::{App, allow, deny, most_tokens, random_hex32, reported_tokens};
+use crate::book::{DUST_SATS, Job, Status, now, price_msat};
 use crate::protocol::{Message, Quote};
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::PluginContext;
@@ -11,6 +11,19 @@ use std::sync::Arc;
 
 /// An offer with no quote after this long is given up.
 const OFFER_TIMEOUT_SECS: u64 = 60;
+/// A closing job's escrow is looked at again after this long, doubling each time up to five minutes:
+/// a claim shows at the Operator within seconds, and one that never shows is not asked about forever.
+fn closing_wait_secs(checks: u32) -> u64 {
+    (3u64 << checks.min(7)).min(300)
+}
+
+/// Whether the escrow's funding has been spent: every coin that could be the job's funding is gone.
+/// Anyone can send a small coin to a public address, so only coins of at least half the cap count.
+fn funding_spent(status: &Value, cap_sats: u64) -> bool {
+    let coins = status["coins"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let funding = |c: &&Value| c["value"].as_u64().unwrap_or(0).saturating_mul(2) >= cap_sats;
+    coins.iter().filter(funding).count() > 0 && coins.iter().filter(funding).all(|c| c["spent"] == json!(true))
+}
 
 impl App {
     /// Returns the decision, and the provider to open a job with when there is none yet.
@@ -18,6 +31,12 @@ impl App {
         let phase = event["phase"].as_str().unwrap_or_default();
         let exchange = event["exchange_id"].as_str().unwrap_or_default().to_string();
         match phase {
+            // The request's own body says the most it can cost; kept until its answer is receipted.
+            "request_received" => {
+                let most = most_tokens(event, self.cfg.max_unnamed_output_tokens);
+                self.note_exchange(&exchange, |e| e.most_tokens = most);
+                (Default::default(), None)
+            }
             "backend_selected" => {
                 let Some(target) = event["target_peer_id"].as_str() else { return (Default::default(), None) };
                 let model = event["model"].as_str();
@@ -33,6 +52,9 @@ impl App {
                     // the next provider, and open one for next time.
                     return (deny("opening a job with this provider"), Some((target.to_string(), model.unwrap().to_string())));
                 };
+                if job.status == Status::Closing {
+                    return (deny("the job with this provider is closing"), None);
+                }
                 if job.status != Status::Open {
                     return (deny("the job with this provider is waiting for funding"), None);
                 }
@@ -43,7 +65,7 @@ impl App {
                     return (deny("the job with this provider is spent or closing"), None);
                 }
                 drop(book);
-                self.exchanges.lock().unwrap().insert(exchange, target.to_string());
+                self.note_exchange(&exchange, |e| e.peer = Some(target.to_string()));
                 (allow(), None)
             }
             _ => (Default::default(), None),
@@ -53,8 +75,18 @@ impl App {
     /// After an answer: add its cost and send a receipt for the new cumulative total.
     pub async fn buyer_finished(&self, event: &Value, ctx: &mut PluginContext<'_>) -> Result<()> {
         let exchange = event["exchange_id"].as_str().unwrap_or_default();
-        let Some(peer) = self.exchanges.lock().unwrap().remove(exchange) else { return Ok(()) };
-        let Some(tokens) = reported_tokens(event) else { return Ok(()) };
+        let Some(noted) = self.exchanges.lock().unwrap().remove(exchange) else { return Ok(()) };
+        let Some(peer) = noted.peer else { return Ok(()) };
+        let Some(reported) = reported_tokens(event) else { return Ok(()) };
+        // The provider counts the tokens, and the agent signs for its count only as far as the
+        // request itself could have gone: its own bytes and the output it allowed.
+        let tokens = match noted.most_tokens {
+            Some(most) if reported > most => {
+                self.log(json!({"event": "usage_capped", "exchange_id": exchange, "provider": peer, "reported_tokens": reported, "most_tokens": most}));
+                most
+            }
+            _ => reported,
+        };
         let (job_id, amount) = {
             let mut book = self.book.lock().unwrap();
             let Some(job) = book.live_with(&peer).filter(|j| j.status == Status::Open) else { return Ok(()) };
@@ -110,7 +142,7 @@ impl App {
             let committed: u64 = book
                 .jobs
                 .values()
-                .filter(|j| matches!(j.status, Status::Offered | Status::Quoted | Status::Open))
+                .filter(|j| j.live())
                 .map(|j| j.quote.as_ref().map_or(0, |q| q.cap_sats))
                 .sum();
             if committed + self.cfg.cap_sats > self.cfg.max_open_sats {
@@ -161,16 +193,24 @@ impl App {
                 if !ours {
                     return Ok(());
                 }
-                // A claim moves the coin, which the expiry pass will see; a close with no claim
-                // leaves the escrow for this side to return after the deadline.
-                if let Some(txid) = &txid {
-                    self.set_status_if(&job_id, peer, &[Status::Open], Status::Closed, None);
-                    if let Some(job) = self.book.lock().unwrap().jobs.get_mut(&job_id).filter(|j| j.status == Status::Closed) {
-                        job.txid = Some(txid.clone());
-                    }
+                // A close with no claim leaves the escrow for this side to return after the deadline.
+                let Some(txid) = txid else {
+                    self.log(json!({"event": "job_closed", "job_id": job_id, "txid": null, "paid_sats": paid_sats, "returned_sats": returned_sats}));
+                    return Ok(());
+                };
+                // A claim is the provider's word until the Operator shows the escrow's coin spent.
+                // Until then the job is closing, not closed: it takes no more requests, and if the
+                // coin is still there after the deadline the expiry pass returns it like any other.
+                {
+                    let mut book = self.book.lock().unwrap();
+                    let Some(job) = book.jobs.get_mut(&job_id).filter(|j| j.status == Status::Open) else { return Ok(()) };
+                    job.status = Status::Closing;
+                    job.txid = Some(txid.clone());
+                    job.reported = Some((paid_sats, returned_sats));
+                    self.save(&book);
                 }
-                self.log(json!({"event": "job_closed", "job_id": job_id, "txid": txid, "paid_sats": paid_sats, "returned_sats": returned_sats}));
-                Ok(())
+                self.log(json!({"event": "close_reported", "job_id": job_id, "txid": txid, "paid_sats": paid_sats, "returned_sats": returned_sats}));
+                self.confirm_closed(&job_id).await
             }
             _ => Ok(()),
         }
@@ -267,8 +307,33 @@ impl App {
         Ok(())
     }
 
+    /// A closing job is closed once the Operator shows its escrow's funding spent.
+    async fn confirm_closed(&self, job_id: &str) -> Result<()> {
+        let Some(job) = self.book.lock().unwrap().jobs.get_mut(job_id).filter(|j| j.status == Status::Closing).map(|j| {
+            j.checked_at = now();
+            j.closing_checks = j.closing_checks.saturating_add(1);
+            j.clone()
+        }) else {
+            return Ok(());
+        };
+        let quote = job.quote.clone().expect("closing");
+        let status = self.worker.call("escrow_status", json!({"params": quote.params()})).await?;
+        if !funding_spent(&status, quote.cap_sats) {
+            return Ok(());
+        }
+        self.set_status(job_id, Status::Closed, None, None);
+        // What the claim paid is what the agent signed for: the receipt, or the whole coin when
+        // less than dust would be left. The provider's own figures are logged only within that.
+        let (said_paid, said_returned) = job.reported.unwrap_or((job.receipt_sats, 0));
+        let paid = if said_paid <= job.receipt_sats + DUST_SATS { said_paid } else { job.receipt_sats };
+        let returned = said_returned.min(quote.cap_sats.saturating_sub(paid));
+        self.log(json!({"event": "job_closed", "job_id": job_id, "txid": job.txid, "paid_sats": paid, "returned_sats": returned}));
+        Ok(())
+    }
+
     pub async fn buyer_tick(self: &Arc<Self>) {
-        let jobs: Vec<Job> = self.book.lock().unwrap().jobs.values().cloned().collect();
+        // Only jobs still under way: the settled ones have nothing left for the clock to do.
+        let jobs: Vec<Job> = self.book.lock().unwrap().jobs.values().filter(|j| j.live()).cloned().collect();
         let t = now();
         for job in jobs {
             let deadline = job.deadline();
@@ -282,7 +347,8 @@ impl App {
                 Status::Quoted if t > deadline + self.cfg.expire_grace_secs => self.return_unclaimed(&job).await,
                 Status::Quoted if t > deadline => Ok(()),
                 Status::Quoted => self.confirm_funded(&job.job_id).await,
-                Status::Open if t > deadline + self.cfg.expire_grace_secs => self.return_unclaimed(&job).await,
+                Status::Open | Status::Closing if t > deadline + self.cfg.expire_grace_secs => self.return_unclaimed(&job).await,
+                Status::Closing if t >= job.checked_at + closing_wait_secs(job.closing_checks) => self.confirm_closed(&job.job_id).await,
                 _ => Ok(()),
             };
             if let Err(e) = result {
@@ -303,6 +369,10 @@ impl App {
                 (_, false) => (Status::Expired, "escrow empty"),
             };
             self.set_status(&job.job_id, next, Some(note.into()), None);
+            if job.status == Status::Closing && next == Status::Closed {
+                self.log(json!({"event": "job_closed", "job_id": job.job_id, "txid": job.txid, "paid_sats": job.receipt_sats,
+                    "returned_sats": quote.cap_sats.saturating_sub(job.receipt_sats)}));
+            }
             return Ok(());
         }
         let result = self.worker.call("expire", json!({"params": quote.params()})).await?;
@@ -322,5 +392,28 @@ impl App {
             }
             self.save(&book);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_job_is_closed_only_when_its_funding_is_seen_spent() {
+        let coin = |value: u64, spent: bool| json!({"value": value, "spent": spent});
+        // The provider's word alone: the funding is still there.
+        assert!(!funding_spent(&json!({"coins": [coin(20_000, false)]}), 20_000));
+        assert!(!funding_spent(&json!({"coins": []}), 20_000));
+        // Claimed: spent, whatever dust someone left beside it.
+        assert!(funding_spent(&json!({"coins": [coin(20_000, true), coin(330, false)]}), 20_000));
+        // Renewed into a new coin: the old one is spent, the escrow is not.
+        assert!(!funding_spent(&json!({"coins": [coin(20_000, true), coin(19_950, false)]}), 20_000));
+        assert!(funding_spent(&json!({"coins": [coin(20_000, true), coin(19_950, true)]}), 20_000));
+    }
+
+    #[test]
+    fn a_closing_job_is_looked_at_soon_at_first_and_seldom_later() {
+        assert_eq!([0, 1, 2, 3, 6, 7, 40].map(closing_wait_secs), [3, 6, 12, 24, 192, 300, 300]);
     }
 }

@@ -299,11 +299,79 @@ async function showPayments() {
             el("span", { className: "note", textContent: `${role.action ? "" : `${role.label}. `}Provider ${short(r.providerPk)}, deadline ${when(r.deadline)}.` })));
     }
     $("payments-empty").hidden = view.payments.length > 0;
+    const withdrawals = $("withdrawal-list");
+    withdrawals.replaceChildren();
+    for (const entry of view.withdrawals ?? []) {
+        const p = entry.payment;
+        const role = sitting.role(entry);
+        const open = el("button", { className: role.action ? "primary" : "quiet", type: "button", textContent: role.action ? role.label : "Details" });
+        open.addEventListener("click", () => showWithdrawal(entry));
+        withdrawals.append(el("li", {},
+            el("div", { className: "row" }, el("b", { textContent: `Withdraw ${money(p.withdrawal.amountSats, usd())}` }), open),
+            el("span", { className: "note", textContent: `${role.action ? "" : `${role.label}. `}To ${short(p.address)}, started ${when(p.createdAt)}.` })));
+    }
     show("payments");
 }
 
+const JOB_NOTE = $("payment-note").textContent;
+
+/** A withdrawal on screen: where the treasury pays and how much, for the keeper to read before signing. */
+function showWithdrawal(entry) {
+    current = entry;
+    const p = entry.payment;
+    const role = sitting.role(entry);
+    $("payment-title").textContent = "Withdraw from the treasury";
+    $("payment-note").textContent = "Two keepers sign a withdrawal. Your console works out what the address pays itself and signs for that address and amount only.";
+    $("payment-lead").textContent = role.action
+        ? "A keeper asks the treasury to pay this address. Sign only if the keepers agreed on it in the hive's channel: the whole address, to its last character, and the amount."
+        : `${role.label}.`;
+    const rows = [
+        ["Amount", money(p.withdrawal.amountSats, usd(), true)],
+        ["To", p.address],
+        ["Started by", p.first === sitting.me ? "you" : short(p.first)],
+        ["Signs with", p.second === sitting.me ? "you" : short(p.second)],
+        ["Until", `${when(p.withdrawal.expiresAt)}: unsigned by then, it lapses`],
+    ];
+    $("payment-facts").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", { textContent: k }), el("dd", { textContent: v })]));
+    const checks = [
+        [sitting.withdrawalMatches(p), "The address shown is the one this withdrawal pays."],
+        [p.withdrawal.expiresAt > Date.now() / 1000 + 120, "There is time left to sign."],
+    ];
+    $("payment-checks").replaceChildren(...checks.map(([ok, text]) => el("li", { textContent: text, dataset: { ok: String(Boolean(ok)) } })));
+    const sound = checks.every(([ok]) => ok);
+    $("act").hidden = !role.action;
+    $("act").textContent = role.label;
+    $("act").disabled = !sound;
+    $("cancel-payment").hidden = !role.cancel;
+    say("payment-msg", sound || !role.action ? "" : "Something here does not add up. Do not sign; tell the other keepers in the hive's channel.");
+    show("payment");
+}
+
+$("withdraw-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    say("withdraw-msg", "");
+    const address = $("w-address").value.trim();
+    const amount = Number($("w-amount").value);
+    if (!confirm(`Withdraw ${money(amount, usd(), true)} from the treasury to\n\n${address}\n\nThe other keeper must read and sign the same address and amount. Go on only if the keepers agreed on this in the hive's channel.`)) return;
+    const button = e.target.querySelector("button[type=submit]");
+    busy(button, true, "Checking and signing…");
+    try {
+        await sitting.startWithdrawal(address, amount);
+        e.target.reset();
+        $("withdraw").open = false;
+        await showPayments();
+        say("payments-msg", "Signed. The other keeper signs next; you sign once more after them.", false);
+    } catch (err) {
+        say("withdraw-msg", `${err.message}${err.code ? ` (${err.code})` : ""}`);
+    } finally {
+        busy(button, false, "Check and sign the withdrawal");
+    }
+});
+
 function showPayment(entry, budget) {
     current = entry;
+    $("payment-title").textContent = "Fund a job";
+    $("payment-note").textContent = JOB_NOTE;
     const r = entry.job.request;
     const role = sitting.role(entry);
     const facts = sitting.facts(r);
@@ -315,33 +383,43 @@ function showPayment(entry, budget) {
         ["Model", r.model],
         ["Price", `${money(Math.round(r.priceMsatPerMtok / 1000), usd())} per million tokens`],
         ["Provider", r.providerPk],
+        ["Agent", `${r.params?.agentPk ?? "not named"}: the key that signs this job's receipts`],
         ["Deadline", `${when(r.deadline)}: whatever the job does not use comes back after it`],
         ["Escrow", r.address],
-        ["Budget", `${money(budget.remainingSats, usd())} left in approved work`],
+        ["Budget", `${money(budget.remainingSats, usd())} left in approved work, as the hive's desk counts it`],
     ];
     $("payment-facts").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", { textContent: k }), el("dd", { textContent: v })]));
     const checks = [
         [facts.escrowMatches, "The address is the escrow the job's terms build."],
         [facts.returnsHere, "Unused funds go back to this hive's treasury."],
-        [r.capSats <= budget.remainingSats, "The amount fits what approved work has left."],
+        [r.capSats <= budget.remainingSats, "The amount fits what approved work has left, by the desk's count: check the proposal in the hive's channel."],
+        [!sitting.agentChanged(r), "The agent's key is the one you signed for before, or you confirm the new one when you sign."],
         [r.deadline > Date.now() / 1000 + 120, "The deadline leaves time to sign."],
     ];
     $("payment-checks").replaceChildren(...checks.map(([ok, text]) => el("li", { textContent: text, dataset: { ok: String(Boolean(ok)) } })));
     $("act").hidden = !role.action;
     $("act").textContent = role.label;
-    $("act").disabled = !checks.every(([ok]) => ok);
+    // A new agent key is the keeper's to confirm; anything else that fails is not signed at all.
+    const sound = checks.every(([ok], i) => ok || i === checks.length - 1);
+    $("act").disabled = !sound;
     $("cancel-payment").hidden = !role.cancel;
-    say("payment-msg", checks.every(([ok]) => ok) ? "" : "Something here does not add up. Do not sign; tell the other keepers in the hive's channel.");
+    say("payment-msg", !sound ? "Something here does not add up. Do not sign; tell the other keepers in the hive's channel."
+        : sitting.agentChanged(r) ? "This job names a new agent key. Sign only if the hive changed its agent node and said so in its channel." : "");
     show("payment");
 }
 
 $("act").addEventListener("click", async (e) => {
     say("payment-msg", "");
+    const before = current.job ? sitting.agentChanged(current.job.request) : null;
+    if (before) {
+        if (!confirm(`This job's receipts are signed by a new agent key.\n\nBefore: ${before}\nNow: ${current.job.request.params.agentPk}\n\nSign only if the hive changed its agent node and said so in its channel.`)) return;
+        sitting.acceptAgent(current.job.request);
+    }
     busy(e.target, true, "Checking and signing…");
     try {
         const out = await sitting.act(current);
         const status = out?.payment?.status;
-        say("payment-msg", status === "submitted" ? "Signed. Both keepers have signed, and the payment is on its way to the escrow."
+        say("payment-msg", status === "submitted" ? `Signed. Both keepers have signed, and the payment is on its way${current.payment?.withdrawal ? "" : " to the escrow"}.`
             : out?.payment?.first === sitting.me ? "Signed. The other keeper signs next; you sign once more after them."
             : "Signed. The other keeper finishes it.", false);
         e.target.hidden = true;
@@ -352,7 +430,7 @@ $("act").addEventListener("click", async (e) => {
 });
 $("cancel-payment").addEventListener("click", async () => {
     try {
-        await sitting.cancel(current.job.request.jobId);
+        await sitting.cancel(current.payment?.jobId ?? current.job.request.jobId);
         await showPayments();
     } catch (err) {
         say("payment-msg", err.message);

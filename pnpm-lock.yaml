@@ -6,6 +6,7 @@ settings:
 
 overrides:
   '@arkade-os/swap>@arkade-os/sdk': 0.4.78
+  ws: 8.21.3
 
 importers:
 
@@ -69,8 +70,8 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
       ws:
-        specifier: 8.18.3
-        version: 8.18.3
+        specifier: 8.21.3
+        version: 8.21.3
 
   packages/agent:
     dependencies:
@@ -603,7 +604,7 @@ packages:
   isomorphic-ws@5.0.0:
     resolution: {integrity: sha512-muId7Zzn9ywDsyXgTIafTry2sV3nySZeUDe6YedVd1Hvuuep5AsIlqK+XefWpYTyJG5e503F2xIuT2lcU6rCSw==}
     peerDependencies:
-      ws: '*'
+      ws: 8.21.3
 
   lodash.memoize@4.1.2:
     resolution: {integrity: sha512-t7j+NzmgnQzTAYXcsHYLgimltOV1MXHtlOWf6GjL9Kj8GK5FInw5JotxvbOs+IvV1/Dzo04/fCGfLVs7aXb4Ag==}
@@ -658,8 +659,8 @@ packages:
     resolution: {integrity: sha512-pBjfFqb9j2FBz7NPbnd8r2lOYanEw8ACzfKxOtHCgEGqre5QiTax5XHLVgbsiOvST0vmsHAiMtkJPvsZm77PIQ==}
     engines: {node: '>=10'}
 
-  ws@8.18.3:
-    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
+  ws@8.21.3:
+    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -983,9 +984,9 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
-  isomorphic-ws@5.0.0(ws@8.18.3):
+  isomorphic-ws@5.0.0(ws@8.21.3):
     dependencies:
-      ws: 8.18.3
+      ws: 8.21.3
 
   lodash.memoize@4.1.2: {}
 
@@ -1034,10 +1035,10 @@ snapshots:
 
   ws-electrumx-client@1.0.5:
     dependencies:
-      isomorphic-ws: 5.0.0(ws@8.18.3)
-      ws: 8.18.3
+      isomorphic-ws: 5.0.0(ws@8.21.3)
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  ws@8.18.3: {}
+  ws@8.21.3: {}

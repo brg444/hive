@@ -8,14 +8,24 @@
  *   pnpm ops desk <hive> --agent-log <pay-arkade buyer log> [--governance <file>] [--port 8790]
  *                 [--origin https://brg444.github.io …]
  *
+ * Only a keeper reads the hive's payments here: each read carries the keeper's signature, as starting
+ * and cancelling a payment do, and a signature for a payment is checked against the pair's key before
+ * it is kept. A browser may call the desk from the origins named with --origin, and from this
+ * machine's own pages when none is named.
+ *
  * Each keeper's console checks every payment itself before signing (`checkPayment`), against the
  * Operator and its own reading of the job's terms; what the desk says is never taken on its word.
+ *
+ * The keepers can also withdraw from the treasury here, to an Arkade address two of them agree on:
+ * the way a hive moves its funds or winds itself down. A withdrawal is planned and signed like a
+ * payment, and each keeper reads its address and amount in their own console before signing.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import type { Pair } from "@hive/ark";
-import { jobEscrow, PAIRS, pairMembers, sendMessages } from "@hive/ark";
+import { jobEscrow, PAIRS, pairMembers, parseArkAddress, sendMessages, xOnly } from "@hive/ark";
 import type { RouteName } from "@hive/executor";
 import {
   driveTreasurySpend,
@@ -28,10 +38,13 @@ import {
   treasuryAccountOf,
 } from "@hive/hive";
 import {
+  clientAddress,
   ensure,
   Fault,
   faultCode,
+  hex,
   lockedQueue,
+  rateLimit,
   readJsonBody,
   readJsonIfPresent,
   sendJson,
@@ -49,6 +62,8 @@ import {
   record as recordSignature,
   type SharedNonce,
   verifyNonceBatch,
+  type WithdrawalTerms,
+  withdrawalId,
 } from "@hive/steward";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import {
@@ -79,62 +94,119 @@ export interface AgentJob {
   requestedAt: number;
 }
 
+/** One line of the agent's log, taken into the jobs read so far. */
+function takeLine(jobs: Map<string, AgentJob>, line: string): void {
+  let e: Record<string, unknown>;
+  try {
+    e = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!e || typeof e !== "object") return;
+  const at = Number(e.at ?? 0);
+  if (e.event === "funding_requested" && e.request && typeof e.request === "object") {
+    const r = e.request as Record<string, unknown>;
+    const params = r.params as FundingRequest["params"] | undefined;
+    if (!params) return;
+    const request: FundingRequest = {
+      jobId: String(r.job_id),
+      address: String(r.address),
+      capSats: Number(r.cap_sats),
+      deadline: Number(r.deadline),
+      model: String(r.model ?? ""),
+      priceMsatPerMtok: Number(r.price_msat_per_mtok ?? 0),
+      providerPk: String(r.provider_pk),
+      params,
+      ...(r.min_coin_expiry !== undefined && r.min_coin_expiry !== null
+        ? { minCoinExpiry: Number(r.min_coin_expiry) }
+        : {}),
+    };
+    jobs.set(request.jobId, {
+      request,
+      peer: String(r.provider_peer ?? ""),
+      status: "awaiting_funding",
+      usedSats: 0,
+      requestedAt: at,
+    });
+    return;
+  }
+  const job = jobs.get(String(e.job_id ?? (e.message as Record<string, unknown> | undefined)?.job_id ?? ""));
+  if (!job) return;
+  if (e.event === "job_open") job.status = "open";
+  else if (e.event === "receipt_signed") job.usedSats = Math.max(job.usedSats, Number(e.amount_sats ?? 0));
+  else if (e.event === "job_closed" && e.txid) job.status = "claimed";
+  else if (e.event === "expired") job.status = "returned";
+  else if (
+    e.event === "received" &&
+    (e.message as Record<string, unknown>)?.kind === "decline" &&
+    e.from === job.peer
+  )
+    job.status = job.status === "awaiting_funding" ? "declined" : job.status;
+}
+
+/** The jobs as they stand at `now`, newest first: one still waiting past its deadline has lapsed. */
+function jobsAt(jobs: Map<string, AgentJob>, now: number): AgentJob[] {
+  return [...jobs.values()]
+    .map((job) =>
+      job.status === "awaiting_funding" && now >= job.request.deadline
+        ? { ...job, status: "lapsed" as const }
+        : { ...job },
+    )
+    .sort((a, b) => b.requestedAt - a.requestedAt);
+}
+
 /** The agent's jobs, from its pay-arkade event log; requests without their escrow's terms are left out. */
 export function agentJobs(log: string, now = Math.floor(Date.now() / 1000)): AgentJob[] {
   const jobs = new Map<string, AgentJob>();
-  for (const line of log.split("\n")) {
-    let e: Record<string, unknown>;
+  for (const line of log.split("\n")) takeLine(jobs, line);
+  return jobsAt(jobs, now);
+}
+
+/**
+ * The agent's log as a desk follows it: the log only grows, so each look reads what it gained since
+ * the last one and no more, however long it has become.
+ */
+export class AgentLog {
+  #offset = 0;
+  #rest = "";
+  #jobs = new Map<string, AgentJob>();
+  // A character cut across two reads is put back together, not read as two broken halves.
+  #decoder = new StringDecoder("utf8");
+
+  constructor(readonly path: string) {}
+
+  jobs(now: number): AgentJob[] {
+    let fd: number;
     try {
-      e = JSON.parse(line);
+      fd = openSync(this.path, "r");
     } catch {
-      continue;
+      // No log yet: the agent has asked for nothing.
+      return [];
     }
-    if (!e || typeof e !== "object") continue;
-    const at = Number(e.at ?? 0);
-    if (e.event === "funding_requested" && e.request && typeof e.request === "object") {
-      const r = e.request as Record<string, unknown>;
-      const params = r.params as FundingRequest["params"] | undefined;
-      if (!params) continue;
-      const request: FundingRequest = {
-        jobId: String(r.job_id),
-        address: String(r.address),
-        capSats: Number(r.cap_sats),
-        deadline: Number(r.deadline),
-        model: String(r.model ?? ""),
-        priceMsatPerMtok: Number(r.price_msat_per_mtok ?? 0),
-        providerPk: String(r.provider_pk),
-        params,
-        ...(r.min_coin_expiry !== undefined && r.min_coin_expiry !== null
-          ? { minCoinExpiry: Number(r.min_coin_expiry) }
-          : {}),
-      };
-      jobs.set(request.jobId, {
-        request,
-        peer: String(r.provider_peer ?? ""),
-        status: "awaiting_funding",
-        usedSats: 0,
-        requestedAt: at,
-      });
-      continue;
+    try {
+      const { size } = fstatSync(fd);
+      // A log shorter than what was read is another log: read from its start.
+      if (size < this.#offset) {
+        this.#offset = 0;
+        this.#rest = "";
+        this.#jobs = new Map();
+        this.#decoder = new StringDecoder("utf8");
+      }
+      const chunk = Buffer.alloc(Math.min(size - this.#offset, 1024 * 1024));
+      while (this.#offset < size) {
+        const n = readSync(fd, chunk, 0, Math.min(chunk.length, size - this.#offset), this.#offset);
+        if (n <= 0) break;
+        this.#offset += n;
+        const lines = (this.#rest + this.#decoder.write(chunk.subarray(0, n))).split("\n");
+        // A line still being written is kept for the next look.
+        this.#rest = lines.pop() ?? "";
+        for (const line of lines) takeLine(this.#jobs, line);
+      }
+    } finally {
+      closeSync(fd);
     }
-    const job = jobs.get(
-      String(e.job_id ?? (e.message as Record<string, unknown> | undefined)?.job_id ?? ""),
-    );
-    if (!job) continue;
-    if (e.event === "job_open") job.status = "open";
-    else if (e.event === "receipt_signed") job.usedSats = Math.max(job.usedSats, Number(e.amount_sats ?? 0));
-    else if (e.event === "job_closed" && e.txid) job.status = "claimed";
-    else if (e.event === "expired") job.status = "returned";
-    else if (
-      e.event === "received" &&
-      (e.message as Record<string, unknown>)?.kind === "decline" &&
-      e.from === job.peer
-    )
-      job.status = job.status === "awaiting_funding" ? "declined" : job.status;
+    return jobsAt(this.#jobs, now);
   }
-  for (const job of jobs.values())
-    if (job.status === "awaiting_funding" && now >= job.request.deadline) job.status = "lapsed";
-  return [...jobs.values()].sort((a, b) => b.requestedAt - a.requestedAt);
 }
 
 /** What the hive's approved work has left for new jobs, from its proposals and the jobs already open. */
@@ -172,8 +244,13 @@ export function budgetOf(governance: unknown, jobs: AgentJob[]): Budget {
 /** A payment as the desk keeps it: the plan, who signs, and each session's progress. */
 export interface DeskPayment {
   schema: "hive-desk-payment/v1";
+  /** The job's id; a withdrawal's own id. */
   jobId: string;
-  request: FundingRequest;
+  /** The job this payment funds; a withdrawal has none. */
+  request?: FundingRequest;
+  /** A withdrawal: where the treasury pays and how much, and the address its keepers read. */
+  withdrawal?: WithdrawalTerms;
+  address?: string;
   /** What the hive's approved work had left when the first keeper started it. */
   remainingSats: number;
   pair: Pair;
@@ -182,6 +259,8 @@ export interface DeskPayment {
   second: string;
   attest: PairSession;
   register?: PairSession;
+  /** Keepers who signed an earlier plan for this job: their consoles hold them to it, so they sign no other. */
+  signedBefore?: string[];
   status: "attesting" | "registering" | "submitted" | "done" | "expired" | "cancelled" | "failed";
   detail?: string;
   createdAt: number;
@@ -219,6 +298,7 @@ export class Desk {
   #drives = new Map<string, Promise<void>>();
   /** The desk's work, one action at a time: keepers signing at once wait their turn here. */
   readonly #queue: <T>(action: () => Promise<T>) => Promise<T>;
+  readonly #log: AgentLog;
 
   constructor(
     readonly hive: string,
@@ -229,6 +309,7 @@ export class Desk {
     ensure(this.record.keepersHold, "INVALID", `${hive}'s keys are not its keepers' own; it needs no desk`);
     this.paths = opsPaths(hive);
     this.#queue = lockedQueue(this.file("desk.lock"));
+    this.#log = new AgentLog(options.agentLog);
   }
 
   get keepers(): [string, string, string] {
@@ -248,13 +329,7 @@ export class Desk {
   }
 
   jobs(): AgentJob[] {
-    let log = "";
-    try {
-      log = readFileSync(this.options.agentLog, "utf8");
-    } catch {
-      // No log yet: the agent has asked for nothing.
-    }
-    return agentJobs(log, this.now());
+    return this.#log.jobs(this.now());
   }
 
   budget(jobs = this.jobs()): Budget {
@@ -345,6 +420,16 @@ export class Desk {
     };
   }
 
+  /**
+   * A keeper reading the hive's payments: `<key>.<time>.<signature>`, signed as a start or a cancel
+   * is, so what the keepers are signing is shown to them and to nobody else.
+   */
+  verifyRead(header: string | undefined) {
+    const [keeper = "", at = "", signature = ""] = String(header ?? "").split(".");
+    ensure(keeper, "AUTH_REQUIRED", "a keeper's console signs what it reads here");
+    this.verifyAuth("read", "", { keeper, at: Number(at), signature });
+  }
+
   private verifyAuth(action: string, jobId: string, auth: DeskAuth) {
     ensure(this.keepers.includes(auth?.keeper), "NOT_A_KEEPER");
     ensure(
@@ -378,31 +463,35 @@ export class Desk {
     const payments = jobs
       .filter((j) => j.status === "awaiting_funding" || known.has(j.request.jobId))
       .map((j) => ({ job: j, payment: this.payment(j.request.jobId) ?? null }));
-    return { budget, payments };
+    // The withdrawals keepers started here, newest first.
+    const withdrawals = files
+      .map((f) => this.payment(f.slice(0, 64)))
+      .filter((p): p is DeskPayment => Boolean(p?.withdrawal))
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 20)
+      .map((payment) => ({ payment }));
+    return { budget, payments, withdrawals };
   }
 
   /** The sessions a keeper's console signs, with the purpose each one checks. */
   sessions(payment: DeskPayment) {
     const journal = this.journal(payment.jobId);
     ensure(journal, "JOURNAL_MISSING");
+    const what = payment.withdrawal
+      ? { kind: "withdrawal" as const, withdrawal: payment.withdrawal }
+      : { kind: "payment" as const, request: payment.request! };
     const attest = {
       id: journal.sessions.attest,
       pair: payment.pair,
-      purpose: {
-        kind: "payment" as const,
-        stage: "attest" as const,
-        request: payment.request,
-        plan: journal.plan,
-      },
+      purpose: { ...what, stage: "attest" as const, plan: journal.plan },
     };
     const register = journal.attestations
       ? {
           id: journal.sessions.register,
           pair: payment.pair,
           purpose: {
-            kind: "payment" as const,
+            ...what,
             stage: "register" as const,
-            request: payment.request,
             plan: journal.plan,
             signatures: journal.attestations,
           },
@@ -436,24 +525,23 @@ export class Desk {
       const budget = this.budget();
       ensure(request.capSats <= budget.remainingSats, "ABOVE_BUDGET", `${budget.remainingSats} sats left`);
       const first = auth.keeper;
-      const pooled = this.pooled();
-      const others = this.keepers.filter((k) => k !== first);
-      const candidates = partner
-        ? [partner]
-        : others.sort((a, b) => (pooled[b]?.length ?? 0) - (pooled[a]?.length ?? 0));
-      const second = candidates.find((k) => others.includes(k) && (pooled[k]?.length ?? 0) >= 16);
+      // A keeper's console binds a job to the first plan it signs for, and for good. So whoever
+      // signed an earlier plan here is left out of the next one, which would only stall on them.
+      const signedBefore = existing
+        ? [
+            ...new Set([
+              ...(existing.signedBefore ?? []),
+              ...Object.keys(existing.attest.partials),
+              ...Object.keys(existing.register?.partials ?? {}),
+            ]),
+          ]
+        : [];
       ensure(
-        second,
-        "NO_PARTNER",
-        partner
-          ? "that keeper has no nonces shared here yet: they need to open the console once"
-          : "no other keeper has opened the console yet, so nobody can sign with you",
+        !signedBefore.includes(first),
+        "ALREADY_SIGNED",
+        "you signed an earlier payment for this job: two keepers who did not can fund it, or the agent asks for the job again after its deadline",
       );
-      const pair = PAIRS.find((p) => {
-        const [i, j] = pairMembers(p);
-        const keys = [this.keepers[i], this.keepers[j]];
-        return keys.includes(first) && keys.includes(second);
-      })!;
+      const { second, pair } = this.partnerFor(first, partner, signedBefore);
       const validSeconds = Math.min(
         KEEPER_MAX_VALIDITY_SECONDS,
         request.deadline - (this.options.deadlineMarginSeconds ?? DEADLINE_MARGIN_SECONDS) - this.now(),
@@ -488,6 +576,118 @@ export class Desk {
         jobId,
         request,
         remainingSats: budget.remainingSats,
+        pair,
+        first,
+        second,
+        attest,
+        ...(signedBefore.length ? { signedBefore } : {}),
+        status: "attesting",
+        createdAt: this.now(),
+        updatedAt: this.now(),
+      };
+      this.save(payment);
+      return payment;
+    });
+  }
+
+  /** The keeper who signs with `first`: the one asked for, or whoever has the most nonces shared here. */
+  private partnerFor(first: string, partner: string | undefined, signedBefore: string[] = []) {
+    const pooled = this.pooled();
+    const others = this.keepers.filter((k) => k !== first && !signedBefore.includes(k));
+    const candidates = partner
+      ? [partner]
+      : others.sort((a, b) => (pooled[b]?.length ?? 0) - (pooled[a]?.length ?? 0));
+    const second = candidates.find((k) => others.includes(k) && (pooled[k]?.length ?? 0) >= 16);
+    ensure(
+      second,
+      "NO_PARTNER",
+      signedBefore.length
+        ? "the other keepers signed an earlier payment for this job or have shared no nonces here: the agent asks for the job again after its deadline"
+        : partner
+          ? "that keeper has no nonces shared here yet: they need to open the console once"
+          : "no other keeper has opened the console yet, so nobody can sign with you",
+    );
+    const pair = PAIRS.find((p) => {
+      const [i, j] = pairMembers(p);
+      const keys = [this.keepers[i], this.keepers[j]];
+      return keys.includes(first) && keys.includes(second);
+    })!;
+    return { second, pair };
+  }
+
+  /**
+   * A keeper starts a withdrawal: the treasury pays `amountSats` to an Arkade address on this
+   * Operator once a second keeper has signed it too. The desk plans the send and carries the
+   * signatures, as for a payment. Whether the address is the right one is the keepers' to say:
+   * each reads it in their own console, which signs only for the address and amount it showed.
+   */
+  async startWithdrawal(
+    auth: DeskAuth,
+    asked: { address?: unknown; amountSats?: unknown },
+    partner?: string,
+  ) {
+    const conn = this.treasury.conn;
+    const address = String(asked.address ?? "")
+      .trim()
+      .toLowerCase();
+    let decoded: { serverKey: string; pkScript: string };
+    try {
+      decoded = parseArkAddress(address);
+    } catch {
+      throw new Fault("INVALID_DESTINATION", "not an Arkade address");
+    }
+    ensure(
+      decoded.serverKey === hex(xOnly(conn.keys.server)),
+      "INVALID_DESTINATION",
+      "an address on another Operator",
+    );
+    ensure(decoded.pkScript !== this.record.treasuryScript, "INVALID_DESTINATION", "the treasury itself");
+    const amountSats = Number(asked.amountSats);
+    ensure(Number.isSafeInteger(amountSats) && amountSats >= conn.operator.dust, "INVALID", "amount");
+    const id = withdrawalId(this.hive, decoded.pkScript, amountSats, Number(auth?.at));
+    this.verifyAuth("withdraw", id, auth);
+    return this.lock(async () => {
+      ensure(!this.payment(id), "PAYMENT_STARTED", "this withdrawal is already under way");
+      // One at a time, so two withdrawals never wait on the same keepers with the same coins in mind.
+      ensure(
+        !this.activePayments().some((p) => p.withdrawal),
+        "WITHDRAWAL_STARTED",
+        "another withdrawal is waiting for its keepers: finish or cancel it first",
+      );
+      const first = auth.keeper;
+      const { second, pair } = this.partnerFor(first, partner);
+      const exclude = this.activePayments().flatMap(
+        (p) => this.journal(p.jobId)?.plan.coins.map((c) => `${c.txid}:${c.vout}`) ?? [],
+      );
+      const plan = await planTreasurySend(this.treasury, {
+        pair,
+        amount: amountSats,
+        destination: decoded.pkScript,
+        // Ten minutes short of the most a keeper signs for, so the second keeper's clock may differ.
+        validSeconds: KEEPER_MAX_VALIDITY_SECONDS - 600,
+        exclude,
+      });
+      const withdrawal: WithdrawalTerms = {
+        label: `${this.hive}.w-${id.slice(0, 16)}`,
+        destination: decoded.pkScript,
+        amountSats,
+        expiresAt: plan.validUntil,
+      };
+      const journal = newSpendJournal(`desk-w-${id.slice(0, 16)}`, { kind: "withdrawal", withdrawal }, plan);
+      writeJson(this.file("payments", `${id}.spend.json`), journal);
+      const account = treasuryAccountOf(this.treasury);
+      const attest = newSession(
+        this.keepers,
+        pair,
+        sendMessages(journal.plan, account.instance, conn.operator.checkpointTapscript),
+      );
+      assignShared(attest, second, this.take(second));
+      const payment: DeskPayment = {
+        schema: "hive-desk-payment/v1",
+        jobId: id,
+        withdrawal,
+        address,
+        remainingSats: 0,
         pair,
         first,
         second,
@@ -686,13 +886,17 @@ export async function deskRoute(
   method: string,
   parts: string[],
   body: Record<string, unknown>,
+  /** The request's `x-hive-keeper` header: the keeper's signature over what it reads. */
+  keeper?: string,
 ): Promise<unknown> {
   const [what, jobId = "", action] = parts;
+  // What the hive is, as its channel and listing already say: a console reads it to find its own key.
   if (method === "GET" && what === "hive") return desk.describe();
   // The delegatee serves no browser: its keys reach the console through the desk, and the console
   // checks the treasury they build against the hive's.
   if (method === "GET" && what === "delegatee") return desk.treasury.conn.delegatee.info();
   if (method === "POST" && what === "nonces") return desk.addNonces(body.batch as NonceBatch);
+  if (method === "GET") desk.verifyRead(keeper);
   if (method === "GET" && what === "payments" && !jobId) return desk.overview();
   if (method === "GET" && what === "listing") return { pending: desk.listing() };
   if (method === "POST" && what === "listing")
@@ -712,38 +916,65 @@ export async function deskRoute(
   }
   if (method === "POST" && what === "payments" && action === "cancel")
     return { payment: await desk.cancel(jobId, body.auth as DeskAuth) };
+  if (method === "POST" && what === "withdrawals" && !jobId) {
+    const payment = await desk.startWithdrawal(
+      body.auth as DeskAuth,
+      { address: body.address, amountSats: body.amountSats },
+      body.partner as string | undefined,
+    );
+    return { payment, sessions: desk.sessions(payment) };
+  }
   throw new Fault("NOT_FOUND");
 }
+
+const STATUS: Record<string, number> = {
+  NOT_FOUND: 404,
+  NO_PAYMENT: 404,
+  NO_HIVE: 404,
+  AUTH_REQUIRED: 401,
+  AUTH_INVALID: 401,
+  AUTH_STALE: 401,
+  RATE_LIMITED: 429,
+  BUSY: 429,
+  REQUEST_TOO_LARGE: 413,
+  SERVICE_FULL: 503,
+  INTERNAL: 500,
+};
 
 /** A fault as an HTTP status: unknown things are 404, our own mistakes 500, the rest the caller's. */
 export function faultStatus(error: unknown): { status: number; body: { error: string; detail: string } } {
   const code = faultCode(error) ?? "INTERNAL";
-  const status = ["NOT_FOUND", "NO_PAYMENT", "NO_HIVE"].includes(code)
-    ? 404
-    : code === "INTERNAL"
-      ? 500
-      : 400;
+  // The channel's own refusals carry their status with them.
+  const own = (error as { status?: unknown } | null)?.status;
+  const status =
+    code === "INTERNAL" && typeof own === "number" && own >= 400 && own < 500 ? own : (STATUS[code] ?? 400);
   return { status, body: { error: code, detail: error instanceof Error ? error.message : String(error) } };
 }
 
-/** CORS for keepers' consoles, which call the desk from their own page. */
+const LOCAL_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+
+/**
+ * CORS for keepers' consoles, which call the desk from their own page: the origins the host named,
+ * and a page a keeper serves from their own machine, as one who builds the console themselves does
+ * (`keeper/serve.mjs`). No other page in a keeper's browser can call the desk.
+ */
 export function consoleCors(
   req: IncomingMessage,
   res: ServerResponse,
   origins: string[] | undefined,
 ): boolean {
   const origin = req.headers.origin;
-  const allowed = !origin || !origins?.length || origins.includes(origin) ? (origin ?? "*") : null;
-  if (allowed === null) {
+  const known = origins?.includes(origin ?? "") || LOCAL_ORIGIN.test(origin ?? "");
+  if (origin && !known) {
     sendJson(res, 403, { error: "ORIGIN" });
     return false;
   }
-  res.setHeader("access-control-allow-origin", allowed);
+  if (origin) res.setHeader("access-control-allow-origin", origin);
   res.setHeader("vary", "origin");
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-methods": "GET, POST",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type, x-hive-keeper",
       "access-control-max-age": "600",
     });
     res.end();
@@ -756,20 +987,31 @@ export function consoleCors(
 export async function startDesk(hive: string, options: DeskOptions, ctx: OpsContext = {}) {
   const treasury = await treasuryOf(loadHive(hive), ctx);
   const desk = new Desk(hive, treasury, options);
+  // Three keepers' consoles ask for little; anything asking for more is not one of them.
+  const limit = rateLimit(240, 120);
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (!consoleCors(req, res, options.origins)) return;
     try {
+      ensure(limit.take(clientAddress(req)), "RATE_LIMITED", "too many requests; try again in a minute");
       const url = new URL(req.url ?? "/", "http://desk");
       const parts = url.pathname.split("/").filter(Boolean);
       ensure(parts[0] === "desk" && parts[1] === "v1", "NOT_FOUND");
       const body =
         req.method === "POST" ? ((await readJsonBody(req, 256 * 1024)) as Record<string, unknown>) : {};
-      sendJson(res, 200, await deskRoute(desk, req.method ?? "GET", parts.slice(2), body));
+      ensure(body && typeof body === "object" && !Array.isArray(body), "INVALID_JSON");
+      const keeper = req.headers["x-hive-keeper"];
+      sendJson(
+        res,
+        200,
+        await deskRoute(desk, req.method ?? "GET", parts.slice(2), body, keeper ? String(keeper) : undefined),
+      );
     } catch (error) {
       const { status, body } = faultStatus(error);
       sendJson(res, status, body);
     }
   });
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 60_000;
   await new Promise<void>((ready, reject) => {
     server.once("error", reject);
     server.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => ready());

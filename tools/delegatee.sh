@@ -16,16 +16,21 @@
 # The source lives in .local/delegatee, the binary in .local/bin, and the
 # delegate key, created once, in .secrets/v4/delegate-key. The delegate key is
 # part of every address the delegatee renews: keep it for the stack's life.
+#
+# All three sit under the repository unless DELEGATEE_HOME names another
+# directory: a host gives the delegatee a user and a home of its own, so the
+# delegate key is read by the delegatee and by nothing else that runs there.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+HOME_DIR="${DELEGATEE_HOME:-$ROOT}"
 COMMIT=e8a739006fc95932757e936e437830493d46d576
-SRC="$ROOT/.local/delegatee"
-BIN="$ROOT/.local/bin/delegateed-$COMMIT"
+SRC="$HOME_DIR/.local/delegatee"
+BIN="$HOME_DIR/.local/bin/delegateed-$COMMIT"
 NETWORK="${DELEGATEE_NETWORK:-regtest}"
 case "$NETWORK" in
-  regtest) KEY="$ROOT/.secrets/v4/delegate-key" ;;
+  regtest) KEY="$HOME_DIR/.secrets/v4/delegate-key" ;;
   bitcoin)
-    KEY="$ROOT/.secrets/bitcoin/delegate-key"
+    KEY="$HOME_DIR/.secrets/bitcoin/delegate-key"
     # Checked before anything is built or a key is made.
     : "${DELEGATEE_EMULATOR_URL:?set DELEGATEE_EMULATOR_URL to the mainnet Emulator}"
     : "${DELEGATEE_ADMIN_AUTH:?set DELEGATEE_ADMIN_AUTH (file, with DELEGATEE_ADMIN_USERS_FILE) for a mainnet delegatee}"

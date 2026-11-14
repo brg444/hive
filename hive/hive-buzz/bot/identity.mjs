@@ -4,7 +4,7 @@
 import { schnorr } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha2";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -24,6 +24,8 @@ export function loadOrCreateKey(stateDir) {
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const path = join(stateDir, "bot.key");
     if (!existsSync(path)) writePrivate(path, bytesToHex(schnorr.utils.randomPrivateKey()) + "\n");
+    // A key other users of the machine can read is refused rather than used.
+    if (process.platform !== "win32" && (statSync(path).mode & 0o077) !== 0) throw new Error(`${path} is readable by other users of this machine; run chmod 600 on it`);
     const secret = readFileSync(path, "utf8").trim();
     if (!HEX64.test(secret)) throw new Error(`${path} does not hold a 64-hex secret key`);
     return { secret, pubkey: bytesToHex(schnorr.getPublicKey(hexToBytes(secret))) };

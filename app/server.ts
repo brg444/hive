@@ -1,10 +1,13 @@
 import { CovenantRefusal } from "@hive/executor";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { networkCeilings } from "@hive/ark";
 import {
+  clientAddress,
   ensure,
+  rateLimit,
   shapedObject,
   Fault,
   faultCode,
@@ -54,6 +57,8 @@ export interface HiveRoutes {
   };
   /** Minimum spacing between payment requests; one per second by default. */
   pourIntervalMs?: number;
+  /** How long one reading of the view answers every request; three seconds by default. */
+  viewCacheMs?: number;
   /** Register a provider's claim; absent, the desk is closed. */
   claimDesk?(claim: ClaimHandIn): Promise<{ spendId: string }>;
 }
@@ -94,24 +99,62 @@ function servedFont(request: IncomingMessage, response: ServerResponse, path: st
 }
 const DIRECTORY = resolve(import.meta.dirname, "hives.html");
 
+interface Page {
+  body: Buffer;
+  headers: Record<string, string>;
+}
+
+/**
+ * A page with the headers it is served under. Its own script runs by its hash and no other does,
+ * so nothing a page ever shows of a hive's listing or view can run as code, and no other site can
+ * frame it.
+ */
+function pageOf(body: Buffer): Page {
+  const scripts = [...body.toString("utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map(
+    (m) => `'sha256-${createHash("sha256").update(m[1]!).digest("base64")}'`,
+  );
+  return {
+    body,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy": [
+        "default-src 'self'",
+        "style-src 'unsafe-inline'",
+        `script-src ${scripts.join(" ") || "'none'"}`,
+        "img-src 'self' data:",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+      ].join("; "),
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+    },
+  };
+}
+
 /** A page read once at start, or on every request while someone edits it. */
-function pageSource(path: string, live = false): () => Buffer {
-  if (live) return () => readFileSync(path);
-  const bytes = readFileSync(path);
-  return () => bytes;
+function pageSource(path: string, live = false): () => Page {
+  if (live) return () => pageOf(readFileSync(path));
+  const page = pageOf(readFileSync(path));
+  return () => page;
 }
 const MAX_BODY = 4 * 1024;
 const MAX_CLAIM_BODY = 32 * 1024;
 const POUR_INTERVAL_MS = 1_000;
+const VIEW_CACHE_MS = 3_000;
+/** Payment requests kept in memory to answer for; older ones are still on disk. */
+const MAX_REQUESTS = 5_000;
+/** Claim registrations that may wait their turn; each runs a signing session. */
+const MAX_CLAIMS_WAITING = 8;
+/** One address's share of payment requests and of claims a minute, so none takes everyone's. */
+const pours = rateLimit(6, 3);
+const claims = rateLimit(30, 15);
 const SUMMARY_TIMEOUT_MS = 5_000;
-const HTML_HEADERS = {
-  "content-type": "text/html; charset=utf-8",
-  "cache-control": "no-store",
-  "content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-};
 
 interface Hive {
   handle(request: IncomingMessage, response: ServerResponse, path: string): Promise<void>;
+  view(): Promise<HiveView>;
   claim(body: ClaimHandIn): Promise<{ spendId: string }>;
   status(): { halted: boolean; haltReason: string | null };
 }
@@ -120,7 +163,7 @@ interface Hive {
  * Everything one hive keeps between requests, apart from every other hive's:
  * its payment requests, its pacing and its queue of claim registrations.
  */
-function openHive(options: HiveRoutes, page: () => Buffer): Hive {
+function openHive(options: HiveRoutes, page: () => Page): Hive {
   const hive = options.hive === undefined ? undefined : requireHiveId(options.hive);
   const requests = new Map<string, IntakeRequest>();
   // Requests handed out before a restart stay answerable.
@@ -132,13 +175,38 @@ function openHive(options: HiveRoutes, page: () => Buffer): Hive {
     }
   }
   let lastPour = 0;
-  // One claim registration at a time: each runs a steward pair's signing session.
-  let claims: Promise<unknown> = Promise.resolve();
+  // The view reads the Operator and the hive's records: it is worked out once for everyone who asks
+  // within a few seconds, and by one request at a time.
+  const cacheMs = options.viewCacheMs ?? VIEW_CACHE_MS;
+  let seen: { at: number; view: HiveView } | undefined;
+  let reading: Promise<HiveView> | undefined;
+  const view = (): Promise<HiveView> => {
+    if (seen && Date.now() - seen.at < cacheMs) return Promise.resolve(seen.view);
+    reading ??= options
+      .view()
+      .then((read) => {
+        seen = { at: Date.now(), view: read };
+        return read;
+      })
+      .finally(() => {
+        reading = undefined;
+      });
+    return reading;
+  };
+  // One claim registration at a time: each runs a steward pair's signing session. Only a few wait.
+  let registering: Promise<unknown> = Promise.resolve();
+  let waiting = 0;
   const claim = (body: ClaimHandIn) => {
     const desk = options.claimDesk;
     if (!desk) throw new Fault("CLAIM_DESK_CLOSED");
-    const run = claims.then(() => desk(body));
-    claims = run.catch(() => undefined);
+    if (waiting >= MAX_CLAIMS_WAITING) throw new Fault("BUSY");
+    waiting += 1;
+    const run = registering.then(() => desk(body));
+    registering = run
+      .catch(() => undefined)
+      .finally(() => {
+        waiting -= 1;
+      });
     return run;
   };
   const status = () => {
@@ -149,14 +217,16 @@ function openHive(options: HiveRoutes, page: () => Buffer): Hive {
   return {
     claim,
     status,
+    view,
     async handle(request, response, path) {
       if (request.method === "GET" && path === "/") {
-        response.writeHead(200, HTML_HEADERS);
-        response.end(page());
+        const served = page();
+        response.writeHead(200, served.headers);
+        response.end(served.body);
         return;
       }
       if (request.method === "GET" && path === "/api/view") {
-        sendJson(response, 200, await options.view());
+        sendJson(response, 200, await view());
         return;
       }
       if (request.method === "GET" && path === "/api/status") {
@@ -194,10 +264,12 @@ function openHive(options: HiveRoutes, page: () => Buffer): Hive {
           throw new Fault("INVALID_POUR");
         requireNotHalted(hive);
         if (ceilings) {
-          const { treasury } = await options.view();
+          const { treasury } = await view();
           ensure(BigInt(treasury.balanceSats + amountSats) <= ceilings.treasurySats, "TREASURY_FULL");
         }
-        // Only well-formed requests reach lnurl-server, at most one per interval.
+        // Only well-formed requests reach lnurl-server: a few a minute from one address, and at most
+        // one per interval from them all.
+        if (!pours.take(clientAddress(request))) throw new Fault("SLOW_DOWN");
         const now = Date.now();
         if (now - lastPour < (options.pourIntervalMs ?? POUR_INTERVAL_MS)) throw new Fault("SLOW_DOWN");
         lastPour = now;
@@ -210,6 +282,7 @@ function openHive(options: HiveRoutes, page: () => Buffer): Hive {
           requestsDirectory: intake.requestsDirectory,
         });
         requests.set(record.id, record);
+        if (requests.size > MAX_REQUESTS) requests.delete(requests.keys().next().value as string);
         sendJson(response, 200, {
           id: record.id,
           rail: record.rail,
@@ -220,6 +293,7 @@ function openHive(options: HiveRoutes, page: () => Buffer): Hive {
         return;
       }
       if (request.method === "POST" && path === "/api/claim") {
+        if (!claims.take(clientAddress(request))) throw new Fault("SLOW_DOWN");
         const { spendId } = await claim(await readClaim(request));
         sendJson(response, 200, { spendId });
         return;
@@ -228,8 +302,8 @@ function openHive(options: HiveRoutes, page: () => Buffer): Hive {
       if (request.method === "GET" && pour) {
         const record = requests.get(pour[1]!);
         if (!record) throw new Fault("UNKNOWN_POUR");
-        const [settlement, view] = await Promise.all([intakeSettlement(record), options.view()]);
-        const credited = view.contributions.find((c) => c.requestId === record.id) ?? null;
+        const [settlement, current] = await Promise.all([intakeSettlement(record), view()]);
+        const credited = current.contributions.find((c) => c.requestId === record.id) ?? null;
         sendJson(response, 200, { id: record.id, settled: settlement.settled, credited });
         return;
       }
@@ -251,6 +325,9 @@ async function listen(
   server: Server,
   options: { host?: string; port?: number },
 ): Promise<HivePage> {
+  // A client that sends its request a byte at a time holds a connection no longer than this.
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 60_000;
   await new Promise<void>((done, fail) => {
     server.once("error", fail);
     server.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => done());
@@ -268,7 +345,8 @@ const failed = (response: ServerResponse, error: unknown) => {
     sendJson(response, 409, { error: "COVENANT_REFUSAL", rejection: error.rejection });
     return;
   }
-  sendJson(response, error instanceof Fault ? 400 : 500, { error: faultCode(error, "FAILED") });
+  const code = faultCode(error, "FAILED");
+  sendJson(response, code === "BUSY" ? 429 : error instanceof Fault ? 400 : 500, { error: code });
 };
 
 /** A server for one hive, at the root of its address. */
@@ -344,7 +422,7 @@ export async function startHiveHost(options: HiveHostOptions): Promise<HivePage>
     const { entry, hive } = hives.get(id)!;
     const base = { hive: id, listing: entry.listing, ...hive.status() };
     try {
-      const view = await withTimeout(entry.view(), SUMMARY_TIMEOUT_MS);
+      const view = await withTimeout(hive.view(), SUMMARY_TIMEOUT_MS);
       return { ...base, balanceSats: view.treasury.balanceSats, totals: view.totals, error: null };
     } catch (error) {
       return { ...base, balanceSats: null, totals: null, error: faultCode(error, "VIEW_FAILED") };
@@ -356,8 +434,9 @@ export async function startHiveHost(options: HiveHostOptions): Promise<HivePage>
       const path = new URL(request.url ?? "/", "http://hive.local").pathname;
       if (servedFont(request, response, path)) return;
       if (request.method === "GET" && path === "/") {
-        response.writeHead(200, HTML_HEADERS);
-        response.end(directory());
+        const served = directory();
+        response.writeHead(200, served.headers);
+        response.end(served.body);
         return;
       }
       if (request.method === "GET" && path === "/api/hives") {
@@ -365,6 +444,7 @@ export async function startHiveHost(options: HiveHostOptions): Promise<HivePage>
         return;
       }
       if (request.method === "POST" && path === "/api/claim") {
+        if (!claims.take(clientAddress(request))) throw new Fault("SLOW_DOWN");
         const body = await readClaim(request);
         const treasury = (body.quote as { body?: { treasuryScript?: unknown } })?.body?.treasuryScript;
         const id = typeof treasury === "string" ? byTreasury.get(treasury) : undefined;
