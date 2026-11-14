@@ -53,7 +53,7 @@ function fakeSession(events = null) {
 }
 
 function fakeHost(apiBase, viewer = null, events = null) {
-    const seen = { pages: [], tools: [], notifications: [], categories: [], requests: [], cleanups: [], messages: [], composer: [], accessories: [], opened: [] };
+    const seen = { pages: [], tools: [], notifications: [], categories: [], requests: [], cleanups: [], messages: [], composer: [], accessories: [], opened: [], settings: [] };
     const ctx = {
         react: React,
         conversation: {
@@ -67,6 +67,7 @@ function fakeHost(apiBase, viewer = null, events = null) {
         })(),
         navigation: { open: async (t) => { seen.opened.push(t); return { status: "opened" }; } },
         pages: { register: (p) => seen.pages.push(p) },
+        settingsCards: { register: (c) => seen.settings.push(c) },
         agents: { addTool: (t) => seen.tools.push(t) },
         notifications: {
             register: (c) => { seen.categories.push(c); return { submit: async (n) => { seen.notifications.push(n); } }; },
@@ -133,11 +134,32 @@ test("mainnet: the page shows the treasury, the paid job and the provider's earn
 
     const page = (initialTab) => renderToString(React.createElement(seen.pages[0].component, { initialTab }));
     const html = page("home") + page("keepers") + page("money");
-    for (const text of ["Treasury", "wise-comet@lnurl.arkade.sh", "No job is waiting for funding.", "Paid", "paid 1,380 sats, returned 620 sats", "earned 1,380 sats"]) {
+    for (const text of ["Treasury", "wise-comet@lnurl.arkade.sh", "No job is waiting for funding.", "Paid", "paid ₿1,380, returned ₿620", "earned ₿1,380"]) {
         assert.ok(html.includes(text), `page shows ${text}`);
     }
     assert.equal(seen.notifications.length, 0, "nothing to fund, nothing announced");
     seen.cleanups.forEach((stop) => stop());
+});
+
+test("Settings: a member picks how amounts read, and the page follows on this device", async () => {
+    const api = await startApi(join(root, "test/fixtures/mainnet-agent.jsonl"));
+    const store = new Map([["hive.amounts.v1", "btc"]]);
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) } });
+    try {
+        const { seen } = await activate(api);
+        assert.equal(seen.settings.length, 1, "one settings card");
+        const card = renderToString(React.createElement(seen.settings[0].component, { active: () => true }));
+        for (const t of ["Amounts", "₿", "sats", "BTC", "US dollars", "Spiral"]) assert.ok(card.includes(t), `settings show ${t}`);
+        // The agent's tools keep sats, whatever the member reads; asking also loads the hive.
+        assert.match(await seen.tools.find((t) => t.name === "hive_status").call({}), /earned 1,380 sats/);
+        const money = ["money"].map((initialTab) => renderToString(React.createElement(seen.pages[0].component, { initialTab }))).join("");
+        assert.ok(money.includes("earned 0.0000138 BTC"), `amounts in BTC: ${money.match(/earned[^<]*/)}`);
+        seen.cleanups.forEach((stop) => stop());
+    } finally {
+        if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+        else delete globalThis.localStorage;
+    }
 });
 
 test("keepers: a job awaiting funding is listed and announced once", async () => {
@@ -152,7 +174,7 @@ test("keepers: a job awaiting funding is listed and announced once", async () =>
     await seen.tools[0].call();
     await new Promise((r) => setTimeout(r, 1500)); // the first poll after activation
     const html = renderToString(React.createElement(seen.pages[0].component));  // on the overview while it waits
-    assert.ok(html.includes("2,000 sats for example/model"), "the request is listed");
+    assert.ok(html.includes("₿2,000 for example/model"), "the request is listed");
     assert.ok(html.includes("ark1qescrowe"), "with its escrow address");
     assert.ok(html.includes("–"), "an unreachable indexer shows an unknown balance, not a wrong one");
     assert.equal(seen.notifications.length, 1, "announced once across two loads");
@@ -175,7 +197,7 @@ test("members' usage shows per proposal on the page and in the agent tool", asyn
     const status = await seen.tools[0].call();
     assert.match(status, /Budget p-test: 1,380 sats used by 1 member\(s\) over 3 request\(s\)/);
     const html = renderToString(React.createElement(seen.pages[0].component));
-    assert.ok(html.includes("Budgets in use") && html.includes("p-test") && html.includes("1,380 sats used"), "budget card");
+    assert.ok(html.includes("Budgets in use") && html.includes("p-test") && html.includes("₿1,380 used"), "budget card");
     seen.cleanups.forEach((stop) => stop());
 });
 
@@ -234,7 +256,7 @@ test("in the hive's channel: proposals draw as cards with live counts, Propose s
     assert.ok(!card.matches({ ...message, channelId: "elsewhere" }), "only in the hive's channel");
     assert.ok(!card.matches({ ...message, content: "a proposal: lunch?" }));
     const cardHtml = renderToString(React.createElement(card.component, { message }));
-    for (const t of ["Translate the docs", "30,000 sats", "Running", "👍 1", "2 of 2 keepers", "2,000 sats a day"]) assert.ok(cardHtml.includes(t), `card shows ${t}`);
+    for (const t of ["Translate the docs", "₿30,000", "Running", "👍 1", "2 of 2 keepers", "₿2,000 a day"]) assert.ok(cardHtml.includes(t), `card shows ${t}`);
 
     // Propose: only in the hive's channel, and it fills the composer with a proposal to complete.
     const [propose] = seen.composer;
@@ -251,14 +273,14 @@ test("in the hive's channel: proposals draw as cards with live counts, Propose s
     renderToString(React.createElement(() => (el = propose.component(toolProps))));
     el.props.onClick();
     const form = renderToString(React.createElement(seen.accessories[0].component, { channelId: "chan" }));
-    for (const t of ["Propose work to Test Hive", "Purpose and output", "Budget in sats", "Who uses it", "Add to message"]) assert.ok(form.includes(t), `form shows ${t}`);
+    for (const t of ["Propose work to Test Hive", "Purpose and output", "Budget in ₿", "Who uses it", "Add to message"]) assert.ok(form.includes(t), `form shows ${t}`);
     assert.equal(renderToString(React.createElement(seen.accessories[0].component, { channelId: "elsewhere" })), "", "only in the hive's channel");
     assert.equal(inserted, null, "nothing goes into the message until the form is filled in");
     el.props.onClick();
 
     // The page: Bob is a member with a node, and the running proposal is for everyone.
     const home = renderToString(React.createElement(seen.pages[0].component, {}));
-    for (const t of ["Your allowances", "Translate the docs", "2,000 sats a day", "Nightly triage", "closes in 23 h"]) assert.ok(home.includes(t), `page shows ${t}`);
+    for (const t of ["Your allowances", "Translate the docs", "₿2,000 a day", "Nightly triage", "closes in 23 h"]) assert.ok(home.includes(t), `page shows ${t}`);
     assert.ok(home.includes("Your node"), "Bob named his node");
     seen.cleanups.forEach((stop) => stop());
 });
@@ -313,7 +335,7 @@ test("with the channel and keepers built in, the plugin works out proposals from
     const status = await seen.tools[0].call();
     assert.match(status, /"Weekly summaries": Running, 12,000 sats/, "approved after its 24 hours, and running");
     const home = renderToString(React.createElement(seen.pages[0].component, {}));
-    for (const t of ["Your allowances", "Weekly summaries", "700 sats a day", "Your node"]) assert.ok(home.includes(t), `page shows ${t}`);
+    for (const t of ["Your allowances", "Weekly summaries", "₿700 a day", "Your node"]) assert.ok(home.includes(t), `page shows ${t}`);
     const line = renderToString(React.createElement(seen.accessories[0].component, { channelId: channel }));
     assert.match(line, /1 budget running/);
     const card = renderToString(React.createElement(seen.messages[0].component, { message: { id: proposal.id, channelId: channel, authorId: ALICE, createdAt: proposal.created_at,

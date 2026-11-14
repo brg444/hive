@@ -64,6 +64,8 @@
   .msg { min-height: 1.4em; margin: 12px 0 0; font-size: 14px; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 24px 0; }
   details summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
+  .units { display: flex; gap: 8px; align-items: center; margin-left: auto; font-size: 14px; color: var(--ink-2); }
+  .units select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; }
 </style>
 </head>
 <body>
@@ -158,6 +160,7 @@
     <div class="actions">
       <button class="quiet" id="refresh" type="button">Refresh</button>
       <button class="link" id="lock" type="button">Lock the console</button>
+      <span class="units"><span id="units-label">Amounts in</span> <select id="units" aria-labelledby="units-label"></select></span>
     </div>
   </section>
 

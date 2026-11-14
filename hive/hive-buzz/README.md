@@ -27,7 +27,8 @@ host of its own.
 `api/` serves `GET /hive/v1/state` from what the hive already has: the agent's pay-arkade event
 log (jobs, funding requests, claims and returns), the Arkade indexer (the treasury's balance) and
 the LNURL server (settled chip-ins to the hive's address). One snapshot is cached for 15 seconds
-whatever the number of members.
+whatever the number of members. It also passes on the Bitcoin price from mempool.space, for members who
+read amounts in dollars; `--price-url` names another source, or `off`.
 
 ```bash
 node api/src/server.mjs --name "Hive" --agent-log <pay-arkade buyer log> \
@@ -110,6 +111,10 @@ the one network origin it asks for, and install.
 In the hive's channel it adds the proposal card, a status line above the composer (the treasury,
 open proposals with the next decision, jobs waiting for keepers) and a Propose button that opens a
 short form in its place; the form writes the proposal into the message box, and the member sends it.
+Amounts read in the unit each member picks in the plugin's card in Buzz's Settings: Bitcoin's
+smallest unit written with the ₿ sign by default (₿1 is one sat), sats, BTC, or US dollars at the
+price the host passes on. Messages in the channel and the agents' tools keep sats; `shared/amounts.mjs`
+does the formatting for the plugin and the keeper console alike.
 It draws with Buzz's own design tokens, so it follows the app's light and dark themes, with Buzz's
 amber for the hive's mark and anything still waiting on the community. The
 hive's page has four tabs: an overview with the treasury, the viewer's allowances and live

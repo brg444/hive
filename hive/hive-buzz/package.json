@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node plugin/build.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "HIVE_PRICE_URL=off node --test test/*.test.mjs"
   },
   "dependencies": {
     "@noble/curves": "1.9.7",

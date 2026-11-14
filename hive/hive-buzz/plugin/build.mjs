@@ -86,6 +86,7 @@ const coordinator = inline("../bot/coordinator.mjs", "coordinate");
 const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel, keepersKeys");
 // What the Hive guide knows, and the instructions it starts with.
 const guide = readFileSync(join(here, "../shared/guide.mjs"), "utf8").replace(/^export\s+/gm, "");
+const amounts = inline("../shared/amounts.mjs", "UNITS, savedUnit, saveUnit, amountParts, formatAmount");
 // Where members install the plugin from, for HiveBot to tell them: a Git repository and branch.
 const install = arg("--install");
 // The repository's documentation, for the Hive guide: on the same origin the manifest grants.
@@ -104,6 +105,7 @@ const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__COORDINATOR__*/", () => coordinator)
     .replace("/*__ONBOARDING__*/", () => onboarding)
     .replace("/*__GUIDE__*/", () => guide)
+    .replace("/*__AMOUNTS__*/", () => amounts)
     .replace("/*__INSTALL__*/null", () => JSON.stringify(install ?? null))
     .replace("/*__CONSOLE__*/null", () => JSON.stringify(keeperConsole ?? null))
     .replace("/*__DOCS__*/null", () => JSON.stringify(docs ?? null))

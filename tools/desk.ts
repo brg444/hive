@@ -60,6 +60,7 @@ import {
   signPendingListing,
   treasuryOf,
 } from "./ops.js";
+import { currentPrice } from "./price.js";
 
 /** A keeper's console keeps a few dozen nonces here; more would only wait. */
 const MAX_POOLED = 64;
@@ -299,6 +300,8 @@ export class Desk {
         terms: this.record.treasury,
       },
       nonces: Object.fromEntries(this.keepers.map((k) => [k, pooled[k]?.length ?? 0])),
+      // For a keeper who reads amounts in dollars; nothing signed depends on it.
+      price: currentPrice(),
     };
   }
 

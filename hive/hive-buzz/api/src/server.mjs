@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { renameSync, writeFileSync } from "node:fs";
 import { bech32 } from "@scure/base";
 import { governanceFrom, mergeEvents } from "./channel.mjs";
+import { currentPrice } from "./price.mjs";
 import { agentFromStatus, arkadePkScript, contributionsFromPayments, hiveState, jobsFromLog, proposalsFromLog } from "./state.mjs";
 
 const argv = process.argv.slice(2);
@@ -56,6 +57,7 @@ const cfg = {
     smallSats: Number(arg("--small-sats", "20000")),
     discussionSeconds: arg("--discussion-minutes") ? Math.round(Number(arg("--discussion-minutes")) * 60) : undefined,
     desk: arg("--desk"),
+    priceUrl: arg("--price-url"),
     keeperConsole: arg("--console"),
     serveInvite: argv.includes("--serve-invite"),
     cacheMs: Number(arg("--cache-secs", "15")) * 1000,
@@ -175,7 +177,7 @@ async function snapshot() {
     ]);
     const log = readFileSync(cfg.agentLog, "utf8");
     const jobs = jobsFromLog(log);
-    const body = JSON.stringify(hiveState({
+    const body = JSON.stringify({ ...hiveState({
         name: cfg.name,
         chipIn: { lightningAddress: cfg.lightningAddress ?? null, arkadeAddress: cfg.treasury ?? null },
         treasury: cfg.treasury ? { address: cfg.treasury, balanceSats: balance } : null,
@@ -188,7 +190,7 @@ async function snapshot() {
             smallSats: cfg.smallSats, ...(cfg.discussionSeconds !== undefined ? { discussionSeconds: cfg.discussionSeconds } : {}),
             updatedAt: Math.floor(Date.now() / 1000), proposals: [], members: {} } : null),
         ...(cfg.desk || cfg.keeperConsole ? { keepersDesk: { desk: cfg.desk ?? null, console: cfg.keeperConsole ?? null } } : {}),
-    }));
+    }), price: currentPrice(cfg.priceUrl ?? process.env.HIVE_PRICE_URL ?? undefined) ?? null });
     cached = { at: Date.now(), body };
     return body;
 }

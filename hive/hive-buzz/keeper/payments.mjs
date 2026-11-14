@@ -6,6 +6,7 @@
 // The key is unlocked with the passkey for one sitting and dropped when the keeper locks the console
 // or leaves it idle. The nonces the console shares ahead of time stay on this device, encrypted under
 // the same passkey, and each one is deleted before the signature that uses it.
+import { formatAmount, saveUnit, savedUnit, UNITS } from "../shared/amounts.mjs";
 import { nonceKeyFromPrf, openNonces, sealNonces } from "./vault.mjs";
 import { checkSession, connection, deskAuth, escrowFacts, freshNonces, publicKeyOf, signFirst, signListing, signSecond, treasuryScriptOf } from "./signing.mjs";
 
@@ -16,6 +17,15 @@ const LOW = 24;
 
 const nf = new Intl.NumberFormat("en-US");
 const sats = (n) => `${nf.format(n)} sats`;
+// What the keeper reads amounts in, on this device: ₿ by default, or sats, BTC or US dollars.
+let unit = savedUnit();
+const setUnit = (u) => { unit = u; saveUnit(u); };
+const getUnit = () => unit;
+/** An amount in the keeper's unit. In dollars, an amount the keeper signs for also shows to the sat. */
+function money(n, price, signed = false) {
+    const shown = formatAmount(n, unit, price);
+    return signed && unit === "usd" && price > 0 ? `${shown} (${formatAmount(n, "bitcoin")})` : shown;
+}
 const when = (t) => new Date(t * 1000).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
 const short = (k) => `${k.slice(0, 8)}…${k.slice(-6)}`;
 
@@ -92,7 +102,7 @@ export class Sitting {
     /** Shares a new batch of nonces when the desk is running low on this keeper's. */
     async topUp() {
         const info = await getJson(`${this.desk}/desk/v1/hive`);
-        this.hive = { ...this.hive, nonces: info.nonces };
+        this.hive = { ...this.hive, nonces: info.nonces, price: info.price ?? this.hive.price ?? null };
         if ((info.nonces?.[this.me] ?? 0) >= LOW) return;
         const { batch, secrets } = freshNonces(this.secret, 32);
         // Kept before they are shared: a nonce the desk holds always has its secret here.
@@ -242,4 +252,4 @@ async function post(url, body) {
     return out;
 }
 
-export { sats, when, short };
+export { getUnit, money, sats, setUnit, short, UNITS, when };

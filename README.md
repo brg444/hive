@@ -83,6 +83,17 @@ For questions it can bring in a guide, a Goose agent on Buzz's own harness, and 
 community gets four tools from the plugin (`hive_guide`, `hive_proposals`, `hive_status` and
 `hive_docs`) that answer from the hive's live state and its documentation.
 
+<p>
+<img src="docs/images/plugin-settings.png" alt="The Hive card in Buzz's Settings: amounts in Bitcoin (₿), sats, BTC or US dollars" width="49%">
+</p>
+
+Each member chooses how amounts read in the plugin's card in Buzz's Settings. The default follows
+[Spiral's proposal](https://spiralxyz.substack.com/p/bringing-to-the-world) to write Bitcoin's
+smallest unit with the ₿ sign, so ₿1 is one sat and a job's cap reads ₿20,000; sats, whole BTC and
+US dollars at the current price are the alternatives, and the keeper console offers the same choice.
+Only the display changes: proposals, the bot's messages and the agents' tools keep sats, the unit
+every Buzz client reads, and an amount a keeper signs for always shows to the sat.
+
 One plugin build serves every hive on a Hive service and finds its own by the channel it sits in.
 The plugin screenshots are its own components rendered with sample data and Buzz's tokens by
 `hive/hive-buzz/test/preview.mjs`, and [the plugin's README](hive/hive-buzz/README.md) covers it in

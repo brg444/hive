@@ -40,6 +40,7 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { inviteNodeId } from "./agents.js";
 import { consoleCors, Desk, type DeskOptions, deskRoute, faultStatus } from "./desk.js";
 import { type HiveRecord, initHive, type OpsContext, treasuryOf } from "./ops.js";
+import { currentPrice } from "./price.js";
 
 /** The Buzz plugin's own modules, which the service runs exactly as a single hive's host does. */
 interface HiveBuzz {
@@ -326,7 +327,7 @@ export class HiveService {
   async state(channelId: string): Promise<Record<string, unknown>> {
     const registration = this.registration(channelId);
     const cached = this.#cache.get(registration.hive);
-    if (cached && Date.now() - cached.at < 15_000) return cached.body;
+    if (cached && Date.now() - cached.at < 15_000) return { ...cached.body, price: currentPrice() };
     const files = this.files(registration.hive);
     const record = this.record(registration.hive);
     let log = "";
@@ -377,7 +378,8 @@ export class HiveService {
       },
     };
     this.#cache.set(registration.hive, { at: Date.now(), body });
-    return body;
+    // The Bitcoin price, for members who show amounts in dollars; display only.
+    return { ...body, price: currentPrice() };
   }
 
   private async balance(record: HiveRecord): Promise<number> {

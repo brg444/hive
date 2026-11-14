@@ -43,6 +43,7 @@ const state = {
     v: 1, name: "Buzz Builders", updatedAt: now, agent: { nodeId: "ab".repeat(32) },
     keepersDesk: { desk: "https://hive.example.org/c/chan-hive", console: "https://keeper.hive.example/" },
     chipIn: { lightningAddress: "builders@hive.example" },
+    price: { usdPerBtc: 67235, at: now - 120, source: "mempool.space" },
     treasury: { address: "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", balanceSats: 1284500 },
     funding: [{ jobId: "j42", status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, deadline: now + 20 * H, minCoinExpiry: now + 4 * D,
         escrowAddress: "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamecescrow0sample0address0for0the0preview0only0xr4t3", providerPk: "3c1d0b7e52" + "0".repeat(48) + "a91f04" }],
@@ -69,11 +70,11 @@ const state = {
 const work = mkdtempSync(join(tmpdir(), "hive-preview-"));
 const dir = execFileSync("node", [join(root, "plugin/build.mjs"), "--api", "https://hive.example.org", "--name", "Buzz Builders", "--out", work]).toString().trim();
 const mod = await import(pathToFileURL(join(dir, "plugin.js")).href);
-const seen = { pages: [], messages: [], tools: [], accessories: [] };
+const seen = { pages: [], messages: [], tools: [], accessories: [], settings: [] };
 const stops = [];
 mod.apply({
     react: React,
-    pages: { register: (p) => seen.pages.push(p) }, agents: { addTool: () => {} },
+    pages: { register: (p) => seen.pages.push(p) }, agents: { addTool: () => {} }, settingsCards: { register: (c) => seen.settings.push(c) },
     notifications: { register: () => ({ submit: async () => {} }) },
     conversation: { registerMessage: (r) => seen.messages.push(r), registerTool: (t) => seen.tools.push(t), registerAccessory: (a) => seen.accessories.push(a) },
     relay: { snapshot: () => ({ status: "ready", generation: 1, viewer: ME, session: {} }) },
@@ -139,6 +140,7 @@ button{font:inherit;font-size:13px;color:var(--text-standard);background:var(--a
 .ph{color:var(--text-subtle);padding:4px 4px 10px}.tb{display:flex;gap:6px;align-items:center}.ib{width:28px;height:28px;display:grid;place-items:center;color:var(--text-subtle)}
 .send{margin-left:auto;width:30px;height:30px;border-radius:999px;background:var(--affordance-prominent);color:var(--text-on-prominent);display:grid;place-items:center}
 .pagewrap{width:1000px;background:var(--surface-base)}
+.settings{width:560px;padding:24px;background:var(--surface-panel);border:1px solid var(--border-standard);border-radius:24px}
 </style><body>
 <div class="shot" id="channel">${channel}</div>
 <div class="shot" id="running">${running}</div>
@@ -146,6 +148,7 @@ button{font:inherit;font-size:13px;color:var(--text-standard);background:var(--a
 <div class="shot" id="overview">${page("home")}</div>
 <div class="shot" id="keepers">${page("keepers")}</div>
 <div class="shot" id="money">${page("money")}</div>
+<div class="shot" id="settings"><div class="settings">${render(e(seen.settings[0].component, { active: () => true }))}</div></div>
 </body></html>`);
 stops.forEach((s) => s());
 console.log(out);

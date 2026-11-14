@@ -49,6 +49,11 @@ Labs gives out, and a file of admin users for its admin port. The second run pri
 SHA-256 hashes: the build is the same byte for byte from the same commit, so a keeper can build the
 console themselves and compare.
 
+Members who read amounts in US dollars need the Bitcoin price, which the service reads from
+mempool.space every five minutes and passes on with each hive's state; nothing the hive signs or pays
+depends on it. `HIVE_PRICE_URL` in `hive.env` names another source answering `{ "USD": <price> }`, and
+`HIVE_PRICE_URL=off` stops the service from asking.
+
 Mainnet stays off until you uncomment `BUZZ_MAINNET=enabled` in `hive.env` and restart the service.
 The Operator's key and exit delay and the Emulator's key are pinned in
 `packages/ark/src/deployment.ts`, so a delegatee that served another Operator or Emulator is refused,

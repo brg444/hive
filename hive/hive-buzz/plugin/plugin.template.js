@@ -5,7 +5,7 @@
 // Where proposals stand, the plugin works out itself from the hive's channel, with the same rules
 // the hive's bot uses. The treasury, jobs and payouts come from the hive's host over the one origin
 // its manifest declares.
-export const inject = ["react", "pages", "host", "notifications", "agents", "conversation", "relay", "navigation"];
+export const inject = ["react", "pages", "host", "notifications", "agents", "conversation", "relay", "navigation", "settingsCards"];
 
 // One hive's own host, or, with SERVICE, the shared Hive service, where each hive lives under its
 // channel: the plugin then finds its community's hive and talks to `<service>/c/<channel ID>`.
@@ -25,6 +25,8 @@ const LOOKBACK_DAYS = 90;
 /*__ONBOARDING__*/
 
 /*__GUIDE__*/
+
+/*__AMOUNTS__*/
 
 // Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
 const INSTALL = /*__INSTALL__*/null;
@@ -56,7 +58,12 @@ const APPROVE = ["✅", "✔️", "☑️"];
 const SUPPORT = ["👍", "+", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤️", "🙌"];
 
 const nf = new Intl.NumberFormat();
+// Sats for what agents read and what the bot posts, the unit every client parses. What a member sees
+// on screen reads in the unit they chose in Settings, through `amount`.
 const sats = (n) => (n === null || n === undefined ? "–" : `${nf.format(n)} sats`);
+let unit = savedUnit();
+let usdPerBtc = null;
+const amount = (n, exact = false) => formatAmount(n, unit, usdPerBtc, exact);
 const short = (s, head = 10, tail = 6) => (!s ? "–" : s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`);
 const modelName = (m) => (m ? (m.startsWith("local-gguf/sha256-") ? `local model ${m.slice(18, 26)}` : m) : "–");
 const RAIL = { lightning: "Lightning", arkade: "Arkade", onchain: "on-chain Bitcoin" };
@@ -146,6 +153,7 @@ export function apply(ctx) {
     let channelEvents = null;
     const listeners = new Set();
     const publish = (next) => {
+        if (next.state?.price?.usdPerBtc > 0) usdPerBtc = next.state.price.usdPerBtc;
         snapshot = { ...next, gov: governanceFrom(next.state, channelEvents) };
         for (const listener of listeners) listener(snapshot);
         notify();
@@ -183,7 +191,7 @@ export function apply(ctx) {
             if (announced.has(`f:${job.jobId}`)) continue;
             announced.add(`f:${job.jobId}`);
             funding.submit({ sourceKey: `funding:${job.jobId}`, target: pageTarget,
-                title: `${name}: a job needs funding`, body: `${sats(job.capSats)} for ${modelName(job.model)}, before ${when(job.deadline)}.` })?.catch?.(() => {});
+                title: `${name}: a job needs funding`, body: `${amount(job.capSats)} for ${modelName(job.model)}, before ${when(job.deadline)}.` })?.catch?.(() => {});
         }
         const me = viewer();
         if (!me || !gov?.keepers.includes(me)) return;
@@ -191,7 +199,7 @@ export function apply(ctx) {
             if (p.state !== "open" || p.discussionEnds > nowS() || p.approvals.includes(me) || announced.has(`d:${p.id}`)) continue;
             announced.add(`d:${p.id}`);
             decisions.submit({ sourceKey: `decide:${p.id}`, target: pageTarget,
-                title: `${name}: “${p.title}” is ready for keepers`, body: `${sats(p.budgetSats)}, ${p.support} members support it. React ✅ to approve or ❌ to decline.` })?.catch?.(() => {});
+                title: `${name}: “${p.title}” is ready for keepers`, body: `${amount(p.budgetSats)}, ${p.support} members support it. React ✅ to approve or ❌ to decline.` })?.catch?.(() => {});
         }
     }
 
@@ -859,9 +867,9 @@ export function apply(ctx) {
                     left > 0 ? `Discussion closes ${until(ends)}` : approvals >= threshold ? "Approved, recorded on the bot's next pass" : "Discussion closed, waiting for keepers"));
         } else if (stage === "running" && record) {
             progress = h("div", { style: stack(6) },
-                h(Meter, { value: record.usedSats, total: p.budgetSats, tone: "good", label: `${sats(record.usedSats)} of ${sats(p.budgetSats)} used` }),
+                h(Meter, { value: record.usedSats, total: p.budgetSats, tone: "good", label: `${amount(record.usedSats)} of ${amount(p.budgetSats)} used` }),
                 h("div", { style: { ...row, ...small, ...muted } },
-                    h("span", { style: tnum }, `${sats(record.usedSats)} used of ${sats(p.budgetSats)}`),
+                    h("span", { style: tnum }, `${amount(record.usedSats)} used of ${amount(p.budgetSats)}`),
                     h("span", null, `until ${day(record.ends)}`)));
         } else if (stage === "approved" && record) {
             progress = h("p", { style: { ...p0, ...small, ...muted } }, `Approved. The budget opens ${day(record.starts)}, once keepers fund its first job.`);
@@ -878,9 +886,9 @@ export function apply(ctx) {
                     h("strong", { style: { fontSize: "1.07em", lineHeight: 1.35 } }, p.title)),
                 h(Pill, { tone: STAGE_TONE[stage] }, STAGE[stage] ?? stage)),
             h("div", { style: { display: "flex", flexWrap: "wrap", columnGap: "var(--space-4)", rowGap: 4 } },
-                h("span", { style: { fontWeight: 600, ...tnum } }, sats(p.budgetSats)),
+                h("span", { style: { fontWeight: 600, ...tnum } }, amount(p.budgetSats)),
                 h("span", { style: muted }, period),
-                h("span", { style: muted }, `${forText}${p.allowanceSats ? `, ${sats(p.allowanceSats)} a day` : ""}`)),
+                h("span", { style: muted }, `${forText}${p.allowanceSats ? `, ${amount(p.allowanceSats)} a day` : ""}`)),
             h("p", { style: { ...p0, lineHeight: 1.5 } }, p.purpose),
             open && extra.length ? h("dl", { style: { ...p0, display: "grid", gridTemplateColumns: "auto 1fr", columnGap: "var(--space-3)", rowGap: 4 } },
                 extra.flatMap(([k, v]) => [h("dt", { key: `${k}t`, style: muted }, k), h("dd", { key: `${k}d`, style: p0 }, v)])) : null,
@@ -991,7 +999,7 @@ export function apply(ctx) {
             labelled("title", "Title", control("title", { placeholder: "What the work is, in a few words" })),
             labelled("purpose", "Purpose and output", control("purpose", { multiline: true, placeholder: "Why it serves the hive, what it produces and where the results go" })),
             h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
-                labelled("budget", "Budget in sats", control("budget", { inputMode: "numeric", placeholder: "20,000" }), "1 1 120px"),
+                labelled("budget", unit === "bitcoin" ? "Budget in ₿" : "Budget in sats", control("budget", { inputMode: "numeric", placeholder: "20,000" }), "1 1 120px"),
                 labelled("start", "Starts", control("start", { type: "date" }), "1 1 140px"),
                 labelled("end", "Ends", control("end", { type: "date" }), "1 1 140px")),
             h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "flex-end" } },
@@ -1026,7 +1034,7 @@ export function apply(ctx) {
         const running = gov.proposals.filter((p) => p.state === "running");
         const soonest = open.map((p) => p.discussionEnds).filter((t) => t > nowS()).sort((a, b) => a - b)[0];
         const parts = [
-            state ? h("span", { key: "t", style: tnum }, h("span", { style: { color: C.text, fontWeight: 600 } }, sats(state.treasury.balanceSats)), " in the treasury") : null,
+            state ? h("span", { key: "t", style: tnum }, h("span", { style: { color: C.text, fontWeight: 600 } }, amount(state.treasury.balanceSats)), " in the treasury") : null,
             open.length ? h("span", { key: "o" }, `${open.length} proposal${open.length === 1 ? "" : "s"} open${soonest ? `, next decision ${until(soonest)}` : ""}`) : null,
             !open.length && running.length ? h("span", { key: "r" }, `${running.length} budget${running.length === 1 ? "" : "s"} running`) : null,
             state?.funding.length ? h("span", { key: "f", style: { color: C.honeyInk } }, `${state.funding.length} job${state.funding.length === 1 ? "" : "s"} waiting for keepers`) : null,
@@ -1056,9 +1064,15 @@ export function apply(ctx) {
                         h("button", { type: "button", style: { ...btn.quiet, ...small, padding: 0, textDecoration: "underline", textUnderlineOffset: 3 }, onClick: () => load() }, "Refresh")))),
             state ? h("div", { style: { ...stack(2), alignItems: "flex-end", textAlign: "right" } },
                 h("span", { style: { ...muted, ...small } }, "Treasury"),
-                h("span", { style: { fontSize: "1.9em", fontWeight: 650, lineHeight: 1.1, letterSpacing: "-0.01em", ...tnum } },
-                    state.treasury.balanceSats === null || state.treasury.balanceSats === undefined ? "–" : nf.format(state.treasury.balanceSats),
-                    h("span", { style: { fontSize: "0.5em", fontWeight: 500, ...muted } }, " sats")),
+                (() => {
+                    // The number large, its unit small: "₿1,284,500", "1,284,500 sats", "0.012845 BTC", "$863.71".
+                    const a = amountParts(state.treasury.balanceSats, unit, usdPerBtc);
+                    const unitStyle = { fontSize: "0.5em", fontWeight: 500, ...muted };
+                    return h("span", { style: { fontSize: "1.9em", fontWeight: 650, lineHeight: 1.1, letterSpacing: "-0.01em", ...tnum } },
+                        a.pre ? h("span", { style: { ...unitStyle, fontSize: "0.8em", marginRight: "0.05em" } }, a.pre) : null,
+                        a.num,
+                        a.post ? h("span", { style: unitStyle }, a.post) : null);
+                })(),
                 chip.lightningAddress ? h("span", { style: { ...small, ...muted } }, "Chip in at ", h("span", { style: { color: C.text } }, chip.lightningAddress)) : null) : null);
     }
 
@@ -1082,9 +1096,9 @@ export function apply(ctx) {
             !me ? h(Empty, null, "Connect to the community to see your allowances.")
                 : mine.length === 0 ? h(Empty, null, "No running proposal includes you yet. Propose work from the hive's channel, or ask to be named on one.")
                 : h("ul", { style: list }, mine.map((p, i) => h("li", { key: p.id, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
-                    h("div", { style: row }, h("strong", null, p.title), h("span", { style: { fontWeight: 600, ...tnum } }, `${sats(p.allowanceSats ?? 500)} a day`)),
-                    h(Meter, { value: p.usedSats, total: p.budgetSats, tone: "good", label: `${sats(p.usedSats)} of ${sats(p.budgetSats)} used` }),
-                    h("div", { style: { ...row, ...muted, ...small } }, h("span", { style: tnum }, `${sats(p.usedSats)} of ${sats(p.budgetSats)} used by the hive`), h("span", null, `until ${day(p.ends)}`))))),
+                    h("div", { style: row }, h("strong", null, p.title), h("span", { style: { fontWeight: 600, ...tnum } }, `${amount(p.allowanceSats ?? 500)} a day`)),
+                    h(Meter, { value: p.usedSats, total: p.budgetSats, tone: "good", label: `${amount(p.usedSats)} of ${amount(p.budgetSats)} used` }),
+                    h("div", { style: { ...row, ...muted, ...small } }, h("span", { style: tnum }, `${amount(p.usedSats)} of ${amount(p.budgetSats)} used by the hive`), h("span", null, `until ${day(p.ends)}`))))),
             me ? h("div", { style: { ...small, ...muted, padding: "var(--space-2) var(--space-3)", background: C.inset, borderRadius: C.chip } },
                 node
                     ? ["Your node ", h("code", { key: "n" }, short(node)), " calls the model ", h("code", { key: "m" }, "hive"), " from any OpenAI-compatible tool. You can also ask the hive's agent in the channel."]
@@ -1100,7 +1114,7 @@ export function apply(ctx) {
             used.length === 0
                 ? h(Empty, null, "No member has used a budget yet.")
                 : h("ul", { style: list }, used.map((b, i) => h("li", { key: b.proposal, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
-                    h("div", { style: row }, h("code", null, b.proposal), h("span", { style: { fontWeight: 600, ...tnum } }, `${sats(b.usedSats)} used`)),
+                    h("div", { style: row }, h("code", null, b.proposal), h("span", { style: { fontWeight: 600, ...tnum } }, `${amount(b.usedSats)} used`)),
                     h("span", { style: { ...muted, ...small } }, `${b.members} member${b.members === 1 ? "" : "s"}, ${b.requests} request${b.requests === 1 ? "" : "s"}, last ${when(b.lastUsedAt)}`)))),
             state.agent ? h("p", { style: { ...p0, ...muted, ...small } }, "Members set up their node with ", h("code", null, `install-member.sh --agent ${state.agent.nodeId}`), ".") : null);
     }
@@ -1116,10 +1130,10 @@ export function apply(ctx) {
             h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "flex-start", justifyContent: "space-between" } },
                 h("strong", { style: { lineHeight: 1.35 } }, p.title),
                 h(Pill, { tone: needsMe ? "honey" : STAGE_TONE[p.state] }, needsMe ? "Needs your decision" : STAGE[p.state] ?? p.state)),
-            p.state === "running" ? h(Meter, { value: p.usedSats, total: p.budgetSats, tone: "good", label: `${sats(p.usedSats)} of ${sats(p.budgetSats)} used` }) : null,
+            p.state === "running" ? h(Meter, { value: p.usedSats, total: p.budgetSats, tone: "good", label: `${amount(p.usedSats)} of ${amount(p.budgetSats)} used` }) : null,
             h("div", { style: { ...row, ...muted, ...small, alignItems: "center" } },
                 h("span", { style: { display: "inline-flex", gap: "var(--space-3)", alignItems: "center", flexWrap: "wrap", ...tnum } },
-                    h("span", { style: { color: C.text, fontWeight: 600 } }, p.state === "running" ? `${sats(p.usedSats)} of ${sats(p.budgetSats)}` : sats(p.budgetSats)),
+                    h("span", { style: { color: C.text, fontWeight: 600 } }, p.state === "running" ? `${amount(p.usedSats)} of ${amount(p.budgetSats)}` : amount(p.budgetSats)),
                     h("span", null, `👍 ${p.support}`),
                     h("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" } }, h(Pips, { n: p.approvals.length, of: gov.threshold }), `${p.approvals.length} of ${gov.threshold}`)),
                 h("span", null, right)),
@@ -1156,10 +1170,10 @@ export function apply(ctx) {
                 ? h(Empty, null, "No job is waiting for funding.")
                 : h("ul", { style: list }, state.funding.map((j, i) => h("li", { key: j.jobId, style: { ...item, gap: "var(--space-3)", ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
                     h("div", { style: { ...row, alignItems: "center" } },
-                        h("strong", { style: tnum }, `${sats(j.capSats)} for ${modelName(j.model)}`),
+                        h("strong", { style: tnum }, `${amount(j.capSats)} for ${modelName(j.model)}`),
                         h("span", { style: { ...muted, ...small } }, `deadline ${until(j.deadline)}`)),
                     h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
-                        h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: sats(j.capSats), copy: String(j.capSats), mono: false })),
+                        h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: amount(j.capSats, true), copy: String(j.capSats), mono: false })),
                         h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
                     h("p", { style: { ...p0, ...muted, ...small } },
                         link
@@ -1192,8 +1206,8 @@ export function apply(ctx) {
                     h("div", { style: { ...row, alignItems: "center" } }, h("strong", null, modelName(j.model)), h(Pill, { tone: tone[j.status] }, STATUS[j.status] ?? j.status)),
                     h("div", { style: { ...row, ...muted, ...small } },
                         h("span", null, `Provider ${short(j.providerPk ?? j.providerPeer)}`),
-                        h("span", { style: tnum }, j.status === "claimed" ? `paid ${sats(j.paidSats)}, returned ${sats(j.returnedSats)}`
-                            : j.status === "returned" ? `returned ${sats(j.returnedSats)}` : `used ${sats(j.usedSats)} of ${sats(j.capSats)}`))))));
+                        h("span", { style: tnum }, j.status === "claimed" ? `paid ${amount(j.paidSats)}, returned ${amount(j.returnedSats)}`
+                            : j.status === "returned" ? `returned ${amount(j.returnedSats)}` : `used ${amount(j.usedSats)} of ${amount(j.capSats)}`))))));
     }
 
     function Providers({ state }) {
@@ -1201,7 +1215,7 @@ export function apply(ctx) {
             state.providers.length === 0
                 ? h(Empty, null, "No provider has served this hive yet.")
                 : h("ul", { style: list }, state.providers.map((p, i) => h("li", { key: p.providerPk ?? p.providerPeer, style: { ...item, ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
-                    h("div", { style: row }, h("code", null, short(p.providerPk ?? p.providerPeer)), h("span", { style: { fontWeight: 600, ...tnum } }, `earned ${sats(p.earnedSats)}`)),
+                    h("div", { style: row }, h("code", null, short(p.providerPk ?? p.providerPeer)), h("span", { style: { fontWeight: 600, ...tnum } }, `earned ${amount(p.earnedSats)}`)),
                     h("div", { style: { ...row, ...muted, ...small } }, h("span", null, p.models.map(modelName).join(", ")), h("span", null, `${p.openJobs} open, ${p.jobs} total`))))));
     }
 
@@ -1215,7 +1229,7 @@ export function apply(ctx) {
                 ? h(Empty, null, "Nothing yet.")
                 : h("ul", { style: list }, recent.map((r, i) => h("li", { key: r.key, style: { ...item, ...row, flexDirection: "row", alignItems: "baseline", ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
                     h("span", { style: stack(2) }, h("span", null, r.text), h("span", { style: { ...muted, ...small } }, stamp(r.at))),
-                    h("span", { style: { fontWeight: 600, ...tnum, color: r.in ? C.good : C.text } }, `${r.in ? "+" : "−"}${sats(r.sats)}`)))));
+                    h("span", { style: { fontWeight: 600, ...tnum, color: r.in ? C.good : C.text } }, `${r.in ? "+" : "−"}${amount(r.sats)}`)))));
     }
 
     const TABS = [["home", "Overview"], ["proposals", "Proposals"], ["keepers", "Keepers"], ["money", "Treasury"]];
@@ -1262,4 +1276,40 @@ export function apply(ctx) {
     // The hive's mark beside the page in Buzz's navigation: Buzz's amber, the same in both themes.
     const MARK = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1.8 21 7v10l-9 5.2L3 17V7z" fill="#FFC53D"/></svg>')}`;
     ctx.pages.register({ id: "main", title: HIVE_NAME, primary: true, icon: MARK, component: HivePage });
+
+    // ---- Settings: the unit amounts read in ---------------------------------------------------
+
+    /** Shows every amount in another unit, at once and from then on, in this app. */
+    function setUnit(next) {
+        unit = next;
+        saveUnit(next);
+        for (const listener of listeners) listener({ ...snapshot });
+    }
+
+    function AmountSettings() {
+        const { state } = useSnapshot();
+        const price = state?.price?.usdPerBtc > 0 ? state.price : null;
+        return h("div", { style: stack("var(--space-4)") },
+            h("div", { style: stack(2) },
+                h("h2", { style: { ...p0, fontSize: "1.15em" } }, "Amounts"),
+                h("p", { style: { ...p0, ...muted } },
+                    "How the Hive plugin shows amounts on this device. Proposals and the bot's messages in the channel keep sats, which every Buzz client reads.")),
+            h("div", { role: "radiogroup", "aria-label": "Show amounts in", style: stack(2) },
+                UNITS.map((u) => {
+                    const on = unit === u.id;
+                    return h("label", { key: u.id, style: { display: "flex", gap: "var(--space-3)", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer",
+                        borderRadius: C.chip, border: `1px solid ${on ? C.honey : C.line}`, background: on ? C.honeyTint : "transparent" } },
+                        h("input", { type: "radio", name: "hive-unit", value: u.id, checked: on, onChange: () => setUnit(u.id), style: { marginTop: 3 } }),
+                        h("span", { style: stack(1) },
+                            h("span", null, h("strong", null, u.label), h("span", { style: { ...muted, ...tnum } }, `  ${u.sample}`)),
+                            h("span", { style: { ...muted, ...small } }, u.note)));
+                })),
+            unit === "usd"
+                ? h("p", { style: { ...p0, ...muted, ...small } }, price
+                    ? `1 BTC = $${nf.format(Math.round(price.usdPerBtc))}, from ${price.source ?? "the hive's host"}${price.at ? ` at ${stamp(price.at)}` : ""}. Amounts to send stay in ₿, to the sat.`
+                    : "The hive's host has not sent a Bitcoin price yet, so amounts show in ₿ until it does.")
+                : null);
+    }
+
+    ctx.settingsCards.register({ id: "amounts", title: HIVE_NAME, group: "Plugins", component: AmountSettings });
 }

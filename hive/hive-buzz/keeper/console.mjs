@@ -3,7 +3,7 @@
 // and sign its payments. The key never leaves the page: it talks only to the desk and the Arkade
 // Operator, and sends them signatures and public nonces.
 import { backup, keeperLine, lockWithPasskey, newSecret, PRF_SALT, restore, unlockWithPasskey } from "./vault.mjs";
-import { savedDesk, sats, short, Sitting, when } from "./payments.mjs";
+import { getUnit, money, savedDesk, setUnit, short, Sitting, UNITS, when } from "./payments.mjs";
 
 const STORE = "hive-keeper/v1";
 const $ = (id) => document.getElementById(id);
@@ -267,12 +267,22 @@ function el(tag, { dataset, ...props } = {}, ...children) {
     return node;
 }
 
+/** The Bitcoin price the desk last sent, for amounts in dollars. */
+const usd = () => sitting?.hive?.price?.usdPerBtc ?? null;
+
+const units = $("units");
+units.replaceChildren(...UNITS.map((u) => el("option", { value: u.id, textContent: u.label, selected: u.id === getUnit() })));
+units.addEventListener("change", () => {
+    setUnit(units.value);
+    if (sitting) showPayments().catch(() => {});
+});
+
 async function showPayments() {
     say("payments-msg", "");
     const view = await sitting.overview();
     $("hive-name").textContent = `${sitting.hive.hive}: payments`;
     const { budget } = view;
-    $("hive-summary").textContent = `Approved work has ${sats(budget.remainingSats)} left for new jobs: ${sats(budget.approvedLeftSats)} across ${budget.proposals.length} running proposal${budget.proposals.length === 1 ? "" : "s"}, less ${sats(budget.lockedSats)} already in open jobs.`;
+    $("hive-summary").textContent = `Approved work has ${money(budget.remainingSats, usd())} left for new jobs: ${money(budget.approvedLeftSats, usd())} across ${budget.proposals.length} running proposal${budget.proposals.length === 1 ? "" : "s"}, less ${money(budget.lockedSats, usd())} already in open jobs.`;
     const listing = view.listing;
     const myIndex = sitting.hive.keepers.indexOf(sitting.me);
     $("listing-card").hidden = !(listing && !listing.signatures[myIndex]);
@@ -285,7 +295,7 @@ async function showPayments() {
         const open = el("button", { className: role.action ? "primary" : "quiet", type: "button", textContent: role.action ? role.label : "Details" });
         open.addEventListener("click", () => showPayment(entry, view.budget));
         list.append(el("li", {},
-            el("div", { className: "row" }, el("b", { textContent: `${sats(r.capSats)} for ${r.model}` }), open),
+            el("div", { className: "row" }, el("b", { textContent: `${money(r.capSats, usd())} for ${r.model}` }), open),
             el("span", { className: "note", textContent: `${role.action ? "" : `${role.label}. `}Provider ${short(r.providerPk)}, deadline ${when(r.deadline)}.` })));
     }
     $("payments-empty").hidden = view.payments.length > 0;
@@ -301,13 +311,13 @@ function showPayment(entry, budget) {
         ? "The hive's agent asks the keepers to fund this job. Check the details, then sign; your console checks the rest itself."
         : `${role.label}.`;
     const rows = [
-        ["Amount", `${sats(r.capSats)}, the job's cap`],
+        ["Amount", `${money(r.capSats, usd(), true)}, the job's cap`],
         ["Model", r.model],
-        ["Price", `${sats(Math.round(r.priceMsatPerMtok / 1000))} per million tokens`],
+        ["Price", `${money(Math.round(r.priceMsatPerMtok / 1000), usd())} per million tokens`],
         ["Provider", r.providerPk],
         ["Deadline", `${when(r.deadline)}: whatever the job does not use comes back after it`],
         ["Escrow", r.address],
-        ["Budget", `${sats(budget.remainingSats)} left in approved work`],
+        ["Budget", `${money(budget.remainingSats, usd())} left in approved work`],
     ];
     $("payment-facts").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", { textContent: k }), el("dd", { textContent: v })]));
     const checks = [
