@@ -31,6 +31,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The service's tests load hive-api's channel code, which reads its own dependencies.
+      - run: npm ci --no-audit --no-fund
+        working-directory: hive/hive-buzz
       - run: pnpm check
       - run: pnpm gates:offline
       - run: pnpm audit:v4 --offline
