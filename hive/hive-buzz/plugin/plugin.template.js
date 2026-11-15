@@ -1282,7 +1282,7 @@ export function apply(ctx) {
         const p = said ? all.find((x) => x.code === said.code) : all.find((x) => x.id === message.id);
         const keeper = Boolean(gov?.keepers.includes(message.authorId));
         const verb = said?.word === "approve" ? "Approved" : said?.word === "decline" ? "Declined" : "Asked to withdraw";
-        const what = p ? paymentTitle(p) : asked ? `${amount(asked.amountSats)} to ${short(asked.address, 12, 6)}` : "a Hive payment";
+        const what = p?.kind === "job" ? paymentTitle(p) : p || asked ? `${amount((p ?? asked).amountSats)} to ${short((p ?? asked).address, 12, 6)}` : "a Hive payment";
         return h("div", { className: "ui-card", style: { ...stack(6), padding: "var(--space-2) var(--space-3)", maxWidth: 520, boxSizing: "border-box" } },
             h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "center", justifyContent: "space-between" } },
                 h("span", { style: { display: "inline-flex", gap: 8, alignItems: "center", minWidth: 0 } }, h(Hex, { size: 14, filled: said?.word !== "decline" }),
