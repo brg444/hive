@@ -61,11 +61,15 @@ HiveTreasury(bytes keeperA, bytes keeperB, bytes keeperC, bytes hexA, bytes hexB
 | `delegateKey` | The host's delegatee key as an intent names its cosigner: the only cosigner `renew` accepts. |
 | `renewalWindow` | How long before the coin's expiry `renew` opens. |
 | `maxFee` | The most a renewal pays the operator, in sats. |
-| `pair01`, `pair02`, `pair12` | One MuSig2 key per pair of keepers, over their Buzz keys. |
+| `pair01`, `pair02`, `pair12` | One MuSig2 key per pair of keepers: BIP327 key aggregation over the pair's two Buzz keys, each lifted to its even point (`02` and the x-only key) and sorted. |
 | `exitDelay` | The relative delay before an exit leaf can spend. |
 
 `pay` and `merge` pay the change or the merged coin to this script, and the next `pay` spends that
 continuation.
+
+Every keeper key here is a Buzz identity's own public key, used as Buzz signs with it; the
+repository's README explains [where those keys come from and how the treasury is built from
+them](../../README.md#from-a-buzz-identity-to-the-treasury).
 
 ## Functions
 

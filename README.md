@@ -121,6 +121,47 @@ key, and the host builds the treasury from the three without keeping any of them
 key up in Buzz's Settings → Identity, since it is now also their share of the treasury and the key
 on its exit.
 
+### From a Buzz identity to the treasury
+
+A Buzz identity is a secp256k1 key pair, the kind Nostr uses. The Buzz app makes its secret once,
+when the member creates their identity, from 32 random bytes of the operating system's generator,
+or takes the one they import as an `nsec`. It keeps that secret in the system's secure storage and
+signs every event with it. The public half is the x-only key BIP340 defines: 32 bytes that Buzz
+writes as 64 hex characters in each event's `pubkey` and shows as an `npub`. No seed phrase,
+password or server goes into it, and Hive derives no new secret from it: a keeper's treasury key is
+exactly the secret of their Buzz identity.
+
+The host learns the three keys from signed events alone. Each keeper's ✅ on HiveBot's call is an
+event signed with their key, whose `pubkey` is that key, and HiveBot's message announcing the
+keepers names them in its `p` tags, in the order the founder confirmed them. The service checks
+every signature, takes the keys in that order and writes them into the treasury's terms in three
+forms:
+
+- `keeperA`, `keeperB` and `keeperC` are the x-only keys themselves, against which `pay` checks each
+  approval's BIP340 signature.
+- `hexA`, `hexB` and `hexC` are the same keys as 64 lowercase hex characters, the bytes each one
+  takes in the event serialization the covenant rebuilds.
+- `pair01`, `pair02` and `pair12` are one key per pair of keepers, for the exit path. Each keeper's
+  x-only key is lifted to the 33-byte compressed key of its even point, `02` followed by the key, as
+  BIP340 reads it; the pair's two keys are sorted, and BIP327 MuSig2 key aggregation turns them into
+  one key that owns the pair's exit leaf. The two keepers would sign with it together, each with
+  their own Buzz secret, though nothing in this repository signs an exit yet.
+
+Together with the hive's counter, the host's delegate key, the renewal and fee limits, and the
+Arkade Operator's and Emulator's keys and exit delay, these terms fix the treasury's script and
+therefore its address, so anyone holding the three public keys rebuilds the same treasury:
+`pnpm ops init --keepers` does exactly that from three npubs
+([`packages/treasury/src/terms.ts`](packages/treasury/src/terms.ts),
+[`packages/ark/src/musig.ts`](packages/ark/src/musig.ts)). A keeper's Hive plugin, for its part,
+refuses a payment from a host that names other keepers than the channel confirmed.
+
+The Buzz identity and the keeper's share of the treasury are therefore one and the same. A keeper
+who moves to a new Buzz identity is no longer a keeper of this treasury, whoever imports their
+`nsec` into another Buzz app approves as them, and a keeper who loses it with no copy loses their
+share. Settings → Identity in Buzz reveals and copies the private key, and Buzz's optional key
+backup can keep a sealed copy of it; each keeper should have one or the other before the treasury
+holds anything.
+
 The treasury is a covenant on Arkade that checks the keepers' approvals itself
 ([`contracts/v5`](contracts/v5/README.md)). A keeper approves a payment by sending a message in the
 hive's channel, `I approve Hive payment <code>`, whose code names the treasury, the payment's
@@ -326,12 +367,14 @@ treasury size.
 | `packages/protocol` | Canonical JSON, quotes, receipts, RFQ envelopes, hive listings, BOLT11 decoding |
 | `packages/executor` | Builds and submits each transaction |
 | `packages/ark` | The contracts, their addresses, and the plans for sends, claims and refunds |
-| `packages/steward` | The keeper's signing worker and its policy |
+| `packages/steward` | The v4 keeper's signing worker and its policy |
+| `packages/treasury` | The v5 treasury's terms, approval messages and checks, shared by the service and the plugin |
 | `packages/hive` | The hive: quotes, purchases, sends, claims, refunds, withdrawals, contributions and its view |
 | `packages/provider` | RFQ solver, metering sidecar, claim daemon and Lightning cash-out |
 | `packages/agent` | The buyer's OpenAI-compatible receipt proxy |
 | `app/` | The server, the directory (`hives.html`), a hive's page (`page.html`) and its typefaces |
-| `contracts/v4/` | The treasury, escrow, wallet and boarding contracts |
+| `contracts/v4/` | The treasury, escrow, wallet and boarding contracts of earlier hives |
+| `contracts/v5/` | The treasury keepers approve from Buzz, and [its design](contracts/v5/README.md) |
 | `gates/` | The lifecycle, refusals and renewal gates |
 | `tools/` | `ops.ts`, the Hive service (`service.ts`), the desks (`desk.ts` for v4, `approvals-desk.ts` for v5) and the v5 treasury's host side (`treasury-v5.ts`), the agent nodes (`agents.ts`), the local site (`dev.ts`), backups, the audit and the test vector generators |
 | `test/` | Integration and architecture tests over an in-memory network |

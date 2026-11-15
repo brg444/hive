@@ -34,6 +34,9 @@ move.
 - **MeshLLM.** Serves open models on GPUs pooled across machines, behind one
   OpenAI-style API. The provider's sidecar meters it from the outside, and Hive
   never changes MeshLLM itself.
+- **Keepers.** Three members chosen in the hive's channel. Their Buzz
+  identities' keys build the treasury, and any two of them approve each
+  payment out of it with a signed channel message.
 - **Arkade.** Co-signs a spend from the treasury, an escrow or a wallet only
   when that contract allows it, so a signature can move only what the contract
   says it may.

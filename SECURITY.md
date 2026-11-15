@@ -15,7 +15,11 @@ A fork that runs a host for others should say here who answers reports about tha
 ## What each part is trusted with
 
 **The keepers.** Three Buzz accounts, one per keeper: the treasury is built from their Buzz keys,
-which Buzz keeps on each keeper's device and signs their messages with. The treasury's covenant
+which Buzz keeps on each keeper's device and signs their messages with. Buzz makes each key at random
+when the identity is created, or takes one the member imports as an `nsec`, and keeps it in the
+system's secure storage. Hive uses the public key as it is, derives no other key from the secret and
+never sees it; the README describes [how the treasury is built from the three
+keys](README.md#from-a-buzz-identity-to-the-treasury). The treasury's covenant
 checks each keeper's approval itself, as their signature over a channel message whose text names the
 payment's number, amount, recipient and lapse time, so any two keepers fund a job or withdraw from
 the treasury and one alone moves nothing. Two keepers who agree can send the treasury anywhere, and

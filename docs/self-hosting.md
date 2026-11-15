@@ -28,7 +28,8 @@ A hive has three kinds of moving parts, and only the first needs a server:
   started by the service, or wherever the community likes, linked to the service.
 
 The keepers' keys never reach any of these: a keeper's key is their Buzz account's own, which Buzz
-keeps on their device and signs their messages with.
+keeps on their device and signs their messages with. The README explains [how the treasury is built
+from those keys](../README.md#from-a-buzz-identity-to-the-treasury).
 
 ## The host
 
@@ -219,7 +220,8 @@ three keepers' Buzz keys in the order HiveBot confirmed them, keeps none of them
 treasury's renewal with the delegatee, sends the whole counter to the treasury and checks that it
 arrived, and starts the hive's agent node unless a keeper names the community's own. HiveBot posts
 the treasury's address, and the plugin shows it. HiveBot also reminds each keeper to back up their
-Buzz key in Settings → Identity, since it is now their share of the treasury.
+Buzz key in Settings → Identity, since it is now their share of the treasury: Buzz made that key at
+random for their identity, and no seed or server can make it again.
 
 ### 3. The desk
 
