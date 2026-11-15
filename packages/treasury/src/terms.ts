@@ -1,24 +1,15 @@
 import { exitDelayVar, intVar, pairKeys, sequence } from "@hive/ark";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
 import treasuryJson from "../../../contracts/v5/treasury.json" with { type: "json" };
-import { type Counter, type KeeperKind, keeperPoint, sha256 } from "./message.js";
+import type { Counter } from "./message.js";
 
 /** The v5 treasury, as arkadec compiles contracts/v5/treasury.ark. */
 export const TREASURY_ARTIFACT = treasuryJson;
 
-/** A keeper as the treasury knows them: the P-256 key that approves, and the Bitcoin key that exits. */
-export interface Keeper {
-  kind: KeeperKind;
-  /** 0x11 ‖ compressed P-256, hex. */
-  key: string;
-  /** Compressed secp256k1, hex: the key on the pairs' MuSig2 exit keys. */
-  bitcoinKey: string;
-  /** The domain the keeper's passkey belongs to: where they made it. */
-  site: string;
-}
-
 export interface TreasuryTerms {
-  keepers: readonly [Keeper, Keeper, Keeper];
+  /** The keepers' Buzz keys, x-only hex, in the order the hive confirmed them. */
+  keepers: readonly [string, string, string];
   counter: Counter;
   /** The host's delegatee key, compressed hex: the only cosigner a renewal may name. */
   delegateKey: string;
@@ -28,27 +19,33 @@ export interface TreasuryTerms {
 }
 
 const LETTERS = ["A", "B", "C"] as const;
+const utf8 = (s: string) => new TextEncoder().encode(s);
 
-/** How WebAuthn names a passkey's site in its authenticator data: sha256 of the domain. */
-export const siteHash = (site: string): Uint8Array => sha256(new TextEncoder().encode(site));
-
-/** A site a passkey can belong to: a domain name, lowercase, as WebAuthn takes an rpId. */
-export const SITE = /^(localhost|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/;
+/** A Buzz key: 64 lowercase hex characters, the x-only key of a point on the curve. */
+export function isBuzzKey(key: unknown): key is string {
+  if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key)) return false;
+  try {
+    secp256k1.Point.fromHex(`02${key}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function checked(t: TreasuryTerms): TreasuryTerms {
   if (t.keepers.length !== 3) throw new Error("a treasury has three keepers");
-  for (const k of t.keepers) {
-    keeperPoint(k.key);
-    if (!SITE.test(k.site)) throw new Error("a keeper's site is a domain name");
-  }
-  if (new Set(t.keepers.map((k) => k.key)).size !== 3) throw new Error("three different keepers");
+  for (const k of t.keepers) if (!isBuzzKey(k)) throw new Error("a keeper is a Buzz key, x-only hex");
+  if (new Set(t.keepers).size !== 3) throw new Error("three different keepers");
   if (!/^0[23][0-9a-f]{64}$/.test(t.delegateKey)) throw new Error("the delegate key is compressed hex");
   return t;
 }
 
+/** A keeper's Buzz key as Bitcoin's compressed form takes it: the even point BIP340 names. */
+export const compressedOf = (key: string): string => `02${key}`;
+
 /** The pairs' exit keys, 33 bytes as the contract's pubkey type takes them. */
 export function pairsOf(t: Pick<TreasuryTerms, "keepers">): Record<"01" | "02" | "12", string> {
-  const pairs = pairKeys(t.keepers.map((k) => k.bitcoinKey) as [string, string, string]);
+  const pairs = pairKeys(t.keepers.map(compressedOf) as [string, string, string]);
   return { "01": `02${pairs["01"]}`, "02": `02${pairs["02"]}`, "12": `02${pairs["12"]}` };
 }
 
@@ -59,11 +56,10 @@ export function treasuryArguments(terms: TreasuryTerms): Record<string, string> 
   return {
     ...Object.fromEntries(
       LETTERS.flatMap((l, i) => [
-        [`keeper${l}`, t.keepers[i]!.key],
-        [`kind${l}`, intVar(t.keepers[i]!.kind)],
+        [`keeper${l}`, t.keepers[i]!],
+        [`hex${l}`, hex.encode(utf8(t.keepers[i]!))],
       ]),
     ),
-    ...Object.fromEntries(LETTERS.map((l, i) => [`site${l}`, hex.encode(siteHash(t.keepers[i]!.site))])),
     counterTxid: t.counter.txid,
     counterGidx: intVar(t.counter.gidx),
     delegateKey: hex.encode(new TextEncoder().encode(t.delegateKey)),
@@ -83,11 +79,10 @@ export function sdkArguments(terms: TreasuryTerms): Record<string, Uint8Array | 
   return {
     ...Object.fromEntries(
       LETTERS.flatMap((l, i) => [
-        [`keeper${l}`, hex.decode(t.keepers[i]!.key)],
-        [`kind${l}`, BigInt(t.keepers[i]!.kind)],
+        [`keeper${l}`, hex.decode(t.keepers[i]!)],
+        [`hex${l}`, utf8(t.keepers[i]!)],
       ]),
     ),
-    ...Object.fromEntries(LETTERS.map((l, i) => [`site${l}`, siteHash(t.keepers[i]!.site)])),
     counterTxid: hex.decode(t.counter.txid),
     counterGidx: BigInt(t.counter.gidx),
     delegateKey: new TextEncoder().encode(t.delegateKey),
@@ -99,29 +94,4 @@ export function sdkArguments(terms: TreasuryTerms): Record<string, Uint8Array | 
     pair12: hex.decode(pairs["12"]).subarray(1),
     exitDelay: BigInt(sequence(t.exitDelaySeconds)),
   };
-}
-
-/**
- * The line a keeper posts in the hive's channel from their own Buzz identity, which ties their keys to
- * them: `Hive keeper key: <Bitcoin key> <passkey key> <site>`. The keeper console writes it.
- */
-export const keeperLine = (k: Pick<Keeper, "bitcoinKey" | "key" | "site">): string =>
-  `Hive keeper key: ${keeperToken(k)}`;
-
-/** A keeper's three values as one string, the form the channel's governance keeps them in. */
-export const keeperToken = (k: Pick<Keeper, "bitcoinKey" | "key" | "site">): string =>
-  `${k.bitcoinKey} ${k.key} ${k.site}`;
-
-const TOKEN = /^(0[23][0-9a-f]{64}) (11[0-9a-f]{66}) (\S+)$/;
-
-/** A keeper (a passkey keeper: a raw key has no console) from the token a key line carries, or null. */
-export function keeperOf(token: string): Keeper | null {
-  const m = TOKEN.exec(String(token).trim().toLowerCase());
-  if (!m || !SITE.test(m[3]!)) return null;
-  try {
-    keeperPoint(m[2]!);
-  } catch {
-    return null;
-  }
-  return { kind: 1, bitcoinKey: m[1]!, key: m[2]!, site: m[3]! };
 }

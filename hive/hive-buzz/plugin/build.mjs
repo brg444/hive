@@ -3,7 +3,7 @@
 //   node plugin/build.mjs --api https://hive.example.org --name "Example Hive" [--id example.hive] [--out dist]
 //       [--channel <the hive's channel UUID> --keepers <npub or hex, comma-separated> [--threshold 2] [--small-sats 20000]
 //        [--discussion-minutes <n>, for a test hive]]
-//       [--install <https Git repository>#<branch>] [--console <keeper console HTTPS address>]
+//       [--install <https Git repository>#<branch>]
 //       [--docs <the repository's docs, as one Markdown file on the --api origin>]
 //
 // --api is the hive host's HTTPS address; it may carry a path (https://example.github.io/hive/demo),
@@ -13,6 +13,7 @@
 //
 // Each hive gets its own plugin, because Buzz only lets a plugin call the exact HTTPS origins its
 // manifest declares, and the community owner reviews that origin when installing.
+import { build } from "esbuild";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,7 +84,7 @@ const inline = (file, names) => `const { ${names} } = (() => {\n${readFileSync(j
     .replace(/^import .*$/gm, "").replace(/^export\s+/gm, "")}\nreturn { ${names} };\n})();`;
 const coordinator = inline("../bot/coordinator.mjs", "coordinate");
 // HiveBot's onboarding, the same steps the server bot posts.
-const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel, keepersKeys");
+const onboarding = inline("../bot/onboard.mjs", "onboardingPlan, recordFromChannel");
 // What the Hive guide knows, and the instructions it starts with.
 const guide = readFileSync(join(here, "../shared/guide.mjs"), "utf8").replace(/^export\s+/gm, "");
 const amounts = inline("../shared/amounts.mjs", "UNITS, savedUnit, saveUnit, amountParts, formatAmount");
@@ -96,9 +97,34 @@ if (docs) {
     try { u = new URL(docs); } catch { fail("--docs is an HTTPS address"); }
     if (u.origin !== origin.origin) fail("--docs must be on the same origin as --api, the one the plugin may call");
 }
-// The keeper console's address, where keepers create their treasury keys and sign payments.
-const keeperConsole = arg("--console");
-if (keeperConsole && !/^https:\/\/[^\s]+$/.test(keeperConsole)) fail("--console is the keeper console's HTTPS address");
+// What a keeper's plugin checks before it offers an approval: the hive's own code, bundled in, run
+// only when a keeper opens a payment, so the module stays pure until then.
+const root = join(here, "../../..");
+const shims = {
+    name: "node-shims",
+    setup(b) {
+        b.onResolve({ filter: /^node:crypto$/ }, () => ({ path: join(here, "shims/node-crypto.mjs") }));
+        b.onResolve({ filter: /^node:/ }, () => ({ path: join(here, "shims/node-none.mjs") }));
+        b.onResolve({ filter: /^@hive\/executor$|^@arkade-os\/sdk/ }, () => ({ path: join(here, "shims/no-executor.mjs") }));
+    },
+};
+const bundled = await build({
+    entryPoints: [join(here, "checks.mjs")],
+    bundle: true,
+    format: "iife",
+    globalName: "HiveChecks",
+    target: "es2022",
+    minify: true,
+    legalComments: "none",
+    write: false,
+    plugins: [shims],
+    inject: [join(here, "shims/buffer.mjs")],
+    nodePaths: [join(root, "node_modules"), join(here, "../node_modules")],
+    define: { "process.env": "{}", "import.meta.dirname": '"/"' },
+    alias: Object.fromEntries(["kit", "ark", "steward", "protocol", "hive", "agent", "provider", "treasury"].map((p) => [`@hive/${p}`, join(root, `packages/${p}/src/index.ts`)])),
+    logLevel: "warning",
+});
+const checks = `function hiveChecks() {\n    if (hiveChecks.loaded) return hiveChecks.loaded;\n    ${bundled.outputFiles[0].text.trim()}\n    return (hiveChecks.loaded = HiveChecks);\n}`;
 if (install && !/^https:\/\/[^\s#]+#[A-Za-z0-9._/-]+$/.test(install)) fail("--install is <https Git repository>#<branch>");
 const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__PROPOSAL__*/", () => proposal)
@@ -107,7 +133,7 @@ const js = readFileSync(join(here, "plugin.template.js"), "utf8")
     .replace("/*__GUIDE__*/", () => guide)
     .replace("/*__AMOUNTS__*/", () => amounts)
     .replace("/*__INSTALL__*/null", () => JSON.stringify(install ?? null))
-    .replace("/*__CONSOLE__*/null", () => JSON.stringify(keeperConsole ?? null))
+    .replace("/*__CHECKS__*/", () => checks)
     .replace("/*__DOCS__*/null", () => JSON.stringify(docs ?? null))
     .replace("/*__HIVE_CONFIG__*/null", () => JSON.stringify(config))
     .replace("/*__SERVICE__*/null", () => JSON.stringify(service ?? null))

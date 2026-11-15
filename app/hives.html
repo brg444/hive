@@ -205,7 +205,7 @@ h3.sub { margin: 52px 0 18px; font: 650 24px/1.2 var(--display); letter-spacing:
 .stack .dark p, .stack .dark .where { color: var(--on-inverse-2); }
 
 
-/* Keeper console and plugin mockup */
+/* Plugin mockup */
 .console { background: linear-gradient(var(--surface), var(--bg) 320px); border-top: 4px solid var(--ink); padding-bottom: 20px; }
 .qitem { padding: 16px 0; border-top: 1px solid var(--line-soft); }
 .qitem:first-of-type { border-top: 0; padding-top: 4px; }
@@ -474,7 +474,7 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
       <div><b>Pay per token</b><p>Signed receipts set exactly what the provider gets.</p></div>
       <div><b>Leftovers come back</b><p>On their own, even if nobody claims.</p></div>
       <div><b>Run from Buzz</b><p>Propose, discuss and approve work in your channel.</p></div>
-      <div><b>Keepers sign every payment</b><p>Any two of three, by hand, with keys that stay on their own devices.</p></div>
+      <div><b>Keepers approve every payment</b><p>Any two of three, each with a message from their own Buzz account.</p></div>
       <div><b>A public ledger</b><p>Every sat is a transaction anyone can check.</p></div>
     </div>
   </section>
@@ -563,7 +563,7 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
       <h2>Set up a hive without leaving your channel</h2>
       <p>Install the Hive plugin, add HiveBot to your channel and mention it with “set up”. It takes your community through each step right there, and every answer is a message or a reaction, so nobody copies a key or an ID by hand.</p>
     </div>
-    <figure class="buzzframe" style="margin:0 0 28px" aria-label="A Buzz channel with the Hive plugin: HiveBot asks for keepers and confirms a keeper's key, and the Hive page shows a proposal waiting for keepers.">
+    <figure class="buzzframe" style="margin:0 0 28px" aria-label="A Buzz channel with the Hive plugin: HiveBot asks for keepers, a keeper approves a payment, and the Hive page shows a proposal waiting for keepers.">
       <div class="bz-side" aria-hidden="true">
         <b>Open Lab</b>
         <span># general</span>
@@ -574,9 +574,9 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
       <div class="bz-main" aria-hidden="true">
         <div class="bz-col">
           <h3># hive</h3>
-          <div class="bz-msg"><span class="bz-av bot">H</span><div><div class="bz-who"><b>HiveBot</b><small>agent</small></div><p>First, keepers. Keepers hold the treasury's keys together: any 2 of them approve work and sign payments, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅. It needs 3.</p><div class="bz-reacts"><span>✅ 3</span></div></div></div>
-          <div class="bz-msg"><span class="bz-av">MK</span><div><div class="bz-who"><b>Maya</b></div><p><code>Hive keeper key: 02a1f3…9c4e</code></p></div></div>
-          <div class="bz-msg"><span class="bz-av bot">H</span><div><div class="bz-who"><b>HiveBot</b><small>agent</small></div><p>Got it, @Maya: your keeper key is in. 2 of 3 keepers have posted theirs.</p></div></div>
+          <div class="bz-msg"><span class="bz-av bot">H</span><div><div class="bz-who"><b>HiveBot</b><small>agent</small></div><p>First, keepers. Keepers hold the treasury together: any 2 of them approve work and payments, each with a message from their own Buzz account, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅. It needs 3.</p><div class="bz-reacts"><span>✅ 3</span></div></div></div>
+          <div class="bz-msg"><span class="bz-av">MK</span><div><div class="bz-who"><b>Maya</b></div><p><code>I approve Hive payment Qh3kz…bIS7</code></p></div></div>
+          <div class="bz-msg"><span class="bz-av bot">H</span><div><div class="bz-who"><b>HiveBot</b><small>agent</small></div><p>A job with provider 8f20…c3d2 is open: 20,000 sats in escrow for llama-3.3-70b.</p></div></div>
           <div class="bz-compose"><span>Message # hive</span><span class="bz-propose" title="Propose"></span></div>
         </div>
         <div class="bz-col">
@@ -594,13 +594,13 @@ dialog.sheet::backdrop { background: rgb(23 20 13 / 0.45); }
     <ol class="roles setup">
       <li class="role"><h3>Keepers step up</h3><p>Volunteers react ✅ to HiveBot's call, and the member who added HiveBot confirms them.</p></li>
       <li class="role"><h3>Everyone adds the plugin</h3><p>In Buzz, open Settings → Plugins, choose Add from Git and enter github.com/brg444/hive with the branch “plugin”.</p></li>
-      <li class="role"><h3>Keepers make their keys</h3><p>Each keeper creates a key in the keeper console and posts the one line it gives them. HiveBot answers each one.</p></li>
+      <li class="role"><h3>Keepers already have their keys</h3><p>A keeper's Buzz account is their key, so there is nothing to create or copy. The host builds the treasury from the three.</p></li>
       <li class="role"><h3>The treasury opens</h3><p>Once every key is in, HiveBot posts the treasury's address, and members chip in from any Lightning or Arkade wallet.</p></li>
       <li class="role"><h3>The first proposal</h3><p>Press Propose or post a message that starts with “Proposal:”. Members react 👍, and two keepers' ✅ approve it.</p></li>
     </ol>
     <div class="three" style="margin-top:28px">
-      <div class="panel honey"><h3>Keys stay with your keepers</h3><p>A keeper's key is made in the keeper console, on their own device, and locked with a passkey such as Touch ID or Face ID. The key never leaves it: the console sends only signatures. An encrypted backup goes to iCloud Drive or Google Drive, with its passphrase kept somewhere else.</p><a class="button small ghost" href="https://brg444.github.io/hive/keeper/">Open the keeper console</a><p class="note">For test networks during the beta.</p></div>
-      <div class="panel plain"><h3>Two keepers sign each payment</h3><p>Nothing signs on its own. Two of the three keepers sign every payment from the treasury themselves, in either order and hours apart if they need to, and one keeper alone can move nothing.</p></div>
+      <div class="panel honey"><h3>Keys stay with your keepers</h3><p>A keeper's key is the one Buzz already keeps for their account, on their own device. Approving a payment is a message they send in the channel, which the Hive plugin writes once it has checked the payment, and the treasury checks the keeper's signature on it itself.</p></div>
+      <div class="panel plain"><h3>Two keepers approve each payment</h3><p>Nothing approves on its own. Two of the three keepers approve every payment from the treasury themselves, in either order and hours apart if they need to, and one keeper alone can move nothing.</p></div>
       <div class="panel dark"><h3>Questions, answered in the thread</h3><p>Mention HiveBot for where the hive stands. Ask it to add a guide, and a Hive guide agent answers questions about proposals, keepers and payments from the hive's own docs.</p></div>
     </div>
   </section>

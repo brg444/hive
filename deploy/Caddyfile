@@ -1,8 +1,4 @@
-# The shared Hive service behind TLS. Caddy obtains both certificates itself.
-#
-# The keeper console has an origin of its own, apart from the service: a page there runs no code
-# but the console's, so nothing the service serves can reach a keeper's unlocked key or the nonces
-# kept in that origin's storage.
+# The shared Hive service behind TLS. Caddy obtains its certificate itself.
 {$HIVE_HOST} {
 	encode gzip
 	# The service answers with JSON and text, never a page: nothing it serves runs or is framed.
@@ -19,21 +15,5 @@
 	}
 	handle {
 		reverse_proxy 127.0.0.1:8080
-	}
-}
-
-{$KEEPER_HOST} {
-	root * /srv/hive/keeper
-	file_server
-	header {
-		Strict-Transport-Security "max-age=31536000"
-		X-Frame-Options "DENY"
-		X-Content-Type-Options "nosniff"
-		# The page's own policy, and what a page cannot say for itself: no site may frame it.
-		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
-		Referrer-Policy "no-referrer"
-		Cross-Origin-Opener-Policy "same-origin"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
-		Cache-Control "no-cache"
 	}
 }

@@ -1,22 +1,21 @@
 /**
  * The whole of a keepers' hive on a local regtest stack, end to end, as the live test will run it:
  *
- *   1. Three keepers create their keeper passkeys in the keeper console (a browser with a virtual
- *      passkey that supports PRF). The hive's v5 treasury is built from their lines: the host issues
- *      its counter, and the delegatee watches it for renewal.
+ *   1. Three keepers' Buzz keys build the hive's v5 treasury: the host issues its counter, and the
+ *      delegatee watches it for renewal.
  *   2. A member chips in: the stack's wallet sends to the treasury's address.
  *   3. The channel, as members' plugins forward it to hive-api: a proposal, two keepers' ✅, and the
  *      member's node. hive-api works out the governance and writes the agent's members file.
  *   4. The member asks the `hive` model on their own MeshLLM node; the hive's agent asks a provider
  *      for a job and writes the funding request, with the escrow's terms.
- *   5. Two keepers approve the payment in their consoles at the approvals desk, in either order; the
- *      desk folds the chip-in into the treasury coin, pays the escrow, and the escrow holds the cap.
+ *   5. Two keepers approve the payment with a message in the channel, which their Hive plugin writes
+ *      once it has checked the job; the approvals desk follows the channel as hive-api keeps it, folds
+ *      the chip-in into the treasury coin, pays the escrow, and the escrow holds the cap.
  *   6. The member's requests are served and receipted; the provider claims before the deadline, and
  *      the rest returns to the treasury, where the desk folds it into the treasury coin.
  *
  * Needs the regtest stack (arkd on 7070, the emulator on 7073), the delegatee on 7090
- * (`tools/delegatee.sh`), MeshLLM 0.79, a small GGUF model, the pay-arkade plugin and worker built,
- * and Playwright's Chromium:
+ * (`tools/delegatee.sh`), MeshLLM 0.79, a small GGUF model, and the pay-arkade plugin and worker built:
  *
  *   PAY_ARKADE_MESH=… PAY_ARKADE_MODEL=… PAY_ARKADE_DIR=… node --import tsx test/rehearsal.ts
  */
@@ -27,18 +26,11 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { regtestDeployment } from "@hive/ark";
 import { hex, localPath, repositoryRoot } from "@hive/kit";
-import { type Keeper, keeperOf } from "@hive/treasury";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { startApprovalDesk } from "../tools/approvals-desk.js";
 import { initHive, opsPaths } from "../tools/ops.js";
 import { issuerWallet } from "../tools/treasury-v5.js";
-import {
-  approveFirstPayment,
-  chromium,
-  keeperDevice,
-  openDesk,
-  serveConsole,
-} from "./support/keeper-console.js";
+import { buzzIdentity, pluginOffers } from "./support/buzz-keepers.js";
 import { sendOffchain } from "./support/treasury-sdk.js";
 import {
   ARKD,
@@ -75,15 +67,10 @@ const step = (name: string, detail: Record<string, unknown> = {}) => {
   console.log(`- ${name}${Object.keys(detail).length ? `: ${JSON.stringify(detail)}` : ""}`);
 };
 
-const site = await serveConsole();
-const browser = await chromium.launch();
 let deskServer: Awaited<ReturnType<typeof startApprovalDesk>> | null = null;
 try {
-  // 1. Passkeys, and the treasury they build.
-  const a = await keeperDevice(browser, site.url, ARKD);
-  const b = await keeperDevice(browser, site.url, ARKD);
-  const c = await keeperDevice(browser, site.url, ARKD);
-  const keepers = [a, b, c].map((d) => keeperOf(d.key)) as [Keeper, Keeper, Keeper];
+  // 1. The keepers' Buzz keys, and the treasury they build.
+  const [a, b, c] = [buzzIdentity(), buzzIdentity(), buzzIdentity()];
   const deployment = regtestDeployment();
   // The host's issuer, which issues each hive's counter, holds a few thousand sats of the host's own.
   const issuer = await issuerWallet(deployment);
@@ -91,10 +78,14 @@ try {
     sendOffchain(await issuer.getAddress(), 20_000);
     await until("the issuer's funds", async () => (await issuer.getBalance()).available >= 5_000, 60);
   }
-  const record = await initHive(hive, { network: "regtest", deployment, passkeys: keepers }, {});
-  step("treasury built from the keepers' passkeys", {
+  const record = await initHive(
+    hive,
+    { network: "regtest", deployment, buzzKeepers: [a.key, b.key, c.key] },
+    {},
+  );
+  step("treasury built from the keepers' Buzz keys", {
     address: record.treasuryAddress,
-    counter: record.passkeys?.counter.assetId,
+    counter: record.v5?.counter.assetId,
   });
 
   // 2. A chip-in, from the stack's own wallet.
@@ -130,11 +121,10 @@ try {
   const members = join(out, "members.json");
   writeFileSync(agentLog, "");
   writeFileSync(members, JSON.stringify({ members: {} }));
+  const payments = join(out, "payments.json");
   const channel = randomUUID();
-  const buzz = [0, 1, 2].map(() => schnorr.utils.randomSecretKey());
-  const [k0, k1, member] = buzz.map((k) => hex(schnorr.getPublicKey(k)));
-  const deskPort = await freePort();
-  const deskUrl = `http://127.0.0.1:${deskPort}`;
+  const memberKey = schnorr.utils.randomSecretKey();
+  const member = hex(schnorr.getPublicKey(memberKey));
   const apiPort = await freePort();
   const api = `http://127.0.0.1:${apiPort}`;
   const hiveApi = spawn(
@@ -155,13 +145,13 @@ try {
         "--channel",
         channel,
         "--keepers",
-        `${k0},${k1}`,
+        `${a.key},${b.key},${c.key}`,
         "--governance",
         governance,
         "--members-file",
         members,
       ],
-      ...["--model", MODEL_ID, "--discussion-minutes", "1", "--desk", deskUrl, "--console", site.url],
+      ...["--model", MODEL_ID, "--discussion-minutes", "1", "--payments", payments],
       ...["--port", String(apiPort)],
     ],
     { stdio: "ignore" },
@@ -241,22 +231,20 @@ try {
 
   // The channel: a proposal from the member, two keepers' ✅ after its discussion, the member's node and a keeper's ✅ on it.
   const proposal = signed(
-    buzz[2]!,
+    memberKey,
     channel,
     9,
     await proposalText("Answers for the docs channel"),
     now() - 600,
   );
   // On a host that names its keepers itself, a member's node counts once a keeper reacts ✅ to it.
-  const claim = signed(buzz[2]!, channel, 9, `Hive node: ${memberId}`, now() - 60);
-  const forwarded = [
+  const claim = signed(memberKey, channel, 9, `Hive node: ${memberId}`, now() - 60);
+  const forwarded: unknown[] = [
     proposal,
-    signed(buzz[0]!, channel, 7, "✅", now() - 300, [["e", proposal.id]]),
-    signed(buzz[1]!, channel, 7, "✅", now() - 290, [["e", proposal.id]]),
+    signed(a.secret, channel, 7, "✅", now() - 300, [["e", proposal.id]]),
+    signed(b.secret, channel, 7, "✅", now() - 290, [["e", proposal.id]]),
     claim,
-    signed(buzz[0]!, channel, 7, "✅", now() - 50, [["e", claim.id]]),
-    signed(buzz[0]!, channel, 9, a.line, now() - 900),
-    signed(buzz[1]!, channel, 9, b.line, now() - 890),
+    signed(a.secret, channel, 7, "✅", now() - 50, [["e", claim.id]]),
   ];
   const posted = await http(`${api}/hive/v1/channel`, { events: forwarded });
   assert.equal(posted.status, 200, JSON.stringify(posted.body));
@@ -267,7 +255,7 @@ try {
   step("channel forwarded: proposal approved, member allowed", {
     proposal: gov.proposals[0].id,
     member,
-    keepers: [k0, k1],
+    keepers: [a.key, b.key, c.key],
   });
 
   // 5. The member asks; the agent asks a provider; the keepers sign.
@@ -284,19 +272,37 @@ try {
   );
   step("funding requested", { job: String(requested.job_id).slice(0, 12), cap: requested.cap_sats });
 
+  // The desk follows the channel as hive-api keeps it, and writes its payments for hive-api to serve.
   deskServer = await startApprovalDesk(hive, {
     agentLog,
     governance,
-    port: deskPort,
+    events: `${governance}.events.json`,
+    paymentsFile: payments,
     tickMs: 5000,
     deadlineMarginSeconds: 60,
     minimumValiditySeconds: 60,
   });
-  await openDesk(b.page, deskUrl, hive);
-  await openDesk(a.page, deskUrl, hive);
-  step("keeper A", { console: await approveFirstPayment(a.page, "Check and approve") });
-  step("keeper B", { console: await approveFirstPayment(b.page, "Check and approve") });
   const jobId = String(requested.job_id);
+  await until("the job's payment at the desk", () => deskServer?.desk.payment(jobId), 60);
+  // Each keeper's plugin checks the job and writes the approval; they send it in the channel.
+  for (const [label, keeper] of [
+    ["keeper A", a],
+    ["keeper B", b],
+  ] as const) {
+    const offer = await until(
+      `${label}'s plugin offering the approval`,
+      async () => {
+        const o = await pluginOffers(api, "", keeper, channel, { own: true });
+        return o.approvals.length ? o : null;
+      },
+      60,
+    );
+    assert.deepEqual(offer.refused, []);
+    forwarded.push(keeper.message(channel, offer.approvals[0]!));
+    const sent = await http(`${api}/hive/v1/channel`, { events: forwarded });
+    assert.equal(sent.status, 200, JSON.stringify(sent.body));
+    step(label, { approval: offer.approvals[0]!.slice(0, 32) });
+  }
   await until("the payment executed", () => deskServer?.desk.payment(jobId)?.status === "done", 300);
   await until("the job open on the agent", () => first(agentLog, "job_open", { job_id: jobId }), 120);
   await until("the job open on the provider", () => first(sellerLog, "job_open", { job_id: jobId }), 120);
@@ -325,7 +331,11 @@ try {
   );
   const state = (await http(`${api}/hive/v1/state`)).body as Record<string, unknown>;
   const job = (state.jobs as { jobId: string; status: string }[]).find((j) => j.jobId === jobId);
-  step("hive-api's state", { job: job?.status, treasury: treasuryAfter, desk: state.keepersDesk });
+  step("hive-api's state", {
+    job: job?.status,
+    treasury: treasuryAfter,
+    payments: (state.payments as { payments?: unknown[] } | null)?.payments?.length,
+  });
   result.passed = true;
 } catch (error) {
   result.passed = false;
@@ -333,10 +343,8 @@ try {
   console.error(error);
 } finally {
   writeFileSync(join(out, "result.json"), JSON.stringify(result, null, 2));
-  await deskServer?.close();
-  for (const c of children.reverse()) c.kill("SIGTERM");
-  await browser.close();
-  site.close();
+  deskServer?.close();
+  for (const child of children.reverse()) child.kill("SIGTERM");
   console.log(result.passed ? `PASSED (${out})` : `FAILED (${out})`);
   if (result.passed) rmSync(opsPaths(hive).secret(), { recursive: true, force: true });
   process.exit(result.passed ? 0 : 1);

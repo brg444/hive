@@ -9,8 +9,9 @@
 // and keepers, and of everyone one of them has mentioned, answered or acknowledged. The rest share a
 // smaller space of their own, and a flood of them pushes out only each other.
 //
-// From the events the host works out where proposals stand, which keepers posted which treasury key,
-// and the agent's members file, exactly as the hive's bot would from the relay.
+// From the events the host works out where proposals stand and the agent's members file, exactly as
+// the hive's bot would from the relay. The keepers' Buzz keys are the treasury's keys, and their
+// approval messages, which the approvals desk reads, are among the events kept here.
 import { schnorr } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha2";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
@@ -140,7 +141,7 @@ export async function mergeForwarded(known, incoming, channelId, trust = null, n
 
 /**
  * Where the hive stands, from its channel: the keepers (named by the host, or as the hive's bot
- * recorded them during setup), the proposals, each keeper's treasury key, and the agent's members file.
+ * recorded them during setup), the proposals, and the agent's members file.
  *
  * cfg: { channelId, keepers?, bot?, threshold, smallSats, discussionSeconds?, model?, now }
  * usage: { [proposalId]: usedSats }, from the agent's log.
@@ -161,8 +162,6 @@ export function governanceFrom(events, cfg, usage = {}) {
         ...(cfg.discussionSeconds !== undefined ? { discussionSeconds: cfg.discussionSeconds } : {}),
         proposals: result.proposals,
         members: Object.fromEntries(Object.entries(result.nodes).map(([k, v]) => [k, { node: v.node }])),
-        // Each keeper's treasury key, in the order the keepers were confirmed: the order the treasury is built in.
-        keeperKeys: keepers.map((k) => result.keys[k]?.key ?? null),
         // The community's own agent node, when a keeper named one; the service's own otherwise.
         agentKey: result.agent?.key ?? null,
     };

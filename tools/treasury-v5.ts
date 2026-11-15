@@ -4,7 +4,7 @@
  *
  * A v5 treasury is named by its counter asset, so the counter exists before the treasury's address
  * does. The host issues it from a small wallet of its own, the issuer, which holds only the host's
- * sats, and sends the whole supply to the treasury with a 330-sat carrier in the same transaction.
+ * sats, and sends the whole supply to the treasury with a 1,000-sat carrier in the same transaction.
  * Once the treasury holds every unit, nothing outside it can stand in for its counter: the host's
  * part ends there. The issuer's key is the one key a host keeps for v5 hives, and it moves only the
  * host's own dust.
@@ -35,7 +35,6 @@ import {
 import { ensure, fail, hex, readPrivateJson, secretPath, stateExists, writePrivateOnce } from "@hive/kit";
 import {
   type Counter,
-  type Keeper,
   sdkArguments,
   TREASURY_ARTIFACT,
   type TreasuryTerms,
@@ -49,9 +48,10 @@ export const COUNTER_SUPPLY = 1_000_000n;
 export const CARRIER_SATS = 1_000;
 
 /** What a hive's record keeps of its v5 treasury. */
-export interface PasskeyTreasury {
+export interface KeeperTreasury {
   version: 5;
-  keepers: [Keeper, Keeper, Keeper];
+  /** The keepers' Buzz keys, x-only hex: the keys their channel messages are signed with. */
+  keepers: [string, string, string];
   counter: Counter;
   supply: string;
   delegateKey: string;
@@ -62,7 +62,7 @@ export interface PasskeyTreasury {
   fundedTxid: string;
 }
 
-export const v5Terms = (p: Omit<PasskeyTreasury, "version" | "supply" | "fundedTxid">): TreasuryTerms => ({
+export const v5Terms = (p: Omit<KeeperTreasury, "version" | "supply" | "fundedTxid">): TreasuryTerms => ({
   keepers: p.keepers,
   counter: p.counter,
   delegateKey: p.delegateKey,

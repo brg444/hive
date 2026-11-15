@@ -2,7 +2,7 @@
 // proposal stands. Everything it decides comes from signed Buzz events: a proposal is a member's
 // message, support is members' 👍, approval is two keepers' ✅, a decline is a keeper's ❌ with the
 // reason they reply in the thread. Pure, so it can be tested without a relay.
-import { discussionSeconds, parseAgentKey, parseKeeperKey, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
+import { discussionSeconds, parseAgentKey, parseNodeClaim, parseProposal } from "../shared/proposal.mjs";
 
 const DAY = 86400;
 const SUPPORT = new Set(["👍", "+", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤️", "🙌"]);
@@ -47,16 +47,12 @@ export function coordinate(events, cfg) {
     for (const e of live) if (e.kind === 7 && keeperSet.has(e.pubkey) && APPROVE.has(e.content.trim())) acked.add(target(e));
 
     const nodes = {};
-    const keys = {};
     let agent = null;
     const proposals = new Map();
     for (const e of live) {
         if (e.kind !== 9) continue;
         const node = parseNodeClaim(e.content);
         if (node) { if (!forwarded || acked.has(e.id)) nodes[e.pubkey] = { node, at: e.created_at, eventId: e.id }; continue; }
-        // A keeper's treasury key counts only from that keeper; a later post replaces an earlier one.
-        const key = parseKeeperKey(e.content);
-        if (key) { if (keeperSet.has(e.pubkey)) keys[e.pubkey] = { key, at: e.created_at, eventId: e.id }; continue; }
         // The community's own agent node, named by a keeper; the latest naming stands.
         const agentKey = parseAgentKey(e.content);
         if (agentKey) { if (keeperSet.has(e.pubkey)) agent = { key: agentKey, by: e.pubkey, at: e.created_at }; continue; }
@@ -109,7 +105,7 @@ export function coordinate(events, cfg) {
         });
     }
     out.sort((a, b) => b.postedAt - a.postedAt);
-    return { proposals: out, nodes, keys, agent };
+    return { proposals: out, nodes, agent };
 }
 
 /**

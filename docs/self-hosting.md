@@ -1,24 +1,25 @@
 # Running Hive for a Buzz community
 
 This guide takes a Buzz community from nothing to a paid job: a hive set up through HiveBot, three
-keepers who make their keys on their own devices, members who chip in and approve a proposal, a
-member who uses a model through MeshLLM, two keepers who sign the payment, and a provider paid for
+keepers whose Buzz accounts hold the treasury, members who chip in and approve a proposal, a member
+who uses a model through MeshLLM, two keepers who approve the payment in the channel, and a provider paid for
 exactly what it served, with the rest back in the treasury. Everything here is self-hosted. Nobody
 runs a Hive service for you, so whoever sets a hive up also runs its host, or joins a host someone
 else in the community runs.
 
 The whole flow has been rehearsed end to end on a local regtest stack (see
-[Trying it locally first](#trying-it-locally-first)). It has not been run end to end on mainnet, so
-treat a first run there as the experiment it is, with small amounts.
+[Trying it locally first](#trying-it-locally-first)); since keepers began approving from Buzz, the
+treasury, the desk and the plugin have run end to end there, and the full rehearsal with MeshLLM
+nodes has not been run again. It has not been run end to end on mainnet, so treat a first run there
+as the experiment it is, with small amounts.
 
 ## What runs where
 
 A hive has three kinds of moving parts, and only the first needs a server:
 
 - **The host** runs the Hive service, which keeps every hive it carries under its Buzz channel, with
-  its signing desk and, if the community wants it, its agent node. Beside it run the delegatee, which
-  renews the treasury's coins and carries out the keepers' signed payments, its Postgres database,
-  and the keeper console, served from an address of its own.
+  its approvals desk and, if the community wants it, its agent node. Beside it run the delegatee,
+  which renews the treasury's coins, and its Postgres database.
 - **The community** runs Buzz as it already does: the Hive plugin in members' apps, and HiveBot, an
   agent the plugin defines, which runs in the community owner's Buzz app.
 - **The MeshLLM nodes**: the hive's agent node, which buys inference with the treasury's money and
@@ -26,14 +27,13 @@ A hive has three kinds of moving parts, and only the first needs a server:
   member's node, through which a member asks the `hive` model. The agent node runs either on the host,
   started by the service, or wherever the community likes, linked to the service.
 
-The keepers' keys never reach any of these: each keeper makes and keeps theirs in the keeper console,
-on their own device, behind a passkey.
+The keepers' keys never reach any of these: a keeper's key is their Buzz account's own, which Buzz
+keeps on their device and signs their messages with.
 
 ## The host
 
 `deploy/setup.sh` sets the host up on Debian 12 or Ubuntu 24.04: Node, Go, Postgres and Caddy, the
-service, the delegatee built at its pinned commit, the keeper console, TLS for two host names, a
-backup timer and a check that runs every five minutes. Run it as root from a checkout of your fork:
+service, the delegatee built at its pinned commit, TLS for the service's host name, a backup timer and a check that runs every five minutes. Run it as root from a checkout of your fork:
 
 ```bash
 sudo deploy/setup.sh          # writes /etc/hive/hive.env and stops
@@ -41,13 +41,10 @@ sudo $EDITOR /etc/hive/hive.env
 sudo deploy/setup.sh          # installs, builds and starts everything
 ```
 
-`deploy/hive.env.example` explains every setting. You choose the two host names, one for the
-service and one for the console, and point both at the server before the second run so Caddy can
-obtain certificates. The console gets an origin of its own so that no other page can reach a
-keeper's unlocked key. On mainnet the delegatee also needs the mainnet Emulator's address, which Ark
-Labs gives out, and a file of admin users for its admin port. The second run prints the console's
-SHA-256 hashes: the build is the same byte for byte from the same commit, so a keeper can build the
-console themselves and compare.
+`deploy/hive.env.example` explains every setting. You choose the service's host name and point it
+at the server before the second run so Caddy can obtain its certificate. On mainnet the delegatee
+also needs the mainnet Emulator's address, which Ark Labs gives out, and a file of admin users for
+its admin port.
 
 Members who read amounts in US dollars need the Bitcoin price, which the service reads from
 mempool.space every five minutes and passes on with each hive's state; nothing the hive signs or pays
@@ -113,8 +110,7 @@ commands if it has not been. Rehearse a restore before the treasury holds anythi
 
 `tools/check.sh` runs every five minutes from `hive-check.timer`. It says, one line each, whether
 the service and the delegatee answer, whether the delegatee still signs with the delegate key
-`hive.env` names, whether the keeper console being served is byte for byte the one that was built,
-whether there is a backup from the last thirteen hours, and whether the disk has room. Each finding
+`hive.env` names, whether there is a backup from the last thirteen hours, and whether the disk has room. Each finding
 goes to the journal at error priority (`journalctl -p err -u hive-check`), and with `HIVE_ALERT_URL`
 set in `hive.env` it is also posted there as plain text, to an ntfy topic or any address that takes
 a POST. The services' own logs are in `journalctl -u hive-service -u hive-delegatee`.
@@ -127,8 +123,8 @@ share its allowance, so raise the numbers in `tools/service.ts` if a large commu
 
 The treasury's coins need the Operator, the Emulator and two keepers to move, and the delegatee to
 renew them. If the host is lost, restore it from a backup: the keepers' keys were never on it, and
-the delegate key and the delegatee's database are in the archive. Until it is back, the keepers can
-sign nothing, since the desk is where they meet, and the treasury's coins are not renewed. A coin
+the delegate key and the delegatee's database are in the archive. Until it is back, the keepers'
+approvals wait in the channel with nobody to submit them, and the treasury's coins are not renewed. A coin
 that is not renewed before its batch expires is swept by the Operator, so a host that stays down for
 weeks puts the treasury at risk: bring a host back, on any server, well before that. If the delegate
 key is lost for good, with no backup, no host can renew the treasury again, and the keepers move its
@@ -173,8 +169,12 @@ your fork:
 
 ```bash
 node hive/hive-buzz/plugin/build.mjs --service https://<service host> --name "Hive" \
-  --install https://github.com/<you>/hive#plugin --console https://<console host>/
+  --install https://github.com/<you>/hive#plugin
 ```
+
+The build bundles the hive's own checking code from `packages/`, so it needs `pnpm install` at the
+repository's root and `npm ci` in `hive/hive-buzz` first. It comes out the same byte for byte from
+the same commit, so a keeper can build it themselves and compare it with what they installed.
 
 A hive that wants a host of its own, without the service, can run hive-api and `pnpm ops desk`
 instead and build its plugin with `--api`; [the Buzz plugin's README](../hive/hive-buzz/README.md)
@@ -185,8 +185,7 @@ describes that setup.
 The steps below follow one hive. For a first run, a shorter discussion helps:
 `HIVE_DISCUSSION_MINUTES=10` in `hive.env` gives every proposal ten minutes instead of a day or two,
 and the plugin takes the same length from the service. A job's two-day period leaves the keepers the
-best part of a day to sign, since a keeper payment stays valid for at most 23 hours, the most the
-delegatee accepts.
+best part of a day to approve, since a payment's approvals stay valid for at most 23 hours.
 
 ### 1. The community asks for a hive
 
@@ -207,36 +206,30 @@ from the channel itself: HiveBot's profile in Buzz shows its npub, and the found
 nothing. A request that should not be there is removed with `pnpm ops service-reject <hive>`. Until
 a hive is approved the service keeps nothing of its channel and does not list it to the community's
 plugins; once it is, HiveBot checks that the hive the service opened is its own, built from the
-keepers and the keys in its channel, before it announces the treasury.
+keepers in its channel, before it announces the treasury.
 
 HiveBot then asks for keepers; three people react ✅, and the founder confirms them.
 
-### 2. The keepers' passkeys
-
-Each keeper opens the keeper console at `https://<console host>/` on their own device, creates their
-keeper passkey, and posts the line the console gives them in the channel. The passkey is the key, so
-it belongs in a password manager that syncs, such as iCloud Keychain or Google Password Manager, and
-there is nothing else to keep. HiveBot acknowledges each line and says when all three are in.
-
-### 3. The treasury and the agent
+### 2. The treasury and the agent
 
 Members' plugins forward the channel to the service, which checks every event's signature and reads
-the keepers HiveBot recorded and the lines they posted. Once the third line is in, it issues the
-hive's counter from the issuer, builds the treasury from the three passkeys in the order HiveBot
-confirmed the keepers, keeps none of them, registers the treasury's renewal with the delegatee, sends
-the whole counter to the treasury and checks that it arrived, and starts the hive's agent node unless
-a keeper names the community's own. HiveBot posts the treasury's address, and the plugin shows it.
+the keepers HiveBot recorded. A keeper's Buzz key is their treasury key, so there is nothing more for
+them to post: the service issues the hive's counter from the issuer, builds the treasury from the
+three keepers' Buzz keys in the order HiveBot confirmed them, keeps none of them, registers the
+treasury's renewal with the delegatee, sends the whole counter to the treasury and checks that it
+arrived, and starts the hive's agent node unless a keeper names the community's own. HiveBot posts
+the treasury's address, and the plugin shows it. HiveBot also reminds each keeper to back up their
+Buzz key in Settings → Identity, since it is now their share of the treasury.
 
-### 4. The desk
+### 3. The desk
 
-Every hive has its desk on the service, under `https://<service host>/c/<channel ID>`, the address
-the console asks for, and the plugin's Keepers tab links each keeper to the console with it filled
-in. A keeper unlocks it with their passkey, which pins the treasury's address in that browser. Only a
-keeper reads the hive's payments at the desk: each read carries a signature by the keeper's Bitcoin
-key, as starting or cancelling a payment does. The desk also folds each chip-in and each escrow's
-remainder into the treasury coin as they arrive.
+Every hive has its approvals desk on the service. It follows the hive's channel as members' plugins
+forward it, makes each job the agent asks the keepers to fund into a payment, takes in the keepers'
+approvals and declines, and submits a payment once two keepers have approved it. What it has waiting
+is in the hive's state, which each keeper's plugin reads. The desk also folds each chip-in and each
+escrow's remainder into the treasury coin as they arrive.
 
-### 5. Chip-ins and the first proposal
+### 4. Chip-ins and the first proposal
 
 Members send to the treasury's address from any Arkade wallet. A hive on the service has no
 Lightning address yet; a hive on a host of its own gets one from `pnpm ops init --lnurl`, which any
@@ -246,74 +239,50 @@ The member who will use the model sets up their node, joins the hive's mesh and 
 in the channel as `Hive node: <node ID>`. Once HiveBot acknowledges it, the agent serves that node up
 to the proposal's allowance.
 
-### 6. The provider and the first job
+### 5. The provider and the first job
 
 The provider joins the hive's mesh, and the agent's `--allow-peer` names it. The member asks the
 `hive` model on their own node; the first request opens a job, for which the agent gets a quote and
-asks the keepers to fund it. The plugin's Keepers tab shows the job waiting, with a link to the
-console.
+asks the keepers to fund it. HiveBot tells the keepers, and each keeper's plugin shows the payment
+above the message box in the hive's channel and on the Keepers tab.
 
-### 7. Two keepers approve
+### 6. Two keepers approve
 
-The first keeper opens the console, checks the job (the escrow is rebuilt from the job's terms and
-gives back to this treasury, and the amount fits what approved work has left) and approves it with
-their passkey, which starts the payment and gives it its number. The console shows the key of the
-agent that signs the job's receipts, remembers it, and asks before it approves a job that names
-another: a hive changes its agent node rarely, and says so in its channel. What approved work has
-left is the desk's count, which the console cannot check against the channel, so a keeper looks at
-the proposal there before approving. A second keeper does the same, at any time before the approvals
-lapse, ten minutes before the job's deadline at the latest. The desk then submits the payment
-through the Emulator, and the escrow holds exactly the job's cap. Payments go out in the order
-keepers started them; one cancelled or lapsed passes its number to the next, whose keepers approve it
-again.
+Before it offers anything, a keeper's plugin checks the payment itself: it rebuilds the job's escrow
+from the job's terms and checks that it gives back to this treasury and that the amount is the job's
+cap, and it rebuilds the exact message the treasury's covenant will check. What approved work has
+left is the desk's count, which the plugin cannot check against the channel, so a keeper looks at
+the proposal there before approving. The keeper presses Approve, and the plugin writes
+`I approve Hive payment <code>` into the message box; the keeper sends it as it is, since the
+covenant checks every character, and the channel draws it as a card naming the payment. A second
+keeper does the same, at any time before the approvals lapse, ten minutes before the job's deadline
+at the latest. The desk then submits the payment through the Emulator, and the escrow holds exactly
+the job's cap. A keeper who presses Decline sends `I decline Hive payment <code>`, which stops the
+payment. Payments go out in the order they started; one declined or lapsed passes its number to the
+next, whose keepers approve it again.
 
-### 8. The work, the claim and the return
+### 7. The work, the claim and the return
 
 The member uses the model. The provider claims the latest receipt before the deadline, and the rest
 goes back to the treasury. A job nobody claims returns whole once its deadline passes, with nobody
 signing.
 
-### 9. Withdrawing from the treasury
+### 8. Withdrawing from the treasury
 
 Two keepers can send the treasury's Bitcoin to an Arkade address: to move the hive to a new
 treasury or a new host, or to wind it down. They agree on the address and the amount in the hive's
-channel. One opens the console, enters both under Withdraw from the treasury and approves; another
-reads the same address and amount in their own console, which works out what the address pays
-itself, and approves. A withdrawal's approvals lapse after 23 hours, and the address must be on the
-hive's Operator.
-Nothing in the console judges the destination. That is the keepers' own decision, which is why it
-takes two of them.
-
-## A keeper who trusts no host with the console
-
-The console is where a keeper reads what their passkey approves, and the host serves the console. The host's
-check compares what is served with what was built every five minutes, and anyone can do the same
-from a checkout at the host's commit:
-
-```bash
-cd hive/hive-buzz && npm ci
-node keeper/verify.mjs https://<console host> --mainnet
-```
-
-That shows what the host serves to whoever asks, when they ask. A keeper who wants no host in the
-way of their key at all builds the console and serves it from their own machine:
-
-```bash
-node keeper/build.mjs dist/keeper --mainnet
-node keeper/serve.mjs dist/keeper        # http://localhost:8788
-```
-
-A passkey belongs to the address it was made at, and the treasury names each keeper's site, so a
-keeper who wants their own console makes their keeper passkey there, before the treasury is built,
-and approves from there. The hive's desk takes calls from a console served on the keeper's own
-machine.
+channel. One presses Withdraw above the message box and enters both, which writes
+`Hive withdrawal: <amount> sats to <address>` for them to send; the desk makes it a payment, and two
+keepers' plugins work out what the address pays themselves and offer the approval. A withdrawal's
+approvals lapse after 23 hours, and the address must be on the hive's Operator. Nothing in the
+plugin judges the destination. That is the keepers' own decision, which is why it takes two of them.
 
 ## Trying it locally first
 
 `test/rehearsal-service.ts` runs all of the above on a local regtest stack: two hives on one service,
 one with the agent node the service runs and one with a community's own node linked to it, with the
-keepers' consoles in a real browser with virtual passkeys, the hives' desks, the delegatee and four
-MeshLLM nodes. It checks where every sat lands.
+keepers approving through the Hive plugin itself, the hives' desks, the delegatee and four MeshLLM
+nodes. It checks where every sat lands.
 
 ```bash
 PAY_ARKADE_MESH=<mesh-llm> PAY_ARKADE_MODEL=<model.gguf> PAY_ARKADE_DIR=<pay-arkade checkout> \
@@ -321,8 +290,9 @@ PAY_ARKADE_MESH=<mesh-llm> PAY_ARKADE_MODEL=<model.gguf> PAY_ARKADE_DIR=<pay-ark
 ```
 
 It needs a regtest stack whose Operator states its delays in seconds (an exit delay of 512 or more),
-the delegatee from `tools/delegatee.sh`, MeshLLM 0.79 with a small GGUF model, pay-arkade built, and
-Playwright's Chromium; [Running Hive](running.md) lists the stack. Each run writes its steps and
+the delegatee from `tools/delegatee.sh`, MeshLLM 0.79 with a small GGUF model, and pay-arkade built;
+[Running Hive](running.md) lists the stack. Each run writes its steps and
 outcome to `.local/rehearsal/service-<run>/result.json`. `test/rehearsal.ts` does the same for one
-hive on a host of its own, and `test/keeper-console-e2e.ts` runs the keepers' part alone against the
-in-memory network: two keepers fund a job, then withdraw from the treasury.
+hive on a host of its own, and `test/buzz-approvals-e2e.ts` runs the keepers' part alone on the
+stack, with the service and the plugin and no MeshLLM: two keepers fund a job, then withdraw from
+the treasury.

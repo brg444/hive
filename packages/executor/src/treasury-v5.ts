@@ -23,8 +23,8 @@ export type TreasuryCoin = Pick<VirtualCoin, "txid" | "vout" | "value"> & {
 /** One keeper's approval as the covenant takes it, or null for a keeper who did not approve. */
 export interface CovenantApproval {
   sig: Uint8Array;
-  authData: Uint8Array;
-  tail: Uint8Array;
+  time: Uint8Array;
+  tags: Uint8Array;
 }
 
 const NETWORKS = {
@@ -98,8 +98,8 @@ export async function payFromTreasury(
     { program: payment.program, version: 1n },
     BigInt(payment.validUntil),
     pick("sig"),
-    pick("authData"),
-    pick("tail"),
+    pick("time"),
+    pick("tags"),
   )
     .from(coin)
     .to(contract.pkScript, BigInt(coin.value) - payment.amount)

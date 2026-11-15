@@ -1,7 +1,6 @@
 #!/bin/sh
 # Checks a Hive host and says what is wrong, one line each: whether the service and the delegatee
-# answer, whether the keeper console being served is still the one that was built, whether the last
-# backup is recent, and whether the disk has room. Run it from a timer (deploy/systemd/hive-check.timer
+# answer, whether the last backup is recent, and whether the disk has room. Run it from a timer (deploy/systemd/hive-check.timer
 # runs it every five minutes) or by hand.
 #
 #   tools/check.sh            exits 0 when all is well, 1 when anything is not
@@ -27,13 +26,6 @@ info=$(curl -fsS -m 10 "$DELEGATEE/v1/info" 2>/dev/null) || trouble "the delegat
 if [ -n "${info:-}" ] && [ -n "${BUZZ_DELEGATE_KEY:-}" ]; then
   key=$(printf '%s' "$info" | sed -n 's/.*"delegatePubkey" *: *"\([0-9a-f]*\)".*/\1/p')
   [ "$key" = "$BUZZ_DELEGATE_KEY" ] || trouble "the delegatee names delegate key ${key:-none}, not the one in hive.env"
-fi
-# The console served to keepers must be byte for byte the one built from this host's checkout.
-if [ -n "${HIVE_CONSOLE_DIR:-}" ] && [ -n "${HIVE_CONSOLE_BUILD:-}" ]; then
-  for f in index.html console.js; do
-    cmp -s "$HIVE_CONSOLE_DIR/$f" "$HIVE_CONSOLE_BUILD/$f" || trouble "the keeper console's $f being served is not the one that was built"
-  done
-  (cd "$HIVE_CONSOLE_DIR" && sha256sum -c SHA256SUMS >/dev/null 2>&1) || trouble "the keeper console being served does not match its SHA256SUMS"
 fi
 if [ -n "$BACKUPS" ]; then
   recent=$(find "$BACKUPS" -name 'hive-*.tar.age' -mmin -$((MAX_BACKUP_HOURS * 60)) 2>/dev/null | head -n 1)

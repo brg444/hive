@@ -430,7 +430,7 @@ test("HiveBot: an agent of the plugin's own type says hello once in the hive's c
     // The tools any agent here can use, the guide included.
     const tool = (name) => seen.tools.find((t) => t.name === name);
     assert.match(await tool("hive_guide").call(), /^This hive: Test Hive\. It has 2 keepers, any 2 of whom approve/);
-    assert.match(await tool("hive_guide").call(), /iCloud Keychain, Google Password Manager/);
+    assert.match(await tool("hive_guide").call(), /A keeper's Buzz account is their key/);
     assert.equal(await tool("hive_proposals").call(), "No proposal has been posted in the hive's channel yet.");
 
     // The repository's docs, a section at a time, from the hive's own origin.
@@ -461,7 +461,7 @@ test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with âœ
     const channel = "5e1f0c2a-7d3b-4e8f-9a6c-1b2d3e4f5a6b";
     const BOT = "b0".repeat(32), OWNER = "0e".repeat(32), KA = "a1".repeat(32), KB = "b2".repeat(32);
     const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", "--operator", "http://127.0.0.1:9"]);
-    const dir = build(["--install", "https://github.com/example/hive#plugin", "--console", "https://keepers.example.org"]);
+    const dir = build(["--install", "https://github.com/example/hive#plugin"]);
     const mod = await import(pathToFileURL(join(dir, "plugin.js")).href + `?v=${Math.random()}`);
     const { ctx, seen } = fakeHost(api, OWNER, []);
     // The community, as the bot reads and writes it.
@@ -506,24 +506,9 @@ test("HiveBot onboarding: the owner asks it to set up, keepers volunteer with âœ
     const plugin = fromBot("plugin");
     assert.deepEqual(plugin.tags.filter((t) => t[0] === "p").map((t) => t[1]), [KA, KB], "the keepers, as the record");
     assert.match(plugin.content, /Add from Git, with https:\/\/github\.com\/example\/hive and the branch plugin\./);
-    assert.match(fromBot("keys").content, /in the keeper console at https:\/\/keepers\.example\.org\./);
-    assert.ok(fromBot("propose") && !fromBot("treasury"), "the treasury waits for the keepers' keys");
-    const keyA = add(KA, 9, `Hive keeper key: 02${"a".repeat(64)}`, []);
-    await pass();
-    // Each key is answered in its thread, once.
-    const ackA = events.find((e) => e.pubkey === BOT && e.tags.some((t) => t[0] === "hive" && t[1] === "key-ack" && t[2] === keyA.id));
-    assert.equal(ackA.content, "Got it, @Ari: your keeper key is in. 1 of 2 keepers have posted theirs.");
-    assert.ok(ackA.tags.some((t) => t[0] === "e" && t[1] === keyA.id), "in the key's thread");
-    const outsider = add(OWNER, 9, `Hive keeper key: 02${"0".repeat(64)}`, []);
-    add(KB, 9, `Hive keeper key: 03${"b".repeat(64)}`, []);
-    await pass();
-    await pass();
-    const acks = events.filter((e) => e.pubkey === BOT && e.tags.some((t) => t[0] === "hive" && t[1] === "key-ack"));
-    assert.equal(acks.length, 3, "one answer per post, never twice");
-    assert.match(acks.find((e) => e.tags.some((t) => t[2] === outsider.id)).content, /only this hive's keepers post treasury keys here, so this one doesn't count\./);
-    assert.match(acks.at(-1).content, /2 of 2 keepers have posted theirs, so every key is in\.$/);
-    assert.match(fromBot("keys-in").content, /^All 2 keys are in, from @Ari and @b2b2b2b2\./);
-    assert.ok(fromBot("treasury"));
+    assert.match(fromBot("keys").content, /^Keepers, your Buzz account is your key to the treasury/);
+    assert.ok(fromBot("treasury") && fromBot("propose"), "the treasury is built from the keepers' Buzz keys, with nothing more to post");
+    assert.ok(!events.some((e) => e.pubkey === BOT && e.tags.some((t) => t[1] === "key-ack")), "no keys to acknowledge");
 
     add(KB, 9, formatProposal({ title: "Weekly summaries", budgetSats: 12000, start: null, end: null, who: "everyone", allowanceSats: 500, purpose: "A weekly summary.", work: "", provider: "", report: "" }), []);
     await pass();
@@ -562,7 +547,6 @@ test("each member's plugin forwards the channel's signed events, and the host wo
         // the one from a key no keeper answered, which may come from outside the channel, does not.
         sign(keys[0], 7, "âœ…", now - 95, [["e", node.id]]),
         sign(keys[3], 9, `Hive node: ${"cd".repeat(32)}`, now - 94),
-        sign(keys[0], 9, `Hive keeper key: 02${"11".repeat(32)}`, now - 90),
         // Pending on this device, not yet signed by the relay's view: never forwarded.
         { id: "f".repeat(64), pubkey: ALICE, created_at: now, kind: 9, tags: [["h", channel]], content: "draft", delivery: "pending" },
     ];
@@ -577,12 +561,12 @@ test("each member's plugin forwards the channel's signed events, and the host wo
     const governance = JSON.parse(readFileSync(gov, "utf8"));
     const p = governance.proposals.find((x) => x.title === "Docs in Spanish");
     assert.equal(p.state, "running", "approved after the test hive's five-minute discussion");
-    assert.deepEqual(governance.keeperKeys, [`02${"11".repeat(32)}`, null]);
+    assert.equal(governance.keeperKeys, undefined, "the keepers' Buzz keys are the treasury's keys");
     assert.deepEqual(JSON.parse(readFileSync(members, "utf8")).members, { ["ef".repeat(32)]: { name: ALICE.slice(0, 12), proposal: p.id, allowance_sats_per_day: 500 } });
     // A forged or edited event is refused; the draft never left the device.
     const forged = { ...events[1], id: "ab".repeat(32), content: "âŒ" };
     const res = await fetch(`${api}/hive/v1/channel`, { method: "POST", body: JSON.stringify({ events: [forged] }) });
-    assert.deepEqual(await res.json(), { added: 0, refused: 1, events: 7, proposals: null });
+    assert.deepEqual(await res.json(), { added: 0, refused: 1, events: 6, proposals: null });
     seen.cleanups.forEach((stop) => stop());
 });
 
@@ -600,11 +584,7 @@ test("a new hive's host runs before its treasury, learns the keepers from HiveBo
         e.sig = bytesToHex(schnorr.sign(e.id, key));
         return e;
     };
-    const keys = [k0, k1, k2].map((_, i) => `0${2 + (i % 2)}${String(i + 1).repeat(64)}`);
-    const events = [
-        sign(bot, 9, "Keepers are set.", now - 900, [["hive", "plugin"], ["p", pub(k0)], ["p", pub(k1)], ["p", pub(k2)]]),
-        ...[k0, k1, k2].map((k, i) => sign(k, 9, `Hive keeper key: ${keys[i]}`, now - 800 + i)),
-    ];
+    const events = [sign(bot, 9, "Keepers are set.", now - 900, [["hive", "plugin"], ["p", pub(k0)], ["p", pub(k1)], ["p", pub(k2)]])];
     const gov = join(work, `gov-${Math.random()}.json`);
     const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--operator", "http://127.0.0.1:9",
         "--channel", channel, "--bot", pub(bot), "--governance", gov, "--discussion-minutes", "10"]);
@@ -617,7 +597,6 @@ test("a new hive's host runs before its treasury, learns the keepers from HiveBo
     await new Promise((r) => setTimeout(r, 500));
     const governance = JSON.parse(readFileSync(gov, "utf8"));
     assert.deepEqual(governance.keepers, [pub(k0), pub(k1), pub(k2)], "the keepers HiveBot recorded, in its order");
-    assert.deepEqual(governance.keeperKeys, keys, "each keeper's treasury key, in the same order");
     assert.equal(governance.discussionSeconds, 600);
     seen.cleanups.forEach((stop) => stop());
 });
@@ -653,4 +632,54 @@ test("on the shared Hive service, one plugin finds its community's hive by its c
         seen.cleanups.forEach((stop) => stop());
         server.close();
     }
+});
+
+test("a keeper checks a payment the desk has waiting and gets the exact approval to send; a payment that does not check out is refused", async () => {
+    const { schnorr } = await import("@noble/curves/secp256k1");
+    const { sha256 } = await import("@noble/hashes/sha2");
+    const { bytesToHex, hexToBytes } = await import("@noble/hashes/utils");
+    const { bech32m } = await import("@scure/base");
+    const channel = "7c2e3f40-0000-4000-8000-0000000000bb";
+    const key = () => bytesToHex(schnorr.getPublicKey(schnorr.utils.randomPrivateKey()));
+    const [K0, K1, server, program, home] = [key(), key(), key(), key(), key()];
+    const address = (p) => bech32m.encode("tark", bech32m.toWords(new Uint8Array([0, ...hexToBytes(server), ...hexToBytes(p)])), 1023);
+    const now = Math.floor(Date.now() / 1000);
+    const counter = { assetId: `${"ab".repeat(32)}0000`, txid: "ba".repeat(32), gidx: 0 };
+    // The message the treasury's covenant rebuilds, worked out here byte for byte.
+    const le = (n, w) => Uint8Array.from({ length: w }, (_, i) => Number((BigInt(n) >> BigInt(8 * i)) & 0xffn));
+    const payment = { id: "11".repeat(32), kind: "withdrawal", withdrawal: { destination: `5120${program}`, amountSats: 5000 }, address: address(program), program,
+        amountSats: 5000, left: "1000000", validUntil: now + 3600, approvedBy: [K1], status: "approving", startedBy: K1, createdAt: now, updatedAt: now };
+    const message = sha256(new Uint8Array([...new TextEncoder().encode("hive/treasury/pay/v1"), ...hexToBytes(counter.txid), ...le(0, 2), ...le(1_000_000, 8),
+        ...le(5000, 8), ...le(payment.validUntil, 8), ...hexToBytes(program), 1]));
+    const approval = `I approve Hive payment ${Buffer.from(message).toString("base64url")}`;
+    const payments = { v: 5, counter, keepers: [K0, K1], treasuryScript: `5120${home}`, units: "1000000", waiting: [],
+        operator: { network: "regtest", server: `02${server}`, emulator: `03${key()}`, exitDelay: 512 },
+        payments: [{ ...payment, code: approval.slice(23) }, { ...payment, id: "22".repeat(32), left: "999999", program: home, code: "x".repeat(43) }] };
+    const file = join(work, `payments-${Math.random()}.json`);
+    writeFileSync(file, JSON.stringify(payments));
+    const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", address(home), "--operator", "http://127.0.0.1:9", "--payments", file]);
+    const { seen } = await activate(api, K0, null, ["--channel", channel, "--keepers", `${K0},${K1}`]);
+    assert.match(await seen.tools[0].call(), /Payment of 5,000 sats withdrawn to /);
+    const bar = seen.accessories.find((a) => a.id === "keeper");
+    const html = renderToString(React.createElement(bar.component, { channelId: channel }));
+    assert.match(html, /2 payments waiting for your approval/);
+    assert.ok(html.includes(approval), "the approval the keeper sends, as the covenant will rebuild it");
+    assert.match(html, /Don&#x27;t approve this payment: .*The desk would pay another script than the one checked here\./, "a payment whose script the plugin cannot rebuild is refused");
+    assert.equal(renderToString(React.createElement(bar.component, { channelId: "elsewhere" })), "", "only in the hive's channel");
+    // Another member sees nothing to approve.
+    const member = await activate(api, key(), null, ["--channel", channel, "--keepers", `${K0},${K1}`]);
+    await member.seen.tools[0].call();
+    assert.equal(renderToString(React.createElement(member.seen.accessories.find((a) => a.id === "keeper").component, { channelId: channel })), "");
+
+    // The approval as a message in the channel draws with the payment it names, and counts only from a keeper.
+    const card = seen.messages.find((m) => m.id === "payment");
+    const sent = { id: "33".repeat(32), channelId: channel, authorId: K1, createdAt: now, content: approval, mentions: [], reactions: [] };
+    assert.ok(card.matches(sent));
+    assert.ok(!card.matches({ ...sent, content: `${approval} ðŸ‘` }), "only the exact text");
+    const drawn = renderToString(React.createElement(card.component, { message: sent }));
+    assert.match(drawn, /Approved/);
+    assert.match(drawn, /1 of 2 keepers approved/);
+    assert.match(renderToString(React.createElement(card.component, { message: { ...sent, authorId: key() } })), /counts for nothing/);
+    seen.cleanups.forEach((stop) => stop());
+    member.seen.cleanups.forEach((stop) => stop());
 });

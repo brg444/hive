@@ -132,7 +132,7 @@ export function agentFromStatus(status) {
     return nodeId ? { nodeId, invite: token } : null;
 }
 
-export function hiveState({ name, chipIn, treasury, jobs, contributions, proposals = [], agent = null, governance = null, keepersDesk = null, now = Math.floor(Date.now() / 1000) }) {
+export function hiveState({ name, chipIn, treasury, jobs, contributions, proposals = [], agent = null, governance = null, payments = null, now = Math.floor(Date.now() / 1000) }) {
     return {
         v: 1,
         name,
@@ -143,8 +143,9 @@ export function hiveState({ name, chipIn, treasury, jobs, contributions, proposa
         treasury,
         // Keepers act on these: move exactly capSats to escrowAddress from a coin expiring after minCoinExpiry.
         funding: jobs.filter((j) => j.status === "awaiting_funding"),
-        // Where keepers sign: the hive's signing desk and the keeper console that talks to it.
-        keepersDesk,
+        // The payments waiting for the keepers, from the hive's approvals desk: each keeper's plugin
+        // checks one before it offers its approval, and the keepers approve in the channel.
+        payments,
         jobs,
         providers: providersFromJobs(jobs),
         payouts: jobs.filter((j) => j.status === "claimed").map((j) => ({ at: j.closedAt, jobId: j.jobId, providerPk: j.providerPk, sats: j.paidSats, txid: j.txid })),
@@ -153,7 +154,6 @@ export function hiveState({ name, chipIn, treasury, jobs, contributions, proposa
         // Proposals as the community decided them in the channel, with keepers and members' nodes; null until the bot coordinates.
         governance: governance ? {
             channelId: governance.channelId, keepers: governance.keepers, threshold: governance.threshold, smallSats: governance.smallSats,
-            ...(governance.keeperKeys ? { keeperKeys: governance.keeperKeys } : {}),
             ...(governance.discussionSeconds !== undefined ? { discussionSeconds: governance.discussionSeconds } : {}),
             updatedAt: governance.updatedAt, members: governance.members ?? {},
             // The agent's log is fresher than the bot's last pass, so usage comes from it when it has more.

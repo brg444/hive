@@ -14,9 +14,10 @@
  *   pnpm ops publish <hive> --relay <url> [--relay <url> …]
  *   pnpm ops hives --network <regtest|mutinynet> --relay <url> [--relay <url> …]
  *   pnpm ops host <hive> [<hive> …] [--port <n>]
- *   pnpm ops desk <hive> --agent-log <path> [--governance <file>] [--port <n>] [--host <addr>] [--origin <url> …]
- *   pnpm ops service --network <regtest|bitcoin> --public <https url> --console <https url> [--port <n>]
- *                    [--host <addr>] [--model <id>] [--discussion-minutes <n>] [--origin <url> …] [--agents]
+ *   pnpm ops desk <hive> --agent-log <path> --events <channel events file> [--governance <file>]
+ *                 [--payments-file <path>]
+ *   pnpm ops service --network <regtest|bitcoin> --public <https url> [--port <n>]
+ *                    [--host <addr>] [--model <id>] [--discussion-minutes <n>] [--agents]
  *   pnpm ops service-list --network <regtest|bitcoin>
  *   pnpm ops service-approve <hive> --bot <HiveBot's key, npub or hex> --network <regtest|bitcoin>
  *   pnpm ops service-reject <hive> --network <regtest|bitcoin>
@@ -34,10 +35,10 @@
  * on one machine they protect against a misbehaving coordinator, not against
  * this machine's operator. Mainnet has no pinned delegatee, so v4 refuses it.
  *
- * With `--keepers`, the hive's keepers hold their own keys: the three keys they
- * posted in the hive's channel build the treasury, this checkout keeps none of
- * them, and each keeper signs payments and the listing in the keeper console,
- * through the signing desk (`pnpm ops desk`).
+ * With `--keepers`, the hive's keepers hold their own keys: the treasury is the
+ * v5 one, built from the three keepers' Buzz keys (npub or hex), this checkout
+ * keeps none of them, and each keeper approves payments with a message in the
+ * hive's channel, which the approvals desk follows (`pnpm ops desk`).
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -141,7 +142,7 @@ import {
 } from "@hive/provider";
 import { approveRequest, approveWithdrawal, writeStewardConfig } from "@hive/steward";
 import { StewardClient, type StewardEndpoint } from "@hive/steward/client";
-import { counterOf, type Keeper } from "@hive/treasury";
+import { compressedOf, counterOf, isBuzzKey } from "@hive/treasury";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { type HiveRoutes, type HostedHive, startHiveHost, startHivePage } from "../app/server.js";
 import { handleStewardRequest } from "../packages/steward/src/service.js";
@@ -151,7 +152,7 @@ import {
   counterHome,
   fundWithCounter,
   issueCounter,
-  type PasskeyTreasury,
+  type KeeperTreasury,
   v5Account,
   v5Contract,
   v5Terms,
@@ -163,13 +164,13 @@ export interface HiveRecord {
   network: Deployment["network"];
   deployment: Deployment;
   stewardKeys: [string, string, string];
-  /** True when the keepers hold these keys themselves and sign in the keeper console; none is kept here. */
+  /** True when the keepers hold these keys themselves; none is kept here. */
   keepersHold?: boolean;
   /**
-   * A v5 treasury: its keepers approve each payment with their passkeys. `stewardKeys` are then the
-   * Bitcoin keys the keepers' passkeys derive, and `treasury` the exit pairs over them.
+   * A v5 treasury: its keepers approve each payment with a message in the hive's Buzz channel.
+   * `stewardKeys` are then their Buzz keys in compressed form, and `treasury` the exit pairs over them.
    */
-  passkeys?: PasskeyTreasury;
+  v5?: KeeperTreasury;
   treasury: TreasuryTerms;
   treasuryScript: string;
   treasuryAddress: string;
@@ -188,6 +189,24 @@ interface HiveSeed {
 }
 
 /** Three distinct compressed keys, as keepers post them: `Hive keeper key: 02…`. */
+/** Three keepers' Buzz keys, as npubs or x-only hex: the keys a v5 treasury is built from. */
+export async function parseBuzzKeys(value: string): Promise<[string, string, string]> {
+  const { nip19 } = await import("nostr-tools");
+  const keys = value.split(",").map((k) => {
+    const t = k.trim().toLowerCase();
+    if (!t.startsWith("npub")) return t;
+    const decoded = nip19.decode(t);
+    ensure(decoded.type === "npub", "INVALID", "a keeper is an npub or an x-only key in hex");
+    return decoded.data as string;
+  });
+  ensure(
+    keys.length === 3 && keys.every(isBuzzKey) && new Set(keys).size === 3,
+    "INVALID",
+    "--keepers takes three distinct Buzz keys, npub or hex, comma-separated, in the hive's order",
+  );
+  return keys as [string, string, string];
+}
+
 export function parseKeeperKeys(value: string): [string, string, string] {
   const keys = value.split(",").map((k) => k.trim().toLowerCase());
   ensure(
@@ -204,7 +223,7 @@ function stewardSecrets(hive: string, seed: HiveSeed): [string, string, string] 
   ensure(
     seed.stewards,
     "KEEPERS_SIGN",
-    `${hive}'s keepers hold its keys: they sign in the keeper console, through \`pnpm ops desk\``,
+    `${hive}'s keepers hold its keys and approve its payments themselves`,
   );
   return seed.stewards;
 }
@@ -261,10 +280,7 @@ export function loadHive(hive: string): HiveRecord {
 class KeeperHeld implements StewardEndpoint {
   constructor(readonly hive: string) {}
   private refuse(): never {
-    return fail(
-      "KEEPERS_SIGN",
-      `${this.hive}'s keepers sign in the keeper console, through \`pnpm ops desk\``,
-    );
+    return fail("KEEPERS_SIGN", `${this.hive}'s keepers hold its keys and approve its payments themselves`);
   }
   describe() {
     return this.refuse();
@@ -299,11 +315,7 @@ class InProcessSteward implements StewardEndpoint {
 
 /** The coordinator's handle on the treasury: the connection, the terms and three steward processes. */
 export async function treasuryOf(record: HiveRecord, ctx: OpsContext = {}): Promise<Treasury> {
-  ensure(
-    !record.passkeys,
-    "PASSKEY_TREASURY",
-    `${record.name}'s keepers approve each payment with their passkeys`,
-  );
+  ensure(!record.v5, "V5_TREASURY", `${record.name}'s keepers approve each payment in the hive's channel`);
   const conn = await connect(record.deployment, ctx.fetch);
   const account = await treasuryAccount(conn, record.treasury);
   ensure(
@@ -346,15 +358,16 @@ export async function initHive(
     renewalMaxFeeSats?: number;
     /** The keepers' own keys: the treasury is theirs, and no steward key is made or kept here. */
     keepers?: [string, string, string];
-    /** The keepers' passkeys, from their key lines: the hive gets a v5 treasury. */
-    passkeys?: [Keeper, Keeper, Keeper];
+    /** The keepers' Buzz keys, x-only hex: the hive gets a v5 treasury they approve from Buzz. */
+    buzzKeepers?: [string, string, string];
   },
   ctx: OpsContext = {},
 ): Promise<HiveRecord> {
   const paths = opsPaths(hive);
   const saved = readJsonIfPresent<HiveRecord>(paths.local("hive.json"));
   if (saved) return saved;
-  if (options.passkeys) return initPasskeyHive(hive, { ...options, passkeys: options.passkeys }, ctx);
+  if (options.buzzKeepers)
+    return initKeepersHive(hive, { ...options, buzzKeepers: options.buzzKeepers }, ctx);
   const deployment = options.deployment ?? deploymentFor(options.network);
   // Real funds are only ever the keepers' own: no steward key for mainnet is made or kept here.
   ensure(
@@ -437,12 +450,13 @@ export async function initHive(
 }
 
 /**
- * A hive whose keepers approve each payment with their passkeys: the v5 treasury. The host issues the
+ * A hive whose keepers approve each payment with a message in its Buzz channel, signed by their Buzz
+ * keys: the v5 treasury. The host issues the
  * hive's counter and sends the whole supply to the treasury, whose renewal watch is registered with
  * the delegatee and checked against our own derivation first. Idempotent: an interrupted creation
  * resumes from the counter it already issued.
  */
-async function initPasskeyHive(
+async function initKeepersHive(
   hive: string,
   options: {
     network: string;
@@ -450,11 +464,16 @@ async function initPasskeyHive(
     deployment?: Deployment;
     renewalWindowSeconds?: number;
     renewalMaxFeeSats?: number;
-    passkeys: [Keeper, Keeper, Keeper];
+    buzzKeepers: [string, string, string];
   },
   ctx: OpsContext,
 ): Promise<HiveRecord> {
   const paths = opsPaths(hive);
+  ensure(
+    options.buzzKeepers.length === 3 && options.buzzKeepers.every(isBuzzKey),
+    "INVALID",
+    "three keepers' Buzz keys, x-only hex",
+  );
   const deployment = options.deployment ?? deploymentFor(options.network);
   const conn = await connect(deployment, ctx.fetch);
   await checkEmulator(deployment, conn.keys.emulator);
@@ -474,7 +493,7 @@ async function initPasskeyHive(
       await issueCounter(deployment).then((c) => ({ assetId: c.assetId, supply: String(c.supply) })),
     );
   const base = {
-    keepers: options.passkeys,
+    keepers: options.buzzKeepers,
     counter: counterOf(issued.assetId),
     delegateKey: conn.keys.delegate,
     renewalWindowSeconds: options.renewalWindowSeconds ?? defaults.windowSeconds,
@@ -495,7 +514,7 @@ async function initPasskeyHive(
     "the SDK derives another treasury",
   );
   await counterHome(contract, terms.counter);
-  const stewardKeys = options.passkeys.map((k) => k.bitcoinKey) as [string, string, string];
+  const stewardKeys = options.buzzKeepers.map(compressedOf) as [string, string, string];
   writeAgentConfig(paths.secret("agent.json"), {
     schema: "hive-agent/v4",
     receiptSecret: seed.payer,
@@ -511,7 +530,7 @@ async function initPasskeyHive(
     deployment,
     stewardKeys,
     keepersHold: true,
-    passkeys: { version: 5, ...base, supply: issued.supply, fundedTxid: funded.txid },
+    v5: { version: 5, ...base, supply: issued.supply, fundedTxid: funded.txid },
     treasury: {
       pairs: pairKeys(stewardKeys),
       exitDelaySeconds: base.exitDelaySeconds,
@@ -654,7 +673,7 @@ export async function approvePurchase(
   const saved = paths.local("requests", `${label}.json`);
   if (stateExists(saved)) return readJson<ComputeQuoteRequest>(saved);
   const record = loadHive(hive);
-  ensure(!record.keepersHold, "KEEPERS_SIGN", `${hive}'s keepers approve each payment in the keeper console`);
+  ensure(!record.keepersHold, "KEEPERS_SIGN", `${hive}'s keepers approve each payment themselves`);
   const card = readJson<SignedProviderCard>(paths.local("providers", options.provider, "card.json"));
   ensure(Number.isSafeInteger(options.timeoutSeconds) && options.timeoutSeconds > 0, "INVALID", "timeout");
   const conn = await connect(record.deployment, ctx.fetch);
@@ -1004,7 +1023,7 @@ export interface PendingListing {
 
 /**
  * The listing a keepers' hive asks its keepers to sign: the same text a stewards' hive signs here,
- * left for each keeper to sign in the keeper console through the desk. A new one replaces any still
+ * left for each keeper to sign with their own key through the desk. A new one replaces any still
  * waiting.
  */
 export function proposeListing(
@@ -1329,7 +1348,7 @@ export async function withdrawTreasury(
   ensure(NAME.test(label), "INVALID", "label");
   const paths = opsPaths(hive);
   const record = loadHive(hive);
-  ensure(!record.keepersHold, "KEEPERS_SIGN", `${hive}'s keepers sign each payment in the keeper console`);
+  ensure(!record.keepersHold, "KEEPERS_SIGN", `${hive}'s keepers approve each payment themselves`);
   const treasury = await treasuryOf(record, ctx);
   const destination = destinationScript(treasury.conn, options.to);
   const pair = options.pair ?? "01";
@@ -1510,7 +1529,12 @@ async function main(argv: string[]): Promise<void> {
       const maxFee = option(rest, "renewal-max-fee");
       const record = await initHive(hive!, {
         network: required(rest, "network"),
-        ...(option(rest, "keepers") ? { keepers: parseKeeperKeys(option(rest, "keepers")!) } : {}),
+        // Keepers' Buzz keys build the v5 treasury; three compressed keys, a v4 treasury of earlier hives.
+        ...(option(rest, "keepers")
+          ? /(^|,)\s*0[23][0-9a-f]{64}/i.test(option(rest, "keepers")!)
+            ? { keepers: parseKeeperKeys(option(rest, "keepers")!) }
+            : { buzzKeepers: await parseBuzzKeys(option(rest, "keepers")!) }
+          : {}),
         ...(option(rest, "lnurl") ? { lnurl: option(rest, "lnurl")! } : {}),
         ...(option(rest, "per-request-max") ? { perRequestMaxSats: option(rest, "per-request-max")! } : {}),
         ...(hours ? { renewalWindowSeconds: Math.round(Number(hours) * 3600) } : {}),
@@ -1546,10 +1570,8 @@ async function main(argv: string[]): Promise<void> {
       const running = await startService({
         network: required(args, "network"),
         publicUrl: required(args, "public").replace(/\/+$/, ""),
-        consoleUrl: required(args, "console"),
         ...(option(args, "model") ? { model: option(args, "model")! } : {}),
         ...(minutes ? { discussionSeconds: Math.round(Number(minutes) * 60) } : {}),
-        origins: every(args, "origin"),
         ...(args.includes("--serve-invite") ? { serveInvite: true } : {}),
         ...(agents ? { agents } : {}),
         ...(port ? { port: Number(port) } : {}),
@@ -1565,7 +1587,6 @@ async function main(argv: string[]): Promise<void> {
       const service = await HiveService.create({
         network: required(args, "network"),
         publicUrl: "",
-        consoleUrl: "",
       });
       print(service.list());
       return;
@@ -1575,7 +1596,6 @@ async function main(argv: string[]): Promise<void> {
       const service = await HiveService.create({
         network: required(rest, "network"),
         publicUrl: "",
-        consoleUrl: "",
       });
       // HiveBot's key as the channel shows it, npub or hex: never copied from the request itself.
       const named = required(rest, "bot");
@@ -1593,7 +1613,6 @@ async function main(argv: string[]): Promise<void> {
       const service = await HiveService.create({
         network: required(rest, "network"),
         publicUrl: "",
-        consoleUrl: "",
       });
       service.reject(hive!);
       print({ rejected: hive });
@@ -1602,10 +1621,20 @@ async function main(argv: string[]): Promise<void> {
     case "desk": {
       const { startDesk } = await import("./desk.js");
       const { startApprovalDesk } = await import("./approvals-desk.js");
+      // A v5 treasury's keepers approve in the hive's channel, and its desk follows the channel.
+      if (loadHive(hive!).v5) {
+        const desk = await startApprovalDesk(hive!, {
+          agentLog: required(rest, "agent-log"),
+          events: required(rest, "events"),
+          ...(option(rest, "governance") ? { governance: option(rest, "governance")! } : {}),
+          ...(option(rest, "payments-file") ? { paymentsFile: option(rest, "payments-file")! } : {}),
+        });
+        print({ hive, keepers: desk.desk.keepers, following: option(rest, "events") });
+        await new Promise(() => {});
+        return;
+      }
       const port = option(rest, "port");
-      // A passkey treasury's keepers approve at the approvals desk, behind the same routes.
-      const start = loadHive(hive!).passkeys ? startApprovalDesk : startDesk;
-      const desk = await start(hive!, {
+      const desk = await startDesk(hive!, {
         agentLog: required(rest, "agent-log"),
         ...(option(rest, "governance") ? { governance: option(rest, "governance")! } : {}),
         ...(port ? { port: Number(port) } : {}),
@@ -1759,7 +1788,7 @@ async function main(argv: string[]): Promise<void> {
       const purpose = option(rest, "purpose");
       const text = { name: required(rest, "name"), ...(purpose ? { purpose } : {}) };
       if (loadHive(hive!).keepersHold) {
-        print({ pending: proposeListing(hive!, text), next: "each keeper signs it in the keeper console" });
+        print({ pending: proposeListing(hive!, text), next: "each keeper signs it with their own key" });
         return;
       }
       const listing = writeListing(hive!, text);

@@ -3,10 +3,10 @@
 A hive's treasury is one coin on the `HiveTreasury` script, and it holds the hive's counter asset:
 a fixed supply issued once, with no control asset, so nobody can issue more. Each payment spends
 that coin with `HiveTreasury.pay`, burns one unit of the counter and leaves the change on the same
-script. Two of the three keepers approve every payment, each with a P-256 key of their own: a
-passkey, whose approval is a WebAuthn assertion, or a raw P-256 key such as one in a Secure
-Enclave. The two approvals are independent signatures, so keepers approve from their own devices,
-at different times, in any order, with no rounds between them.
+script. Two of the three keepers approve every payment, each by sending a message in the hive's
+Buzz channel, signed by their Buzz identity's key as every message they send is. The two approvals
+are independent messages, so keepers approve from their own devices, at different times, in any
+order, with no rounds between them.
 
 An approval names the treasury by its counter, the number of units the treasury coin holds when it
 pays, the amount, the time it lapses and the recipient's Taproot program. It therefore pays once:
@@ -28,31 +28,40 @@ The message each keeper approves is the one `pay` rebuilds:
 sha256("hive/treasury/pay/v1" ‖ counterTxid ‖ counterGidx (2 bytes) ‖ left (8 bytes) ‖ amount (8 bytes) ‖ validUntil (8 bytes) ‖ to.program ‖ to.version (1 byte))
 ```
 
-A passkey signs `sha256(authData ‖ sha256(clientDataJSON))`, and `pay` rebuilds `clientDataJSON` as
-`{"type":"webauthn.get","challenge":"` followed by the message in base64url and the rest of the
-browser's JSON, which the keeper passes with the signature. A raw key signs `sha256(message)`.
+The keeper's approval is a Buzz channel message, a Nostr kind 9 event whose text is exactly
+`I approve Hive payment ` followed by the message in base64url, the payment's code. `pay` rebuilds
+the event's NIP-01 serialization from the keeper's key, the code and the two parts Buzz chooses
+itself, the event's `created_at` and its tags, which the keeper's approval carries with the
+signature:
+
+```
+id = sha256('[0,"' ‖ keeper's key in hex ‖ '",' ‖ created_at ‖ ',9,' ‖ tags as JSON ‖ ',"I approve Hive payment ' ‖ code ‖ '"]')
+```
+
+and checks the keeper's BIP340 signature over `id`. Only the text binds the approval. JSON writes a
+quote inside a string as `\"`, so in any event's serialization the last quote not preceded by a
+backslash, before the closing `"]`, is the one that opens its content: a message that says anything
+more, or carries the approval's words in a tag, has another id.
 
 ## Contracts
 
 ### HiveTreasury
 
 ```
-HiveTreasury(bytes keeperA, bytes keeperB, bytes keeperC, int kindA, int kindB, int kindC,
-             bytes32 siteA, bytes32 siteB, bytes32 siteC, bytes32 counterTxid, int counterGidx,
-             bytes delegateKey, int renewalWindow, int maxFee, pubkey pair01, pubkey pair02,
-             pubkey pair12, int exitDelay)
+HiveTreasury(bytes keeperA, bytes keeperB, bytes keeperC, bytes hexA, bytes hexB, bytes hexC,
+             bytes32 counterTxid, int counterGidx, bytes delegateKey, int renewalWindow,
+             int maxFee, pubkey pair01, pubkey pair02, pubkey pair12, int exitDelay)
 ```
 
 | Parameter | Bound as |
 | --- | --- |
-| `keeperA`, `keeperB`, `keeperC` | Each keeper's P-256 key, `0x11` and the compressed point, which `pay` checks with `checkSigFromStack`. |
-| `kindA`, `kindB`, `kindC` | 1 when that keeper's key is a passkey, 2 when it is a raw P-256 key. |
-| `siteA`, `siteB`, `siteC` | sha256 of the domain each keeper's passkey belongs to, the console's site where they made it: that keeper's assertion counts only for that site. |
+| `keeperA`, `keeperB`, `keeperC` | Each keeper's Buzz key, x-only, which `pay` checks with `checkSigFromStack`. |
+| `hexA`, `hexB`, `hexC` | The same keys as Buzz writes them in every event, 64 lowercase hex characters, for rebuilding the keeper's message. |
 | `counterTxid`, `counterGidx` | The counter asset, in the Emulator's byte order: the treasury's identity in every approval. |
 | `delegateKey` | The host's delegatee key as an intent names its cosigner: the only cosigner `renew` accepts. |
 | `renewalWindow` | How long before the coin's expiry `renew` opens. |
 | `maxFee` | The most a renewal pays the operator, in sats. |
-| `pair01`, `pair02`, `pair12` | One MuSig2 key per pair of keepers, over the Bitcoin keys their passkeys derive. |
+| `pair01`, `pair02`, `pair12` | One MuSig2 key per pair of keepers, over their Buzz keys. |
 | `exitDelay` | The relative delay before an exit leaf can spend. |
 
 `pay` and `merge` pay the change or the merged coin to this script, and the next `pay` spends that
@@ -64,7 +73,7 @@ A `require` checks the transaction. It does not identify who may move the coins.
 
 ### HiveTreasury
 
-**pay**(amount, to, validUntil, sigs, authData, clientTails) `covenant`
+**pay**(amount, to, validUntil, sigs, times, tags) `covenant`
 
 The payment runs in an offchain transaction. The server and the function-tweaked emulator cosign it,
 so anyone holding two keepers' approvals can submit it, and those approvals, checked with
@@ -75,9 +84,8 @@ so anyone holding two keepers' approvals can submit it, and those approvals, che
 - `tx.numInputs == 1` and `tx.numOutputs == 4`: the treasury coin; change, payment, the extension and the anchor.
 - `amount >= 330`.
 - `left = tx.inputs[0].assets.lookup(counterTxid, counterGidx)` and `left > 1`.
-- For each keeper with a signature: for a passkey, `authData` starts with that keeper's site hash, its flags have
-  the user present and verified bits, and the client data's tail starts with `"`; then
-  `checkSigFromStack` on that keeper's key over the WebAuthn digest, or over `sha256(message)` for a raw key.
+- For each keeper with a signature: `created_at` is at most ten characters, and `checkSigFromStack`
+  on that keeper's key over the id of their kind 9 message `I approve Hive payment <code>`.
 - At least two keepers' signatures verify.
 - `tx.outputs[0].script == tx.input.current.script`.
 - `tx.outputs[0].value >= tx.input.current.value - amount`.

@@ -5,13 +5,15 @@ it, and the small read-only service that reports the treasury. The plugin shows 
 no keys. It reads proposals, support and approvals straight from the hive's channel, so they work
 as soon as it is installed. Proposing,
 supporting and approving are ordinary Buzz messages and reactions, signed by whoever sends them.
-Members chip in from their own wallets, and keepers sign each payment in the keeper console.
+Members chip in from their own wallets, and keepers approve each payment with a message in the
+channel, which the plugin writes for them once it has checked the payment and which the treasury's
+covenant checks itself.
 
 - **Members** propose work from the hive's channel, see each proposal drawn as a card with its
   budget, period and live 👍 and ✅ counts, and find their own allowances on the hive's page.
 - **Keepers** approve with ✅ or decline with ❌ and a reply. They hear once when a proposal's
-  discussion closes without their decision, and once for each job waiting for funding, with the
-  exact amount, the escrow address and a link to sign it in the keeper console.
+  discussion closes without their decision, and once for each payment waiting for their approval,
+  which they approve or decline from the hive's channel.
 - **Agents** in the community get a `hive_status` tool that answers from the same data.
 
 ## On a Hive service
@@ -52,7 +54,7 @@ to `--members-file`, once a minute and whenever something new arrives.
 node api/src/server.mjs --name "Hive" --agent-log <pay-arkade buyer log> --operator https://arkade.computer \
   --channel <channel ID> --bot <HiveBot's public key> --governance <file> --members-file <file> \
   --model <model id> [--treasury <ark1... address>] [--discussion-minutes <n>] \
-  [--desk https://<host>/desk --console https://<host>/keeper/]
+  [--payments <the approvals desk's payments file>]
 ```
 
 `--bot` takes the keepers HiveBot recorded during setup, in the order it confirmed them, which is
@@ -63,10 +65,11 @@ reacted ✅ to that message; and the events of the bot, the keepers and everyone
 mentioned, answered or acknowledged keep their place in the host's store, while everyone else's
 share a smaller space of their own that a flood can fill without pushing the hive's events out.
 hive-api also turns away more than a client's share of requests. A new hive runs without
-`--treasury` until its keepers' keys are in and its treasury is built, and is restarted with it.
-`--discussion-minutes` gives every proposal one short discussion, for a test hive. `--desk` and
-`--console` put the signing desk and the keeper console in the state, so the plugin links keepers
-straight to the payments waiting for them.
+`--treasury` until its keepers are confirmed and its treasury is built from their Buzz keys, and is
+restarted with it. `--discussion-minutes` gives every proposal one short discussion, for a test
+hive. `--payments` names the file the hive's approvals desk writes its payments to (`pnpm ops desk
+<hive> --events <governance>.events.json --payments-file <file>`, which follows the keepers'
+approvals in the events hive-api keeps), so the plugin shows keepers what waits for them.
 
 The agent log also carries members' usage, which the state adds up per proposal without naming
 members. Given `--agent-console http://127.0.0.1:3131` (the agent node's console, on the same host),
@@ -117,10 +120,14 @@ the one network origin it asks for, and install.
 In the hive's channel it adds the proposal card, a status line above the composer (the treasury,
 open proposals with the next decision, jobs waiting for keepers) and a Propose button that opens a
 short form in its place; the form writes the proposal into the message box, and the member sends it.
+For a keeper, a line above the composer lists the payments waiting for their approval, each checked
+by the plugin, with Approve and Decline, and a Withdraw form; each writes the keeper's message into
+the message box for them to send, and each approval in the channel draws as a card naming its
+payment.
 Amounts read in the unit each member picks in the plugin's card in Buzz's Settings: Bitcoin's
 smallest unit written with the ₿ sign by default (₿1 is one sat), sats, BTC, or US dollars at the
 price the host passes on. Messages in the channel and the agents' tools keep sats; `shared/amounts.mjs`
-does the formatting for the plugin and the keeper console alike.
+does the formatting.
 It draws with Buzz's own design tokens, so it follows the app's light and dark themes, with Buzz's
 amber for the hive's mark and anything still waiting on the community. The
 hive's page has four tabs: an overview with the treasury, the viewer's allowances and live
@@ -175,52 +182,30 @@ the branch `plugin`, installs it, and Check for updates picks up each new build.
 Proposals then work for real in that channel; the treasury, jobs and payouts on the page are
 sample data, marked as such, with addresses that no wallet accepts.
 
-## The keeper console
+## Keepers' approvals
 
-`keeper/` is where keepers create their keeper passkey and approve the hive's payments. The
-passkey is the keeper's key: its own P-256 key approves payments, which the treasury's covenant
-checks itself, and through WebAuthn's PRF extension it gives the console a secret from which the
-keeper's Bitcoin key is derived for each sitting. Kept in a password manager that syncs, it is on
-the keeper's other devices too, and nothing secret is ever stored in the browser. The console gives
-the keeper the line to post in the hive's channel, `Hive keeper key: <Bitcoin key> <passkey key>
-<site>`, which ties the passkey to their Buzz identity.
+A keeper's key is their Buzz account's own: the treasury is built from the three keepers' Buzz keys,
+and a keeper approves a payment by sending `I approve Hive payment <code>` in the hive's channel,
+whose code names the treasury, the payment's number, amount and recipient and the time the approval
+lapses. Buzz signs it as it signs any message, and the treasury's covenant rebuilds the message and
+checks the signature itself. `I decline Hive payment <code>` stops a payment, and
+`Hive withdrawal: <amount> sats to <Arkade address>`, from a keeper, asks for one.
 
-To approve, a keeper opens the hive's desk in the console, on the Hive service or from
-`pnpm ops desk` on a host of its own, and unlocks it with their passkey for one sitting. For each job
-waiting, the console rebuilds the escrow from the job's terms with the hive's own code, checks that it
-gives back to this hive's treasury and that the amount fits what approved work has left, rebuilds the
-exact message the covenant checks (the payment's number, amount, recipient and lapse time) and asks
-the passkey to sign that. The page talks to the desk and the Arkade Operator only. It shows the key
-of the agent that signs a job's receipts, remembers it, and asks before approving a job that names
-another, and it never approves one job under two payment numbers while the first approval can still
-pay. What approved work has left is the desk's count: the console cannot check it against the
-channel, so a keeper looks at the proposal there.
+The plugin does the checking and the writing. For each payment the hive's approvals desk has waiting
+(on the Hive service, or from `pnpm ops desk` beside hive-api), it rebuilds the job's escrow from its
+terms with the hive's own code, checks that it gives back to this treasury and that the amount is
+the job's cap, or works out what a withdrawal's address pays, and rebuilds the exact message the
+covenant will check. Only then does it offer Approve, which writes that message into the message
+box for the keeper to send as it is. On mainnet it also holds the host to the Arkade Operator's and
+Emulator's keys it was built with. What approved work has left is the desk's count: the plugin
+cannot check it against the channel, so a keeper reads the proposal there before approving.
 
-Two keepers can also withdraw from the treasury to an Arkade address on the hive's Operator, to
-move a hive or wind it down. One enters the address and the amount and approves; another reads both
-in their own console, which works out what the address pays itself, and approves.
-
-```bash
-node keeper/build.mjs dist/keeper [--mainnet]   # index.html and console.js, the hive's checks bundled in
-node keeper/verify.mjs https://<console host> [--mainnet]   # is the host's console the one this checkout builds?
-node keeper/serve.mjs dist/keeper               # the console from your own machine, at http://localhost:8788
-```
-
-The build is the same byte for byte from the same commit, and the page names its script by hash,
-so a browser runs `console.js` only as that build made it. `verify.mjs` compares what a host serves
-with what the checkout builds. A keeper who wants no host between them and their key serves the
-console themselves with `serve.mjs` and makes their keeper passkey there: the treasury names each
-keeper's site, and the desk takes calls from a console on the keeper's own machine. Reads of a hive's
-payments at the desk carry the keeper's signature, so the desk shows them to keepers only.
-
-The repo's `Demo` workflow publishes it on GitHub Pages at `/keeper/`, for test networks; a hive's
-host serves the `--mainnet` build for real funds. A passkey belongs to one web address, so a
-passkey made on one console stays with it. `test/keeper.test.mjs` covers the line keepers post, and
-`node test/keeper-browser.mjs` runs the page in Chromium with a virtual passkey: creating the keeper
-passkey, keeping it across a reload and finding it again once the browser forgot it. The
-repository's `test/keeper-console-e2e.ts` has three keepers make their passkeys and two of them
-approve a payment and a withdrawal in their consoles on regtest, and `test/rehearsal-service.ts`
-runs two whole hives on a Hive service on regtest.
+`plugin/checks.mjs` is that code: `packages/ark` and `packages/treasury`, which `plugin/build.mjs`
+bundles into `plugin.js` with esbuild, so the build needs the repository's `pnpm install` and this
+folder's `npm ci`. It runs only when a keeper looks at a payment, and the build comes out the same
+byte for byte from the same commit. The repository's `test/buzz-approvals-e2e.ts` has two keepers
+fund a job and a withdrawal on regtest with this plugin's own checks and messages, and
+`test/rehearsal-service.ts` runs two whole hives on a Hive service on regtest.
 
 ## The hive's bot
 
@@ -266,11 +251,11 @@ With `--onboard`, the bot sets the hive up in its channel, and every answer is a
 
 1. It asks who will keep the treasury, and each keeper reacts ✅ (`--keepers-needed`, 3 by default).
 2. Once enough have, the member who authorized the bot confirms them with ✅.
-3. It posts the plugin, built for that channel and those keepers, as an attachment, and asks each
-   keeper to create a treasury key in the keeper console (`--console`) and post the line it gives
-   them, `Hive keeper key: <key>`, from their own Buzz identity.
-4. Once every keeper's key is in, it says so and what happens with the treasury, and posts the
-   chip-in address once hive-api has one.
+3. It posts the plugin, built for that channel and those keepers, as an attachment, and tells the
+   keepers that their Buzz accounts are their keys: each approves payments with a message in the
+   channel, and backs their Buzz key up in Settings → Identity.
+4. It says what happens with the treasury, which the host builds from the keepers' Buzz keys, and
+   posts the chip-in address once hive-api has one.
 5. It shows the proposal format, and closes the setup when the first proposal arrives.
 
 Nobody copies a key or a channel ID: the bot reads them from the signed reactions and from the
@@ -303,9 +288,11 @@ runs the state derivation against real agent logs (a regtest run and the Novembe
 then activates the built plugin in a stand-in for Buzz's API v1 host against a live hive-api:
 manifest rules, registration, the agent tool, rendering with real data, the proposal card, the
 Propose button and the status line, the viewer's allowances, the keepers' notifications, and the
-error state when the hive is unreachable. `test/governance.test.mjs` covers the proposal format and
+error state when the hive is unreachable, and a keeper's payments: the approval the plugin offers,
+worked out byte for byte as the covenant rebuilds it, a payment it refuses, and the approval card.
+`test/governance.test.mjs` covers the proposal format and
 the coordinator: support, approval after discussion, declines with reasons, withdrawals, removed
 reactions and the members file. Behind a proxy, set `NODE_USE_ENV_PROXY=1`.
-`node test/preview.mjs <out.html> [--buzz-app <block/buzz-app checkout>] [--dark]` renders the proposal card, the status line, the Propose form and the page with sample data, in Buzz's own design tokens when given its checkout, for screenshots.
+`node --import tsx hive/hive-buzz/test/preview.mjs <out.html> [--buzz-app <block/buzz-app checkout>] [--dark]`, from the repository's root, renders the proposal card, an approval, the payments waiting for a keeper, the status line, the Propose form and the page with sample data, in Buzz's own design tokens when given its checkout, for screenshots.
 
 Not yet exercised: the plugin inside the Buzz app itself, which only runs on desktop.
