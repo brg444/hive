@@ -29,6 +29,16 @@ test("first run stays quiet about the past and says nothing twice", () => {
     assert.equal(again.posts.length, 0);
 });
 
+test("on a hive with a desk, keepers are sent to the console to approve, not to send a payment", () => {
+    const now = 1794600000;
+    const line = { at: now, event: "funding_requested", request: { job_id: "j1", address: "ark1qescrow", cap_sats: 2000, deadline: now + 900, provider_pk: "ab".repeat(32), model: "example/model" } };
+    const s = { ...state(`${JSON.stringify(line)}\n`, { now }), keepersDesk: { desk: "https://hive.example.org/c/chan", console: "https://keeper.example.org/" } };
+    const p = plan(s, null, { now });
+    assert.match(p.posts[0].text, /^Keepers, a job is waiting for funding: 2,000 sats for example\/model with provider /);
+    assert.match(p.posts[0].text, /approve it with your passkey; once two of you have, the hive's desk pays the escrow\.$/);
+    assert.ok(!p.posts[0].text.includes("Send exactly"));
+});
+
 test("a funding request is announced to keepers at once, even on the first run, then the job's life", () => {
     const now = 1794600000;
     const lines = [

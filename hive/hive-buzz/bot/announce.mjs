@@ -35,9 +35,12 @@ function candidates(state) {
             const coins = j.minCoinExpiry
                 ? `If your wallet has not renewed its coins in the last few weeks, renew before paying: the escrow needs coins valid until at least ${utc(j.minCoinExpiry)}. `
                 : "";
-            out.push({ key: `funding:${j.jobId}`, actionable: true, text:
-                `Keepers, a job is waiting for funding. Send exactly ${sats(j.capSats)} to ${j.escrowAddress} in one payment before ${utc(j.deadline)}. ` + coins +
-                `It opens a job with provider ${provider(j)} for ${model(j.model)}.` });
+            // A hive with a desk funds the job itself once two keepers approve it in their consoles.
+            out.push({ key: `funding:${j.jobId}`, actionable: true, text: state.keepersDesk?.desk
+                ? `Keepers, a job is waiting for funding: ${sats(j.capSats)} for ${model(j.model)} with provider ${provider(j)}, before ${utc(j.deadline)}. ` +
+                  "Check it in the keeper console and approve it with your passkey; once two of you have, the hive's desk pays the escrow."
+                : `Keepers, a job is waiting for funding. Send exactly ${sats(j.capSats)} to ${j.escrowAddress} in one payment before ${utc(j.deadline)}. ` + coins +
+                  `It opens a job with provider ${provider(j)} for ${model(j.model)}.` });
         }
         if (["open", "closing", "claimed"].includes(j.status) && j.openedAt) {
             out.push({ key: `open:${j.jobId}`, text:
