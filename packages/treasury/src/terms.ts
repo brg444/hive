@@ -1,4 +1,4 @@
-import { exitDelayVar, intVar, pairKeys, sequence } from "@hive/ark";
+import { exitDelayVar, intVar, sequence } from "@hive/ark";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
 import treasuryJson from "../../../contracts/v5/treasury.json" with { type: "json" };
@@ -43,21 +43,16 @@ function checked(t: TreasuryTerms): TreasuryTerms {
 /** A keeper's Buzz key as Bitcoin's compressed form takes it: the even point BIP340 names. */
 export const compressedOf = (key: string): string => `02${key}`;
 
-/** The pairs' exit keys, 33 bytes as the contract's pubkey type takes them. */
-export function pairsOf(t: Pick<TreasuryTerms, "keepers">): Record<"01" | "02" | "12", string> {
-  const pairs = pairKeys(t.keepers.map(compressedOf) as [string, string, string]);
-  return { "01": `02${pairs["01"]}`, "02": `02${pairs["02"]}`, "12": `02${pairs["12"]}` };
-}
-
 /** The constructor arguments as Hive's `instantiate` and the delegatee take them: hex, by name. */
 export function treasuryArguments(terms: TreasuryTerms): Record<string, string> {
   const t = checked(terms);
-  const pairs = pairsOf(t);
   return {
     ...Object.fromEntries(
       LETTERS.flatMap((l, i) => [
         [`keeper${l}`, t.keepers[i]!],
         [`hex${l}`, hex.encode(utf8(t.keepers[i]!))],
+        // The exit leaves check the same key with OP_CHECKSIG, 33 bytes as the contract's pubkey takes it.
+        [`exit${l}`, compressedOf(t.keepers[i]!)],
       ]),
     ),
     counterTxid: t.counter.txid,
@@ -65,9 +60,6 @@ export function treasuryArguments(terms: TreasuryTerms): Record<string, string> 
     delegateKey: hex.encode(new TextEncoder().encode(t.delegateKey)),
     renewalWindow: intVar(t.renewalWindowSeconds),
     maxFee: intVar(t.maxFeeSats),
-    pair01: pairs["01"],
-    pair02: pairs["02"],
-    pair12: pairs["12"],
     exitDelay: exitDelayVar(t.exitDelaySeconds),
   };
 }
@@ -75,12 +67,13 @@ export function treasuryArguments(terms: TreasuryTerms): Record<string, string> 
 /** The same arguments as the SDK's contract API takes them. */
 export function sdkArguments(terms: TreasuryTerms): Record<string, Uint8Array | bigint> {
   const t = checked(terms);
-  const pairs = pairsOf(t);
   return {
     ...Object.fromEntries(
       LETTERS.flatMap((l, i) => [
         [`keeper${l}`, hex.decode(t.keepers[i]!)],
         [`hex${l}`, utf8(t.keepers[i]!)],
+        // The SDK takes a pubkey x-only, which a Buzz key already is.
+        [`exit${l}`, hex.decode(t.keepers[i]!)],
       ]),
     ),
     counterTxid: hex.decode(t.counter.txid),
@@ -88,10 +81,6 @@ export function sdkArguments(terms: TreasuryTerms): Record<string, Uint8Array | 
     delegateKey: new TextEncoder().encode(t.delegateKey),
     renewalWindow: BigInt(t.renewalWindowSeconds),
     maxFee: BigInt(t.maxFeeSats),
-    // The SDK takes a pubkey x-only.
-    pair01: hex.decode(pairs["01"]).subarray(1),
-    pair02: hex.decode(pairs["02"]).subarray(1),
-    pair12: hex.decode(pairs["12"]).subarray(1),
     exitDelay: BigInt(sequence(t.exitDelaySeconds)),
   };
 }

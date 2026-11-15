@@ -77,6 +77,6 @@ the providers it pays for that reason.
 ## What is not covered
 
 The escrow and treasury scripts have had no formal review. The exit path has no tooling: the exit
-leaves are MuSig2 keys over the keepers' Buzz keys, and nothing here signs with them yet. A keeper cannot be replaced without building a new treasury and withdrawing to it. The v5
+leaves check two keepers' signatures with their own Buzz keys, and nothing here signs one yet. A keeper cannot be replaced without building a new treasury and withdrawing to it. The v5
 treasury does not yet sign the hive's directory listing. The flow has run end to
 end on regtest and in pieces on mainnet, never whole on mainnet.

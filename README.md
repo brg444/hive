@@ -141,19 +141,18 @@ forms:
   approval's BIP340 signature.
 - `hexA`, `hexB` and `hexC` are the same keys as 64 lowercase hex characters, the bytes each one
   takes in the event serialization the covenant rebuilds.
-- `pair01`, `pair02` and `pair12` are one key per pair of keepers, for the exit path. Each keeper's
-  x-only key is lifted to the 33-byte compressed key of its even point, `02` followed by the key, as
-  BIP340 reads it; the pair's two keys are sorted, and BIP327 MuSig2 key aggregation turns them into
-  one key that owns the pair's exit leaf. The two keepers would sign with it together, each with
-  their own Buzz secret, though nothing in this repository signs an exit yet.
+- `exitA`, `exitB` and `exitC` are the same keys once more, as the 33-byte compressed key of their
+  even point, `02` followed by the key, which is how BIP340 reads an x-only key. The exit path has
+  one leaf per pair of keepers that checks two plain signatures, one from each keeper's Buzz key, so
+  each keeper signs an exit alone, as they approve a payment, with no signing rounds between them.
+  Nothing in this repository signs an exit yet.
 
 Together with the hive's counter, the host's delegate key, the renewal and fee limits, and the
 Arkade Operator's and Emulator's keys and exit delay, these terms fix the treasury's script and
 therefore its address, so anyone holding the three public keys rebuilds the same treasury:
 `pnpm ops init --keepers` does exactly that from three npubs
-([`packages/treasury/src/terms.ts`](packages/treasury/src/terms.ts),
-[`packages/ark/src/musig.ts`](packages/ark/src/musig.ts)). A keeper's Hive plugin, for its part,
-refuses a payment from a host that names other keepers than the channel confirmed.
+([`packages/treasury/src/terms.ts`](packages/treasury/src/terms.ts)). A keeper's Hive plugin, for
+its part, refuses a payment from a host that names other keepers than the channel confirmed.
 
 The Buzz identity and the keeper's share of the treasury are therefore one and the same. A keeper
 who moves to a new Buzz identity is no longer a keeper of this treasury, whoever imports their

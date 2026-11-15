@@ -50,7 +50,7 @@ more, or carries the approval's words in a tag, has another id.
 ```
 HiveTreasury(bytes keeperA, bytes keeperB, bytes keeperC, bytes hexA, bytes hexB, bytes hexC,
              bytes32 counterTxid, int counterGidx, bytes delegateKey, int renewalWindow,
-             int maxFee, pubkey pair01, pubkey pair02, pubkey pair12, int exitDelay)
+             int maxFee, pubkey exitA, pubkey exitB, pubkey exitC, int exitDelay)
 ```
 
 | Parameter | Bound as |
@@ -61,7 +61,7 @@ HiveTreasury(bytes keeperA, bytes keeperB, bytes keeperC, bytes hexA, bytes hexB
 | `delegateKey` | The host's delegatee key as an intent names its cosigner: the only cosigner `renew` accepts. |
 | `renewalWindow` | How long before the coin's expiry `renew` opens. |
 | `maxFee` | The most a renewal pays the operator, in sats. |
-| `pair01`, `pair02`, `pair12` | One MuSig2 key per pair of keepers: BIP327 key aggregation over the pair's two Buzz keys, each lifted to its even point (`02` and the x-only key) and sorted. |
+| `exitA`, `exitB`, `exitC` | Each keeper's Buzz key once more, as the exit leaves check it with `OP_CHECKSIG`: 33 bytes, `02` and the x-only key, which the leaf pushes x-only. |
 | `exitDelay` | The relative delay before an exit leaf can spend. |
 
 `pay` and `merge` pay the change or the merged coin to this script, and the next `pay` spends that
@@ -120,11 +120,13 @@ function-tweaked emulator cosign the proof, and the delegatee is the only cosign
 - `this.tunnel(k, {script: true, value: false, assets: true})` for proof output `k`, one before this input.
 - `tx.outputs[k].value + maxFee >= tx.input.current.value`.
 
-**exit01**(pairSig) `tapscript`
+**exit01**(sigA, sigB) `tapscript`
 
-The exit runs onchain after the treasury coin's branch is published. Keepers 0 and 1 sign with
-their pair's MuSig2 key, `pair01`, after `older(exitDelay)`. `exit02` and `exit12` are the same leaf
-for the other two pairs.
+The exit runs onchain after the treasury coin's branch is published. After `older(exitDelay)`,
+keepers 0 and 1 each sign the spend with their own Buzz key, and the leaf checks both signatures
+(`<exitA> OP_CHECKSIGVERIFY <exitB> OP_CHECKSIG`). `exit02` and `exit12` are the same leaf for the
+other two pairs. The two signatures are independent: each keeper signs the transaction alone, at
+any time, with no rounds between them, as they approve payments.
 
 Enforced: two keepers approve each payment, its amount, its recipient, its number and its lapse
 time; an approval pays once, and only before it lapses; the change and the counter stay on the treasury script; a merge keeps every sat and the
@@ -266,8 +268,8 @@ flowchart LR
 ### Exit
 
 With the operator gone, the keepers publish the path from the batch output to the treasury coin, and
-after `exitDelay` one pair spends it onchain with its MuSig2 key. No covenant runs, and the leaf does
-not constrain the outputs.
+after `exitDelay` two keepers spend it onchain, each with a signature from their own Buzz key. No
+covenant runs, and the leaf does not constrain the outputs.
 
 ```mermaid
 flowchart LR

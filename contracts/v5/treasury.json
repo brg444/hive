@@ -47,15 +47,15 @@
       "type": "int"
     },
     {
-      "name": "pair01",
+      "name": "exitA",
       "type": "pubkey"
     },
     {
-      "name": "pair02",
+      "name": "exitB",
       "type": "pubkey"
     },
     {
-      "name": "pair12",
+      "name": "exitC",
       "type": "pubkey"
     },
     {
@@ -1445,7 +1445,12 @@
           "name": "exit01",
           "witness": [
             {
-              "name": "pairSig",
+              "name": "sigA",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "sigB",
               "type": "signature",
               "encoding": "schnorr-64"
             }
@@ -1454,7 +1459,9 @@
             "<exitDelay>",
             "OP_CHECKSEQUENCEVERIFY",
             "OP_DROP",
-            "<pair01>",
+            "<exitA>",
+            "OP_CHECKSIGVERIFY",
+            "<exitB>",
             "OP_CHECKSIG"
           ]
         }
@@ -1467,7 +1474,12 @@
           "name": "exit02",
           "witness": [
             {
-              "name": "pairSig",
+              "name": "sigA",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "sigC",
               "type": "signature",
               "encoding": "schnorr-64"
             }
@@ -1476,7 +1488,9 @@
             "<exitDelay>",
             "OP_CHECKSEQUENCEVERIFY",
             "OP_DROP",
-            "<pair02>",
+            "<exitA>",
+            "OP_CHECKSIGVERIFY",
+            "<exitC>",
             "OP_CHECKSIG"
           ]
         }
@@ -1489,7 +1503,12 @@
           "name": "exit12",
           "witness": [
             {
-              "name": "pairSig",
+              "name": "sigB",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "sigC",
               "type": "signature",
               "encoding": "schnorr-64"
             }
@@ -1498,7 +1517,9 @@
             "<exitDelay>",
             "OP_CHECKSEQUENCEVERIFY",
             "OP_DROP",
-            "<pair12>",
+            "<exitB>",
+            "OP_CHECKSIGVERIFY",
+            "<exitC>",
             "OP_CHECKSIG"
           ]
         }
@@ -1508,7 +1529,7 @@
   "source": {
     "entry": "treasury.ark",
     "files": {
-      "treasury.ark": "pragma arkade ^0.1.0;\n\n// A Buzz community's treasury, kept by three keepers: any two of them approve each payment, each by\n// sending a message in the hive's channel. A keeper's approval is an ordinary Buzz message, signed by\n// their Buzz identity's key like every message they send: a kind 9 event whose text is exactly\n// \"I approve Hive payment \" and the payment's code. The covenant rebuilds the event from the keeper's\n// key, the payment's code and the two parts of the event Buzz chooses itself, its created_at and its\n// tags, and checks the keeper's signature over its id. The two approvals are independent messages,\n// sent from any device at any time, in any order.\n//\n// Only the text binds the approval: JSON writes a quote inside a string as \\\", so the last unescaped\n// quote before the end of an event's serialization opens its content, and an event whose text says\n// anything more, or anything else, has another id.\n//\n// The payment number is a counter asset: a fixed supply issued once and held only by the treasury\n// coin, one unit burned by each payment. An approval names the treasury (the counter's asset id),\n// the number of units left, the amount, the recipient and the time it lapses, so it pays once and\n// only before then, and a merge or a renewal, which keep the units, leaves every pending approval\n// valid.\n//\n// Payments and merges run offchain only. Renewal runs in an intent that only the host's delegatee\n// may cosign, as in the v4 treasury: whoever cosigns a batch holds its new coins together with the\n// Arkade Operator. The exits are v4's: one MuSig2 key per pair of keepers, over their Buzz keys, after\n// the exit delay.\ncontract HiveTreasury(\n  bytes keeperA,        // each keeper's Buzz key: the x-only key their Buzz identity signs with\n  bytes keeperB,\n  bytes keeperC,\n  bytes hexA,           // the same key as Buzz writes it in every event: 64 lowercase hex characters\n  bytes hexB,\n  bytes hexC,\n  bytes32 counterTxid,  // the counter asset: its issuance transaction, in internal byte order\n  int counterGidx,      // and its group in that transaction\n  bytes delegateKey,    // the host's delegatee, as an intent names its cosigner: 66 hex characters\n  int renewalWindow,    // how long before its expiry, in seconds, the coin may be renewed\n  int maxFee,           // the most a renewal may pay the operator, in sats\n  pubkey pair01,        // the pairs' MuSig2 keys over the keepers' Buzz keys\n  pubkey pair02,\n  pubkey pair12,\n  int exitDelay\n) {\n  const bytes ALPHABET = \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_\";\n  const bytes APPROVE = \"I approve Hive payment \";\n\n  static function byteAt(bytes data, int i) int {\n    return bin2num(substr(data, i, 1) + 0x00);\n  }\n\n  static function char(int v) bytes {\n    return substr(ALPHABET, v, 1);\n  }\n\n  // base64url without padding: the payment's code, 43 characters for 32 bytes.\n  static function b64url(bytes32 m) bytes {\n    bytes out = \"\";\n    for (g, start) in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27] {\n      int v = byteAt(m, start) * 65536 + byteAt(m, start + 1) * 256 + byteAt(m, start + 2);\n      out = out + char(v / 262144) + char(v / 4096 % 64) + char(v / 64 % 64) + char(v % 64);\n    }\n    int t = byteAt(m, 30) * 1024 + byteAt(m, 31) * 4;\n    out = out + char(t / 4096) + char(t / 64 % 64) + char(t % 64);\n    return out;\n  }\n\n  // Two keepers approve this: the treasury, the payment's number, its amount and recipient, and the\n  // time the approval lapses. Each passes their message's signature, created_at (as its digits) and\n  // tags (as JSON); a keeper who did not approve passes an empty signature.\n  @allow(unsigned-spend-path, \"two keepers' Buzz messages sign the treasury, payment number, amount, recipient and lapse time\")\n  function pay(int amount, ScriptPubKey to, int validUntil, bytes[3] sigs, bytes[3] times, bytes[3] tags) {\n    require(!tx.intent.has(\"type\"), \"offchain\");\n    require(!checkTime(validUntil), \"approval lapsed\");\n    require(tx.numInputs == 1, \"one coin\");\n    // Change and payment, then the packets and the anchor every Arkade transaction carries.\n    require(tx.numOutputs == 4, \"payment and change\");\n    require(amount >= 330, \"dust\");\n    int left = tx.inputs[0].assets.lookup(counterTxid, counterGidx);\n    require(left > 1, \"counter\");\n    bytes32 message = sha256(\"hive/treasury/pay/v1\" + counterTxid + num2bin(counterGidx, 2) + num2bin(left, 8) + num2bin(amount, 8) + num2bin(validUntil, 8) + to.program + num2bin(to.version, 1));\n    bytes code = b64url(message);\n    bytes[3] keys = [keeperA, keeperB, keeperC];\n    bytes[3] names = [hexA, hexB, hexC];\n    int valid = 0;\n    for (i, sig) in sigs {\n      if (size(sig) > 0) {\n        require(size(times[i]) <= 10, \"created_at\");\n        // NIP-01: the event's id is sha256 of [0, pubkey, created_at, kind, tags, content].\n        bytes32 id = sha256(\"[0,\\\"\" + names[i] + \"\\\",\" + times[i] + \",9,\" + tags[i] + \",\\\"\" + APPROVE + code + \"\\\"]\");\n        signature keeperSig = signature(sig);\n        require(checkSigFromStack(keeperSig, keys[i], id), \"keeper's message\");\n        valid = valid + 1;\n      }\n    }\n    require(valid >= 2, \"two keepers\");\n    let me = tx.input.current.script;\n    require(tx.outputs[0].script == me, \"change stays\");\n    require(tx.outputs[0].value >= tx.input.current.value - amount, \"change\");\n    require(tx.outputs[0].assets.lookup(counterTxid, counterGidx) == left - 1, \"one unit burned\");\n    require(tx.outputs[1].script == to, \"recipient\");\n    require(tx.outputs[1].value == amount, \"amount\");\n    require(!tx.outputs[1].assets.has(counterTxid, counterGidx), \"counter stays home\");\n  }\n\n  // Anyone folds a chip-in or a returned escrow (input 1) into the treasury coin (input 0).\n  @allow(unsigned-spend-path, \"value only grows and the counter stays on this script\")\n  function merge() {\n    require(!tx.intent.has(\"type\"), \"offchain\");\n    require(tx.numInputs == 2, \"two coins\");\n    let me = tx.input.current.script;\n    require(tx.inputs[0].script == me, \"treasury coin\");\n    require(tx.inputs[1].script == me, \"chip-in\");\n    require(tx.numOutputs == 3, \"one coin, packets and anchor\");\n    require(tx.outputs[0].script == me, \"stays\");\n    require(tx.outputs[0].value >= tx.inputs[0].value + tx.inputs[1].value, \"all of it\");\n    int units = tx.inputs[0].assets.lookup(counterTxid, counterGidx);\n    require(tx.outputs[0].assets.lookup(counterTxid, counterGidx) == units, \"counter kept\");\n  }\n\n  // The host's delegatee renews the treasury into a new batch near its expiry, and the treasury\n  // pays the operator's fee, up to maxFee. Proof input k+1 continues as proof output k.\n  @allow(unsigned-spend-path, \"the delegatee cosigns; the coin continues on this script, its counter intact, paying at most maxFee\")\n  function renew() {\n    require(checkTime(this.expiry - renewalWindow), \"not yet\");\n    require(tx.intent.field(\"type\") == \"register\", \"a registration\");\n    require(tx.intent.field(\"onchain_output_indexes\") == \"[]\", \"stays offchain\");\n    require(tx.intent.field(\"cosigners_public_keys.0\") == delegateKey, \"the delegatee cosigns\");\n    require(!tx.intent.has(\"cosigners_public_keys.1\"), \"only the delegatee\");\n    int k = this.activeInputIndex - 1;\n    require(this.tunnel(k, {script: true, value: false, assets: true}), \"continues\");\n    require(tx.outputs[k].value + maxFee >= tx.input.current.value, \"fee\");\n  }\n\n  // When the operator is gone: any two keepers, after the exit delay.\n  function exit01(signature pairSig) tapscript {\n    require(older(exitDelay));\n    require(checkSig(pairSig, pair01));\n  }\n\n  function exit02(signature pairSig) tapscript {\n    require(older(exitDelay));\n    require(checkSig(pairSig, pair02));\n  }\n\n  function exit12(signature pairSig) tapscript {\n    require(older(exitDelay));\n    require(checkSig(pairSig, pair12));\n  }\n}\n"
+      "treasury.ark": "pragma arkade ^0.1.0;\n\n// A Buzz community's treasury, kept by three keepers: any two of them approve each payment, each by\n// sending a message in the hive's channel. A keeper's approval is an ordinary Buzz message, signed by\n// their Buzz identity's key like every message they send: a kind 9 event whose text is exactly\n// \"I approve Hive payment \" and the payment's code. The covenant rebuilds the event from the keeper's\n// key, the payment's code and the two parts of the event Buzz chooses itself, its created_at and its\n// tags, and checks the keeper's signature over its id. The two approvals are independent messages,\n// sent from any device at any time, in any order.\n//\n// Only the text binds the approval: JSON writes a quote inside a string as \\\", so the last unescaped\n// quote before the end of an event's serialization opens its content, and an event whose text says\n// anything more, or anything else, has another id.\n//\n// The payment number is a counter asset: a fixed supply issued once and held only by the treasury\n// coin, one unit burned by each payment. An approval names the treasury (the counter's asset id),\n// the number of units left, the amount, the recipient and the time it lapses, so it pays once and\n// only before then, and a merge or a renewal, which keep the units, leaves every pending approval\n// valid.\n//\n// Payments and merges run offchain only. Renewal runs in an intent that only the host's delegatee\n// may cosign, as in the v4 treasury: whoever cosigns a batch holds its new coins together with the\n// Arkade Operator. When the operator is gone, any two keepers take the coin onchain after the exit\n// delay, each signing with their own Buzz key: one leaf per pair, two plain signatures, so neither\n// keeper waits on the other and no signing rounds pass between them.\ncontract HiveTreasury(\n  bytes keeperA,        // each keeper's Buzz key: the x-only key their Buzz identity signs with\n  bytes keeperB,\n  bytes keeperC,\n  bytes hexA,           // the same key as Buzz writes it in every event: 64 lowercase hex characters\n  bytes hexB,\n  bytes hexC,\n  bytes32 counterTxid,  // the counter asset: its issuance transaction, in internal byte order\n  int counterGidx,      // and its group in that transaction\n  bytes delegateKey,    // the host's delegatee, as an intent names its cosigner: 66 hex characters\n  int renewalWindow,    // how long before its expiry, in seconds, the coin may be renewed\n  int maxFee,           // the most a renewal may pay the operator, in sats\n  pubkey exitA,         // each keeper's Buzz key again, as the exit leaves check it\n  pubkey exitB,\n  pubkey exitC,\n  int exitDelay\n) {\n  const bytes ALPHABET = \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_\";\n  const bytes APPROVE = \"I approve Hive payment \";\n\n  static function byteAt(bytes data, int i) int {\n    return bin2num(substr(data, i, 1) + 0x00);\n  }\n\n  static function char(int v) bytes {\n    return substr(ALPHABET, v, 1);\n  }\n\n  // base64url without padding: the payment's code, 43 characters for 32 bytes.\n  static function b64url(bytes32 m) bytes {\n    bytes out = \"\";\n    for (g, start) in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27] {\n      int v = byteAt(m, start) * 65536 + byteAt(m, start + 1) * 256 + byteAt(m, start + 2);\n      out = out + char(v / 262144) + char(v / 4096 % 64) + char(v / 64 % 64) + char(v % 64);\n    }\n    int t = byteAt(m, 30) * 1024 + byteAt(m, 31) * 4;\n    out = out + char(t / 4096) + char(t / 64 % 64) + char(t % 64);\n    return out;\n  }\n\n  // Two keepers approve this: the treasury, the payment's number, its amount and recipient, and the\n  // time the approval lapses. Each passes their message's signature, created_at (as its digits) and\n  // tags (as JSON); a keeper who did not approve passes an empty signature.\n  @allow(unsigned-spend-path, \"two keepers' Buzz messages sign the treasury, payment number, amount, recipient and lapse time\")\n  function pay(int amount, ScriptPubKey to, int validUntil, bytes[3] sigs, bytes[3] times, bytes[3] tags) {\n    require(!tx.intent.has(\"type\"), \"offchain\");\n    require(!checkTime(validUntil), \"approval lapsed\");\n    require(tx.numInputs == 1, \"one coin\");\n    // Change and payment, then the packets and the anchor every Arkade transaction carries.\n    require(tx.numOutputs == 4, \"payment and change\");\n    require(amount >= 330, \"dust\");\n    int left = tx.inputs[0].assets.lookup(counterTxid, counterGidx);\n    require(left > 1, \"counter\");\n    bytes32 message = sha256(\"hive/treasury/pay/v1\" + counterTxid + num2bin(counterGidx, 2) + num2bin(left, 8) + num2bin(amount, 8) + num2bin(validUntil, 8) + to.program + num2bin(to.version, 1));\n    bytes code = b64url(message);\n    bytes[3] keys = [keeperA, keeperB, keeperC];\n    bytes[3] names = [hexA, hexB, hexC];\n    int valid = 0;\n    for (i, sig) in sigs {\n      if (size(sig) > 0) {\n        require(size(times[i]) <= 10, \"created_at\");\n        // NIP-01: the event's id is sha256 of [0, pubkey, created_at, kind, tags, content].\n        bytes32 id = sha256(\"[0,\\\"\" + names[i] + \"\\\",\" + times[i] + \",9,\" + tags[i] + \",\\\"\" + APPROVE + code + \"\\\"]\");\n        signature keeperSig = signature(sig);\n        require(checkSigFromStack(keeperSig, keys[i], id), \"keeper's message\");\n        valid = valid + 1;\n      }\n    }\n    require(valid >= 2, \"two keepers\");\n    let me = tx.input.current.script;\n    require(tx.outputs[0].script == me, \"change stays\");\n    require(tx.outputs[0].value >= tx.input.current.value - amount, \"change\");\n    require(tx.outputs[0].assets.lookup(counterTxid, counterGidx) == left - 1, \"one unit burned\");\n    require(tx.outputs[1].script == to, \"recipient\");\n    require(tx.outputs[1].value == amount, \"amount\");\n    require(!tx.outputs[1].assets.has(counterTxid, counterGidx), \"counter stays home\");\n  }\n\n  // Anyone folds a chip-in or a returned escrow (input 1) into the treasury coin (input 0).\n  @allow(unsigned-spend-path, \"value only grows and the counter stays on this script\")\n  function merge() {\n    require(!tx.intent.has(\"type\"), \"offchain\");\n    require(tx.numInputs == 2, \"two coins\");\n    let me = tx.input.current.script;\n    require(tx.inputs[0].script == me, \"treasury coin\");\n    require(tx.inputs[1].script == me, \"chip-in\");\n    require(tx.numOutputs == 3, \"one coin, packets and anchor\");\n    require(tx.outputs[0].script == me, \"stays\");\n    require(tx.outputs[0].value >= tx.inputs[0].value + tx.inputs[1].value, \"all of it\");\n    int units = tx.inputs[0].assets.lookup(counterTxid, counterGidx);\n    require(tx.outputs[0].assets.lookup(counterTxid, counterGidx) == units, \"counter kept\");\n  }\n\n  // The host's delegatee renews the treasury into a new batch near its expiry, and the treasury\n  // pays the operator's fee, up to maxFee. Proof input k+1 continues as proof output k.\n  @allow(unsigned-spend-path, \"the delegatee cosigns; the coin continues on this script, its counter intact, paying at most maxFee\")\n  function renew() {\n    require(checkTime(this.expiry - renewalWindow), \"not yet\");\n    require(tx.intent.field(\"type\") == \"register\", \"a registration\");\n    require(tx.intent.field(\"onchain_output_indexes\") == \"[]\", \"stays offchain\");\n    require(tx.intent.field(\"cosigners_public_keys.0\") == delegateKey, \"the delegatee cosigns\");\n    require(!tx.intent.has(\"cosigners_public_keys.1\"), \"only the delegatee\");\n    int k = this.activeInputIndex - 1;\n    require(this.tunnel(k, {script: true, value: false, assets: true}), \"continues\");\n    require(tx.outputs[k].value + maxFee >= tx.input.current.value, \"fee\");\n  }\n\n  // When the operator is gone: any two keepers, after the exit delay.\n  function exit01(signature sigA, signature sigB) tapscript {\n    require(older(exitDelay));\n    require(checkMultisig([exitA, exitB], [sigA, sigB]));\n  }\n\n  function exit02(signature sigA, signature sigC) tapscript {\n    require(older(exitDelay));\n    require(checkMultisig([exitA, exitC], [sigA, sigC]));\n  }\n\n  function exit12(signature sigB, signature sigC) tapscript {\n    require(older(exitDelay));\n    require(checkMultisig([exitB, exitC], [sigB, sigC]));\n  }\n}\n"
     }
   },
   "compiler": {
@@ -1518,6 +1539,6 @@
       "optimize": true
     }
   },
-  "updatedAt": "2026-11-15T09:14:47.795815435+00:00",
-  "fingerprint": "sha256:4232ec0012f8f1599d86cb0c2fc7c7f6f3dc57aad2385ac22fec1c9951c840f5"
+  "updatedAt": "2026-11-15T13:19:40.782038474+00:00",
+  "fingerprint": "sha256:8e95f4e9898b2c5196af2062da4d92ff9f8d94bed0bea06f273a1f1a09f54317"
 }

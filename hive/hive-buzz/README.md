@@ -196,10 +196,10 @@ random for their identity, or the `nsec` they imported, kept in the system's sec
 x-only public key is the `pubkey` of every event they sign and the `npub` Buzz shows. HiveBot reads
 the three keys from the keepers' signed ✅ reactions and names them, in the order the founder
 confirmed them, in the `p` tags of its "Keepers are set" message, and the host builds the treasury
-from them: the keys themselves for the approvals, and a BIP327 MuSig2 key per pair of keepers for
-the exit. [The repository's README](../../README.md#from-a-buzz-identity-to-the-treasury) goes
-through each step. A keeper keeps a copy of their private key, from Settings → Identity or Buzz's
-key backup, because no other copy of their share exists.
+from them: the same keys check the approvals and, for the exit, two keepers' plain signatures.
+[The repository's README](../../README.md#from-a-buzz-identity-to-the-treasury) goes through each
+step. A keeper keeps a copy of their private key, from Settings → Identity or Buzz's key backup,
+because no other copy of their share exists.
 
 The plugin does the checking and the writing. For each payment the hive's approvals desk has waiting
 (on the Hive service, or from `pnpm ops desk` beside hive-api), it rebuilds the job's escrow from its

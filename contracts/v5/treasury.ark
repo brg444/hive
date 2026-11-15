@@ -20,8 +20,9 @@ pragma arkade ^0.1.0;
 //
 // Payments and merges run offchain only. Renewal runs in an intent that only the host's delegatee
 // may cosign, as in the v4 treasury: whoever cosigns a batch holds its new coins together with the
-// Arkade Operator. The exits are v4's: one MuSig2 key per pair of keepers, over their Buzz keys, after
-// the exit delay.
+// Arkade Operator. When the operator is gone, any two keepers take the coin onchain after the exit
+// delay, each signing with their own Buzz key: one leaf per pair, two plain signatures, so neither
+// keeper waits on the other and no signing rounds pass between them.
 contract HiveTreasury(
   bytes keeperA,        // each keeper's Buzz key: the x-only key their Buzz identity signs with
   bytes keeperB,
@@ -34,9 +35,9 @@ contract HiveTreasury(
   bytes delegateKey,    // the host's delegatee, as an intent names its cosigner: 66 hex characters
   int renewalWindow,    // how long before its expiry, in seconds, the coin may be renewed
   int maxFee,           // the most a renewal may pay the operator, in sats
-  pubkey pair01,        // the pairs' MuSig2 keys over the keepers' Buzz keys
-  pubkey pair02,
-  pubkey pair12,
+  pubkey exitA,         // each keeper's Buzz key again, as the exit leaves check it
+  pubkey exitB,
+  pubkey exitC,
   int exitDelay
 ) {
   const bytes ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -130,18 +131,18 @@ contract HiveTreasury(
   }
 
   // When the operator is gone: any two keepers, after the exit delay.
-  function exit01(signature pairSig) tapscript {
+  function exit01(signature sigA, signature sigB) tapscript {
     require(older(exitDelay));
-    require(checkSig(pairSig, pair01));
+    require(checkMultisig([exitA, exitB], [sigA, sigB]));
   }
 
-  function exit02(signature pairSig) tapscript {
+  function exit02(signature sigA, signature sigC) tapscript {
     require(older(exitDelay));
-    require(checkSig(pairSig, pair02));
+    require(checkMultisig([exitA, exitC], [sigA, sigC]));
   }
 
-  function exit12(signature pairSig) tapscript {
+  function exit12(signature sigB, signature sigC) tapscript {
     require(older(exitDelay));
-    require(checkSig(pairSig, pair12));
+    require(checkMultisig([exitB, exitC], [sigB, sigC]));
   }
 }

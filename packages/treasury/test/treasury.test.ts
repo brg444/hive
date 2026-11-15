@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { type Artifact, instantiate, leafOf, pairKey } from "@hive/ark";
+import { type Artifact, instantiate, leafOf } from "@hive/ark";
 import {
   ApprovalRefused,
   approvalHolds,
@@ -195,8 +195,11 @@ test("Hive builds the v5 treasury from its keepers' Buzz keys, with v4's exit le
   );
   assert.match(instance.pkScript, /^5120[0-9a-f]{64}$/);
   assert.deepEqual(Object.keys(instance.covenants).sort(), ["merge", "pay", "renew"]);
-  const pair01 = pairKey(`02${keepers[0]}`, `02${keepers[1]}`);
-  assert.ok(leafOf(instance, "exit01").includes(pair01), "the first pair's MuSig2 key is on its exit leaf");
+  const exit01 = leafOf(instance, "exit01");
+  assert.ok(
+    exit01.includes(`20${keepers[0]}`) && exit01.includes(`20${keepers[1]}`) && !exit01.includes(keepers[2]),
+    "the first pair's exit leaf checks the two keepers' own Buzz keys, and only theirs",
+  );
   assert.ok(
     instance.covenants.renew &&
       hex.encode(instance.covenants.renew).includes(hex.encode(utf8(vectors.keys.delegate))),
