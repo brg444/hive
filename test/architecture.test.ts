@@ -12,7 +12,7 @@ import { repositoryRoot } from "@hive/kit";
  */
 const ALLOWED: Record<string, string[]> = {
   kit: [],
-  executor: ["@hive/kit", "@arkade-os/sdk", "@scure/base"],
+  executor: ["@hive/kit", "@arkade-os/sdk", "@arkade-os/sdk-0.5.6", "@scure/base"],
   protocol: ["@hive/kit", "@noble/curves", "@noble/hashes", "@scure/btc-signer"],
   ark: ["@hive/kit", "@hive/executor", "@noble/curves", "@noble/hashes", "@scure/base", "@scure/btc-signer"],
   steward: [
@@ -45,6 +45,7 @@ const ALLOWED: Record<string, string[]> = {
     "nostr-tools",
   ],
   agent: ["@hive/kit", "@hive/protocol", "@noble/curves"],
+  treasury: ["@hive/kit", "@hive/ark", "@noble/curves", "@noble/hashes", "@scure/base"],
 };
 
 const packagesRoot = resolve(repositoryRoot, "packages");

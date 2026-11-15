@@ -45,6 +45,8 @@ import {
 } from "@hive/kit";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { inviteNodeId } from "./agents.js";
+import { type Keeper, keeperOf } from "@hive/treasury";
+import { ApprovalDesk, approvalsRoute } from "./approvals-desk.js";
 import { consoleCors, Desk, type DeskOptions, deskRoute, faultStatus } from "./desk.js";
 import { type HiveRecord, initHive, type OpsContext, treasuryOf } from "./ops.js";
 import { currentPrice } from "./price.js";
@@ -167,7 +169,7 @@ export const agentDigest = (channelId: string, at: number, what: string) =>
 export class HiveService {
   readonly root: string;
   /** One desk per hive, so its queue is the only one: two requests never build two. */
-  #desks = new Map<string, Promise<Desk>>();
+  #desks = new Map<string, Promise<Desk | ApprovalDesk>>();
   #cache = new Map<string, { at: number; body: Record<string, unknown> }>();
   #building = new Set<string>();
   /** Each hive's writes, one after another: two forwards never both start from the same stored events. */
@@ -450,6 +452,10 @@ export class HiveService {
     if (this.record(registration.hive) || this.#building.has(registration.hive)) return;
     const keys = governance.keeperKeys;
     if (keys.length !== 3 || keys.some((k) => !k)) return;
+    // Keepers who posted their passkeys get the v5 treasury; three Bitcoin keys alone, the v4 one.
+    const passkeys = keys.map((k) => keeperOf(String(k)));
+    const v5 = passkeys.every(Boolean);
+    if (!v5 && passkeys.some(Boolean)) return;
     this.#building.add(registration.hive);
     try {
       await initHive(
@@ -457,7 +463,9 @@ export class HiveService {
         {
           network: this.options.network,
           ...(this.options.deployment ? { deployment: this.options.deployment } : {}),
-          keepers: keys as [string, string, string],
+          ...(v5
+            ? { passkeys: passkeys as [Keeper, Keeper, Keeper] }
+            : { keepers: keys as [string, string, string] }),
         },
         this.ctx,
       );
@@ -466,21 +474,17 @@ export class HiveService {
     }
   }
 
-  /** The hive's desk, once it has a treasury. */
-  async desk(registration: Registration): Promise<Desk> {
+  /** The hive's desk, once it has a treasury: the approvals desk for a passkey treasury. */
+  async desk(registration: Registration): Promise<Desk | ApprovalDesk> {
     const cached = this.#desks.get(registration.hive);
     if (cached) return cached;
     const record = this.record(registration.hive);
     ensure(record, "NO_TREASURY", "the hive's treasury is built once every keeper's key is in");
     const files = this.files(registration.hive);
-    const made = treasuryOf(record, this.ctx).then(
-      (treasury) =>
-        new Desk(registration.hive, treasury, {
-          ...this.options.desk,
-          agentLog: files.agentLog,
-          governance: files.governance,
-        }),
-    );
+    const options = { ...this.options.desk, agentLog: files.agentLog, governance: files.governance };
+    const made: Promise<Desk | ApprovalDesk> = record.passkeys
+      ? ApprovalDesk.open(registration.hive, options)
+      : treasuryOf(record, this.ctx).then((treasury) => new Desk(registration.hive, treasury, options));
     this.#desks.set(registration.hive, made);
     made.catch(() => this.#desks.delete(registration.hive));
     return made;
@@ -694,7 +698,9 @@ export async function startService(
         return sendJson(
           res,
           200,
-          await deskRoute(desk, method, rest, body, keeper ? String(keeper) : undefined),
+          desk instanceof ApprovalDesk
+            ? await approvalsRoute(desk, method, rest, body, keeper ? String(keeper) : undefined)
+            : await deskRoute(desk, method, rest, body, keeper ? String(keeper) : undefined),
         );
       }
       if (area === "agent" && version === "v1" && rest[0] === "events" && method === "POST")

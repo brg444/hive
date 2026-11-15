@@ -15,6 +15,9 @@ importers:
       '@arkade-os/sdk':
         specifier: 0.5.0-rc.18
         version: 0.5.0-rc.18
+      '@arkade-os/sdk-0.5.6':
+        specifier: npm:@arkade-os/sdk@0.5.6
+        version: '@arkade-os/sdk@0.5.6'
       '@arkade-os/swap':
         specifier: 0.0.24
         version: 0.0.24(nostr-tools@2.25.2(typescript@5.9.3))
@@ -45,6 +48,9 @@ importers:
       '@hive/steward':
         specifier: workspace:*
         version: link:packages/steward
+      '@hive/treasury':
+        specifier: workspace:*
+        version: link:packages/treasury
       '@noble/curves':
         specifier: 2.0.1
         version: 2.0.1
@@ -111,6 +117,9 @@ importers:
       '@arkade-os/sdk':
         specifier: 0.5.0-rc.18
         version: 0.5.0-rc.18
+      '@arkade-os/sdk-0.5.6':
+        specifier: npm:@arkade-os/sdk@0.5.6
+        version: '@arkade-os/sdk@0.5.6'
       '@hive/kit':
         specifier: workspace:*
         version: link:../kit
@@ -216,6 +225,24 @@ importers:
         specifier: 2.0.1
         version: 2.0.1
 
+  packages/treasury:
+    dependencies:
+      '@hive/ark':
+        specifier: workspace:*
+        version: link:../ark
+      '@hive/kit':
+        specifier: workspace:*
+        version: link:../kit
+      '@noble/curves':
+        specifier: 2.0.1
+        version: 2.0.1
+      '@noble/hashes':
+        specifier: 2.0.1
+        version: 2.0.1
+      '@scure/base':
+        specifier: 2.0.0
+        version: 2.0.0
+
 packages:
 
   '@arkade-os/sdk@0.4.78':
@@ -249,6 +276,30 @@ packages:
       expo-sqlite: ~16.0.10 || >=55.0.0
       expo-task-manager: ~14.0.9 || >=55.0.0
     peerDependenciesMeta:
+      '@react-native-async-storage/async-storage':
+        optional: true
+      expo:
+        optional: true
+      expo-background-task:
+        optional: true
+      expo-sqlite:
+        optional: true
+      expo-task-manager:
+        optional: true
+
+  '@arkade-os/sdk@0.5.6':
+    resolution: {integrity: sha512-UMZ46a52Ny2NW0VnRqL52iXR8wIJekPLkxdogsS+RUjiJdxTJKKyOXFMWP/vJQzWjQdpSDDUPuEGHIL3Ko+smg==}
+    engines: {node: '>=22.13.0 <27'}
+    peerDependencies:
+      '@arkade-os/compiler': ^0.1.0-rc.1
+      '@react-native-async-storage/async-storage': '>=1.0.0'
+      expo: '>=54.0.0'
+      expo-background-task: ~1.0.10 || >=55.0.0
+      expo-sqlite: ~16.0.10 || >=55.0.0
+      expo-task-manager: ~14.0.9 || >=55.0.0
+    peerDependenciesMeta:
+      '@arkade-os/compiler':
+        optional: true
       '@react-native-async-storage/async-storage':
         optional: true
       expo:
@@ -693,6 +744,26 @@ snapshots:
       - utf-8-validate
 
   '@arkade-os/sdk@0.5.0-rc.18':
+    dependencies:
+      '@bitcoinerlab/descriptors-scure': 3.1.7
+      '@marcbachmann/cel-js': 8.0.0
+      '@noble/curves': 2.4.0
+      '@noble/secp256k1': 3.0.0
+      '@scure/base': 2.4.0
+      '@scure/bip39': 2.4.0
+      '@scure/btc-signer': 2.4.1
+      bip68: 1.0.4
+      micro-packed: 0.11.1
+      ws-electrumx-client: 1.0.5
+    transitivePeerDependencies:
+      - '@ledgerhq/ledger-bitcoin'
+      - bip32
+      - bitcoinjs-lib
+      - bufferutil
+      - ecpair
+      - utf-8-validate
+
+  '@arkade-os/sdk@0.5.6':
     dependencies:
       '@bitcoinerlab/descriptors-scure': 3.1.7
       '@marcbachmann/cel-js': 8.0.0

@@ -61,7 +61,7 @@ export function onboardingPlan(record, cfg) {
         posts.push({ key: "call", text: [
             `Hi, I'm ${botName}. I'll set up a shared treasury for this community here in this channel, and each step is a message or a reaction.`,
             "",
-            `First, keepers. Keepers hold the treasury's keys together: any ${threshold} of them approve work and sign payments, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅ to this message. It needs ${needed}.`,
+            `First, keepers. Keepers hold the treasury's keys together: any ${threshold} of them approve work and payments, so nobody moves funds alone. If you'll keep this hive's treasury, react ✅ to this message. It needs ${needed}.`,
         ].join("\n") });
         return { posts, record: next };
     }
@@ -88,9 +88,9 @@ export function onboardingPlan(record, cfg) {
             `Next, the Hive plugin. It shows proposals as cards and adds a Propose button to this channel. ${install} Anyone here can install it, and the hive works without it too.`,
         ].join("\n") });
         posts.push({ key: "keys", mentions: keepers, text: [
-            `Keepers, your treasury keys next. Each of you creates one in the keeper console${consoleUrl ? ` at ${consoleUrl}` : ", which the Hive team shares with you"}. It stays on your own device, locked with your passkey, and signs only the payments you approve there yourself.`,
+            `Keepers, your keys next. Each of you creates a keeper passkey in the keeper console${consoleUrl ? ` at ${consoleUrl}` : ", which the Hive team shares with you"}. Touch ID, Face ID or your device's screen lock makes it, and it approves only the payments you check there yourself.`,
             "",
-            "The console then asks you to save an encrypted backup. Put the file in iCloud Drive or Google Drive, and its passphrase somewhere else, such as your password manager: together they are the only way back to your key if this device or your passkey is lost.",
+            "Keep the passkey in iCloud Keychain, Google Password Manager or another password manager that syncs, so your other devices have it too: it is your key, and the only thing to keep.",
             "",
             "Then post the line the console gives you here, starting with “Hive keeper key:”.",
         ].join("\n") });
@@ -100,7 +100,7 @@ export function onboardingPlan(record, cfg) {
     const keys = keepersKeys(events, next.keepers);
     if (!next.posts["keys-in"] && Object.keys(keys).length === next.keepers.length) {
         posts.push({ key: "keys-in", mentions: next.keepers, text:
-            `All ${next.keepers.length} keys are in, from ${people(next.keepers, name)}. The treasury is built from them, and any ${threshold} keepers sign its payments together.` });
+            `All ${next.keepers.length} keys are in, from ${people(next.keepers, name)}. The treasury is built from them, and any ${threshold} keepers approve its payments together.` });
         next.keysIn = true;
     }
 

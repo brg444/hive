@@ -53,7 +53,7 @@ fi
 
 cd "$ROOT"
 set --
-for path in .secrets/bitcoin .secrets/v4 .secrets/ops .local/service .local/ops; do
+for path in .secrets/bitcoin .secrets/v4 .secrets/ops .secrets/issuer .local/service .local/ops; do
   [ -e "$path" ] && set -- "$@" "$path"
 done
 # The delegatee's own home, when it has one: its keys are archived apart, under delegatee/.

@@ -10,7 +10,7 @@ AI inference served over MeshLLM. Members chip in from any Lightning wallet thro
 Lightning address, or from any Arkade wallet straight to its treasury. They propose work in the
 hive's Buzz channel and approve it with reactions. When a member asks the hive's model, the hive's agent
 buys the answer from an independent provider, three keepers chosen by the community hold the
-treasury's keys, and any two of them sign each job's payment from their own devices. The provider
+treasury's keys as passkeys, and any two of them approve each job's payment from their own devices. The provider
 is paid for exactly the tokens it served, against receipts the agent signs as the answers come back,
 and whatever a job leaves unused goes back to the treasury, at its deadline if nobody claims it,
 with nobody signing.
@@ -21,7 +21,8 @@ I built this to show that a community treasury paying for AI can be done with Bu
 it works: the whole flow, from HiveBot setting a hive up in its channel to a provider paid and the
 remainder back in the treasury, runs end to end on a local regtest stack, with the keepers'
 consoles in a real browser, for a hive whose agent runs on the host as well as for one that brings
-its own node. The escrow behind each job has claimed and returned on mainnet with small amounts.
+its own node. The keepers' passkey treasury, v5, is new: its contract and its console have run end to
+end on regtest, from the keepers' passkeys to a funded escrow and a withdrawal. The escrow behind each job has claimed and returned on mainnet with small amounts.
 The rest has never run end to end on mainnet.
 
 It is a proof of concept and was built quickly, largely with AI coding tools, so it is vibecoded in
@@ -33,11 +34,11 @@ The known gaps are the ones you would expect at this stage. A hive on the Hive s
 Lightning address yet, so its members chip in from an Arkade wallet until the service registers one
 the way `pnpm ops init --lnurl` does for a hive on its own host. Keepers can fund jobs and withdraw
 to an Arkade address two of them agree on, which is how a hive moves or winds down, and that is
-all: there is no tooling for the exit path or for replacing a keeper. The keeper console is
-reproducible and hashed, and a keeper can check a host's copy against their own build or serve
-their own, though it is not published as a signed release. A keeper's console checks every
-payment's escrow, coins and amount itself, yet it takes what approved work has left from the desk,
-which it cannot check against the channel. A host that is forwarded a channel cannot see who is in
+all: there is no tooling for the exit path or for replacing a keeper, and a v5 treasury does not
+sign the hive's directory listing yet. The keeper console is reproducible and hashed, and a keeper
+can check a host's copy against their own build or serve their own, though it is not published as a
+signed release. A keeper's console checks every payment's escrow and amount itself, yet it takes what
+approved work has left from the desk, which it cannot check against the channel. A host that is forwarded a channel cannot see who is in
 it, so it keeps strangers' events apart from the hive's own instead of refusing them. The buyer
 signs for the usage a provider reports only as far as the request itself could have gone, and
 within that it still takes the provider's count. The services run from a git checkout, and on a
@@ -105,52 +106,61 @@ The plugin screenshots are its own components rendered with sample data and Buzz
 full. Buzz describes its conversation hooks as a preview rather than a stable interface, so a new
 Buzz release may ask for adjustments.
 
-## Keepers, passkeys and signing
+## Keepers and their passkeys
 
 The treasury's keys belong to three keepers the community chooses in its channel, and nobody else
-ever holds them: not the host, not HiveBot, not the agent. Each keeper makes and keeps their key in
+ever holds them: not the host, not HiveBot, not the agent. Each keeper's key is a passkey, made in
 the keeper console, a single page served from an origin of its own, on whatever device they already
 unlock with Touch ID, Face ID or a screen lock.
 
 <p>
-<img src="docs/images/keeper-console-create.png" alt="The keeper console's first screen: create your keeper key" width="49%">
-<img src="docs/images/keeper-console-backup.png" alt="Saving an encrypted backup of the key with a passphrase" width="49%">
+<img src="docs/images/keeper-console-create.png" alt="The keeper console's first screen: create your keeper passkey" width="49%">
+<img src="docs/images/keeper-console-key.png" alt="The passkey is ready: the line to post in the hive's channel, and the field to open the hive's desk" width="49%">
 </p>
 
-Becoming a keeper takes three steps. HiveBot asks the channel who will keep the treasury, three
+Becoming a keeper takes two steps. HiveBot asks the channel who will keep the treasury, three
 members react ✅ and the founder confirms them. Each of them then opens the console and presses
-Create my key: the key is made in the browser and sealed with AES-GCM under a secret the passkey
-gives the page through WebAuthn's PRF extension, so only that passkey opens it. The
-console asks next for a backup, encrypted with a passphrase of the keeper's choosing (PBKDF2 at
-600,000 iterations) and saved through the system's own save sheet, so the file can go to iCloud
-Drive or Google Drive without the page signing in anywhere. A keeper who loses the device restores
-the key on a new one from that file and a new passkey.
+Create my keeper passkey. The passkey stays in their password manager, and kept in iCloud Keychain,
+Google Password Manager or another manager that syncs, it is on their other devices too, so there is
+no backup file to keep. It plays two parts. Its own P-256 key approves payments, and through
+WebAuthn's PRF extension it gives the console a secret from which the keeper's Bitcoin key is
+derived on demand, the key the desk knows the keeper by and the one on the treasury's exit. The
+console then gives the keeper one line to post from their own Buzz account,
+`Hive keeper key: <Bitcoin key> <passkey key> <site>`, which ties the passkey to their identity in
+the community. A line counts only from a confirmed keeper, HiveBot acknowledges each one, and once
+the third is in, the host builds the treasury from the three without keeping any of them.
+
+The treasury is a covenant on Arkade that checks the keepers' approvals itself
+([`contracts/v5`](contracts/v5/README.md)). Arkade Script verifies P-256 signatures, so a payment
+spends the treasury only with two keepers' passkey signatures over its number, its amount, its
+recipient and the time the approval lapses, each signed on the keeper's own device, at any time and
+in any order. No keeper waits on another, and nothing passes between them. The payment's number is
+the hive's counter, an asset the host issues once and sends whole to the treasury, of which each
+payment burns one unit. An approval therefore pays once, and a member's chip-in or an escrow's
+remainder, which the desk folds into the treasury coin, leaves every pending approval valid. So does
+the delegatee's renewal of the treasury into a new batch, which the treasury pays for itself, up to a
+cap, and which no one but the host's delegatee may cosign.
 
 <p>
-<img src="docs/images/keeper-console-key.png" alt="The key is ready: the line to post in the hive's channel, and the field to open the signing desk" width="49%">
-<img src="docs/images/keeper-console-check.png" alt="Funding a job: the console's own checks, all passed, before the keeper signs" width="49%">
+<img src="docs/images/keeper-console-payments.png" alt="The hive's desk in the console: the job waiting for funding and what approved work has left" width="49%">
+<img src="docs/images/keeper-console-withdrawal.png" alt="A withdrawal, approved by one keeper and waiting for another" width="49%">
 </p>
 
-Last, the console gives the keeper one line to post from their own Buzz account,
-`Hive keeper key: <key>`, which ties the key to their identity in the community. A key line counts
-only from a confirmed keeper, HiveBot acknowledges each one, and once the third is in, the host builds
-the treasury from the three public keys without keeping any of them. Any two keepers together can
-then move funds, and no single keeper can, whoever they are.
-
-Signing follows the same idea. When the agent asks for a job to be funded, the plugin links each
-keeper to the console with the hive's signing desk filled in, and the keeper unlocks the key with
-the passkey for one sitting, after which the console locks itself when left idle. The desk only
-carries messages between keepers: the console rebuilds the job's escrow from its terms with the
-hive's own code, checks that it pays back to this treasury, that the amount fits what approved work
-has left and that every coin is the treasury's, and signs only the messages it computed itself. The
-two keepers can sign hours apart. The first signs at once, the second signs both remaining steps in
-one sitting, and the first comes back once to finish. The nonces those signatures need are shared
-ahead of time and kept on the device under the same passkey, each deleted before the signature that
-uses it. The console also pins the treasury's address the first time it opens a desk and binds each
-job to the first payment it signs for it, while the build for real funds pins the Arkade Operator's
-and Emulator's keys and comes out the same byte for byte from the same commit, so a keeper can check
-what their host serves against hashes they build themselves. The console screenshots come from the
-browser test in which two keepers fund a job (`test/keeper-console-e2e.ts`, with `HIVE_SHOTS` set).
+When the agent asks for a job to be funded, the plugin links each keeper to the console with the
+hive's desk filled in. The keeper unlocks the desk with their passkey for one sitting, and the
+console locks itself when left idle. The desk only collects approvals: the console rebuilds the
+job's escrow from its terms with the hive's own code, checks that it pays back to this treasury and
+that the amount fits what approved work has left, and rebuilds the exact message the covenant will
+check before it asks the passkey to sign it. Once two keepers have approved, the desk submits the
+payment through the Emulator, and should its answer be lost, submitting again is safe: the covenant
+pays each approval once. The console also pins the treasury's address the first time it opens a
+desk and holds each job to the first payment number it approved for it, while the build for real
+funds pins the Arkade Operator's and Emulator's keys and comes out the same byte for byte from the
+same commit, so a keeper can check what their host serves against hashes they build themselves. A
+passkey belongs to the site it was made on, and the treasury names each keeper's site, so a keeper
+who serves their own build approves from there. The console screenshots come from the browser test
+in which three keepers make their passkeys and two of them fund a job and a withdrawal
+(`test/keeper-console-e2e.ts`, with `HIVE_SHOTS` set).
 
 ## How it fits together
 
@@ -161,10 +171,11 @@ browser test in which two keepers fund a job (`test/keeper-console-e2e.ts`, with
   answer.
 - **The Hive service** (`tools/service.ts`, run with `pnpm ops service`) carries any number of hives
   for the communities that use it: it reads each hive's channel as members' plugins forward it,
-  builds the treasury from the keepers' keys, runs the signing desk and, if asked, each hive's agent
-  node. It holds no key that moves funds.
+  builds the treasury from the keepers' passkeys, issues its counter, runs the desk where keepers
+  approve payments and, if asked, each hive's agent node. It holds no key that moves funds.
 - **The contracts and the signing code** (`packages/`, `contracts/`) hold the money and decide what
-  signatures can move it.
+  signatures can move it; `packages/treasury` is what the v5 treasury's keepers approve, shared by
+  the service and the console.
 
 ## Running it yourself
 
@@ -254,12 +265,13 @@ treasury. A host holds no key: while it is down its hives take no
 contributions and open no jobs, and deadline refunds still happen. A hive
 that wants its own server runs the same code alone.
 
-A hive's keepers hold their own keys. Each makes theirs in the keeper console
-on their own device, locked with a passkey, and posts its public key in the
-hive's channel; `pnpm ops init --keepers` builds the treasury from the three
-keys and keeps none of them. Each payment then waits at the hive's signing desk
-(`pnpm ops desk`) until two keepers have checked and signed it in their
-consoles, hours apart if they like. Without `--keepers`, `pnpm ops init` still
+A hive's keepers hold their own keys. Each makes a keeper passkey in the keeper
+console and posts its line in the hive's channel, and the Hive service builds
+the v5 treasury from the three and keeps none of them. Each payment then waits
+at the hive's desk (`pnpm ops desk`) until two keepers have checked and
+approved it in their consoles, hours apart if they like. `pnpm ops init
+--keepers` still builds the v4 treasury, whose keepers sign with MuSig2 keys of
+their own. Without `--keepers`, `pnpm ops init` still
 makes all three keys in the operator's checkout, for the gates and for trying
 Hive alone.
 
@@ -295,7 +307,7 @@ under `.local/ops/<hive>/` and its keys under `.secrets/`, both ignored by git.
 | `pnpm ops approve <hive> <label> --provider … --cap … --minutes …` | Approves one purchase's exact terms for every party |
 | `pnpm ops buy <hive> <label>` | Gets the quote, arranges the refund and funds the escrow |
 | `pnpm ops serve <hive>` / `pnpm ops host <hive> …` | Serves one hive, or several under one directory, with the claim desk at `/api/claim` |
-| `pnpm ops desk <hive> --agent-log <log> [--governance <file>]` | Runs the signing desk, where keepers' consoles sign each payment |
+| `pnpm ops desk <hive> --agent-log <log> [--governance <file>]` | Runs the hive's desk, where keepers' consoles approve each payment |
 | `pnpm ops status <hive>` | Prints the hive's balance, jobs and warnings |
 | `pnpm ops halt [--hive <hive>] <reason>` / `pnpm ops resume …` | Stops or restarts new jobs and contributions, for one hive or all of them |
 
@@ -331,7 +343,7 @@ treasury size.
 | `app/` | The server, the directory (`hives.html`), a hive's page (`page.html`) and its typefaces |
 | `contracts/v4/` | The treasury, escrow, wallet and boarding contracts |
 | `gates/` | The lifecycle, refusals and renewal gates |
-| `tools/` | `ops.ts`, the Hive service (`service.ts`), the signing desk (`desk.ts`), the agent nodes (`agents.ts`), the local site (`dev.ts`), backups, the audit and the test vector generators |
+| `tools/` | `ops.ts`, the Hive service (`service.ts`), the desks (`desk.ts` for v4, `approvals-desk.ts` for v5) and the v5 treasury's host side (`treasury-v5.ts`), the agent nodes (`agents.ts`), the local site (`dev.ts`), backups, the audit and the test vector generators |
 | `test/` | Integration and architecture tests over an in-memory network |
 | `docs/` | How the system works, how to run it and host it, and the agent's API |
 | `hive/pay-arkade/` | The MeshLLM payment plugin, its escrow contract and its gates |

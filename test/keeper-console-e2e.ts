@@ -1,156 +1,198 @@
 /**
- * Two keepers fund a job from their own keeper consoles in a real browser, each with a virtual
- * passkey: they create their keys, the hive's treasury is built from them, and through the signing
- * desk they sign the agent's funding request in turn, until the escrow holds the cap. The third
- * keeper signs the hive's listing from Node, the other two in their consoles. The same two then
- * withdraw from the treasury to an address each reads in their own console.
+ * Three keepers create their keeper passkeys in the keeper console in a real browser, each with a
+ * virtual passkey that supports PRF, and the hive's v5 treasury is built from their lines: the host
+ * issues its counter and the delegatee watches it for renewal. A member chips in. The hive's agent asks
+ * for a job, and two keepers approve its funding in their consoles at the approvals desk, hours apart
+ * if they like; the desk folds the chip-in into the treasury coin and pays the escrow the cap. The same
+ * two then withdraw to an Arkade address each reads in their own console.
  *
- *   node --import tsx test/keeper-console-e2e.ts      (needs Playwright's Chromium)
+ * Needs the regtest stack (arkd on 7070, the Emulator on 7073), the delegatee on 7090
+ * (`tools/delegatee.sh`) and Playwright's Chromium:
+ *
+ *   node --experimental-eventsource --import tsx test/keeper-console-e2e.ts
  *
  * With HIVE_SHOTS=<dir>, keeper A's console is also saved as screenshots there, for the docs.
  */
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { arkAddress, connect, jobEscrow, xOnly } from "@hive/ark";
-import { hex, localPath, unhex } from "@hive/kit";
-import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
-import { startDesk } from "../tools/desk.js";
-import { initHive, loadListing, opsPaths, proposeListing } from "../tools/ops.js";
-import { startFakeNetwork } from "./support/fake-network.js";
+import { connect, jobEscrow, regtestDeployment } from "@hive/ark";
+import { treasuryCoins, unitsOn } from "@hive/executor";
+import { hex, localPath } from "@hive/kit";
+import { type Keeper, keeperOf } from "@hive/treasury";
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { startApprovalDesk } from "../tools/approvals-desk.js";
+import { initHive } from "../tools/ops.js";
+import { issuerWallet, v5Contract, v5Terms } from "../tools/treasury-v5.js";
 import {
+  approveFirstPayment,
   chromium,
   keeperDevice,
   openDesk,
   serveConsole,
-  signFirstPayment,
+  startWithdrawal,
 } from "./support/keeper-console.js";
+import { newWallet, sendOffchain, waitFor } from "./support/treasury-sdk.js";
 
 const now = () => Math.floor(Date.now() / 1000);
-const fake = await startFakeNetwork({ batchLifetimeSeconds: 4 * 86_400 });
+const deployment = regtestDeployment();
 const hive = `console-${randomUUID().slice(0, 8)}`;
 const files = localPath("console-e2e", hive);
+mkdirSync(files, { recursive: true });
 const site = await serveConsole();
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: ["--proxy-server=direct://"] });
 const shots = process.env.HIVE_SHOTS;
 const shoot = async (page: { screenshot(o: object): Promise<unknown> }, name: string) => {
   if (shots) await page.screenshot({ path: join(shots, `${name}.png`), fullPage: true });
 };
+const step = (name: string, detail: Record<string, unknown> = {}) =>
+  console.log(`- ${name}${Object.keys(detail).length ? ` ${JSON.stringify(detail)}` : ""}`);
+let desk: Awaited<ReturnType<typeof startApprovalDesk>> | null = null;
 
 try {
+  // 1. Three keepers make their passkeys; the hive's treasury is built from their lines.
   const a = await keeperDevice(
     browser,
     site.url,
-    fake.deployment().arkdUrl,
+    deployment.arkdUrl,
     shots ? { deviceScaleFactor: 2, viewport: { width: 760, height: 900 } } : {},
     (page, name) => shoot(page, `keeper-console-${name}`),
   );
-  await shoot(a.page, "keeper-console-key");
-  const b = await keeperDevice(browser, site.url, fake.deployment().arkdUrl);
-  const third = secp256k1.utils.randomSecretKey();
-  const keepers = [a.key, b.key, hex(secp256k1.getPublicKey(third, true))] as [string, string, string];
-  console.log(`- keys: ${keepers.map((k) => k.slice(0, 10)).join(", ")}`);
-  const record = await initHive(hive, { network: "regtest", deployment: fake.deployment(), keepers }, {});
-  fake.mint(record.treasuryScript, 50_000);
-  const conn = await connect(record.deployment);
+  const b = await keeperDevice(browser, site.url, deployment.arkdUrl);
+  const c = await keeperDevice(browser, site.url, deployment.arkdUrl);
+  const keepers = [a, b, c].map((d) => keeperOf(d.key)) as [Keeper, Keeper, Keeper];
+  assert.ok(
+    keepers.every((k) => k?.site === "localhost"),
+    "each line names its passkey's site",
+  );
+  step("keepers' lines", { lines: [a, b, c].map((d) => `${d.line.slice(0, 32)}…`) });
+
+  const issuer = await issuerWallet(deployment);
+  if ((await issuer.getBalance()).available < 5_000) {
+    sendOffchain(await issuer.getAddress(), 20_000);
+    await waitFor("the host's issuer funds", async () => (await issuer.getBalance()).available >= 5_000);
+  }
+  const record = await initHive(hive, {
+    network: "regtest",
+    deployment,
+    passkeys: keepers,
+    renewalWindowSeconds: 600,
+  });
+  const counter = record.passkeys!.counter;
+  step("treasury built from the keepers' passkeys", {
+    address: record.treasuryAddress,
+    counter: counter.assetId,
+    renewal: record.renewalWatch,
+  });
+
+  // 2. A member chips in, beside the treasury coin.
+  sendOffchain(record.treasuryAddress, 60_000);
+  const { contract } = await v5Contract(deployment, v5Terms(record.passkeys!));
+  await waitFor(
+    "the chip-in",
+    async () => (await treasuryCoins(contract, counter.assetId)).others.length > 0,
+  );
+  step("chip-in landed");
+
+  // 3. The agent asks for a job, within a running proposal's budget.
+  const conn = await connect(deployment);
+  const jobId = hex(randomBytes(32));
+  const deadline = now() + 3600;
   const params = {
     agentPk: hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey())),
     providerPk: hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey())),
     treasuryProgram: record.treasuryScript.slice(4),
-    deadline: now() + 36 * 3600,
-    jobId: hex(randomBytes(32)),
+    deadline,
+    jobId,
   };
   const escrow = jobEscrow(conn, params);
-  mkdirSync(files, { recursive: true });
   const agentLog = join(files, "agent.jsonl");
-  const request = {
-    job_id: params.jobId,
-    address: escrow.address,
-    cap_sats: 20_000,
-    deadline: params.deadline,
-    model: "qwen3-8b",
-    price_msat_per_mtok: 2_000_000,
-    provider_pk: params.providerPk,
-    params,
-  };
-  writeFileSync(agentLog, `${JSON.stringify({ at: now(), event: "funding_requested", request })}\n`);
   const governance = join(files, "governance.json");
-  const proposals = [{ id: "p-1", title: "Docs", budgetSats: 30_000, usedSats: 0, state: "running" }];
-  writeFileSync(governance, JSON.stringify({ proposals }));
-  const pending = proposeListing(hive, { name: "Open Lab", purpose: "Translate the docs" });
-  const desk = await startDesk(hive, { agentLog, governance, tickMs: 60_000 }, {});
+  writeFileSync(
+    governance,
+    JSON.stringify({
+      proposals: [{ id: "p1", title: "Docs answers", budgetSats: 50_000, usedSats: 0, state: "running" }],
+    }),
+  );
+  writeFileSync(
+    agentLog,
+    `${JSON.stringify({
+      event: "funding_requested",
+      at: now(),
+      request: {
+        job_id: jobId,
+        address: escrow.address,
+        cap_sats: 20_000,
+        deadline,
+        model: "hive-test",
+        price_msat_per_mtok: 1_000_000,
+        provider_pk: params.providerPk,
+        provider_peer: "peer",
+        params,
+      },
+    })}\n`,
+  );
+  desk = await startApprovalDesk(hive, {
+    agentLog,
+    governance,
+    tickMs: 3000,
+    deadlineMarginSeconds: 60,
+    minimumValiditySeconds: 60,
+  });
+  step("desk open", { url: desk.url });
 
-  // Keeper B opens the console first: their nonces reach the desk, so A has someone to sign with.
-  await openDesk(b.page, desk.url, hive);
-  await b.page.getByRole("button", { name: "Sign the listing" }).click();
-  await b.page.locator("#listing-card").waitFor({ state: "hidden" });
+  // 4. Two keepers approve the job's funding, each in their own console.
   await openDesk(a.page, desk.url, hive);
-  await a.page.getByRole("button", { name: "Sign the listing" }).click();
-  await a.page.locator("#listing-card").waitFor({ state: "hidden" });
-  await desk.desk.signListing(keepers[2], hex(schnorr.sign(unhex(pending.listingId), third)));
-  assert.equal(loadListing(hive).body.name, "Open Lab");
-  console.log("- the listing carries all three keepers' signatures");
-  await shoot(a.page, "keeper-console-desk");
+  await shoot(a.page, "keeper-console-payments");
+  assert.match(await approveFirstPayment(a.page, "Check and approve"), /Another keeper approves next/);
+  await openDesk(b.page, desk.url, hive);
+  assert.match(await approveFirstPayment(b.page, "Check and approve"), /Two keepers have approved/);
+  step("two keepers approved the job");
+  await waitFor("the job funded", () => desk?.desk.payment(jobId)?.status === "done", 180);
+  const funded = await waitFor("the escrow's coin", async () => {
+    const coins = await conn.arkd.coins({ scripts: [escrow.pkScript], spendableOnly: true });
+    return coins.find((coin) => coin.amount === 20_000);
+  });
+  step("escrow funded", { txid: desk.desk.payment(jobId)?.txid, amount: funded.amount });
 
-  // The console shows its own checks before anyone signs.
-  await a.page.getByRole("button", { name: "Check and sign" }).click();
-  for (const check of [
-    "The address is the escrow the job's terms build.",
-    "Unused funds go back to this hive's treasury.",
-  ])
-    assert.equal(await a.page.getByText(check).getAttribute("data-ok"), "true");
-  await shoot(a.page, "keeper-console-check");
-  await a.page.getByRole("button", { name: "Back" }).click();
-
-  assert.match(await signFirstPayment(a.page, "Check and sign"), /you sign once more after them/);
-  console.log("- keeper A checked and signed first");
-  assert.match(await signFirstPayment(b.page, "Check and sign"), /The other keeper finishes it/);
-  console.log("- keeper B checked and signed both remaining steps");
-  assert.match(await signFirstPayment(a.page, "Finish: sign once more"), /on its way to the escrow/);
-  await desk.desk.drive(params.jobId);
-  assert.equal(desk.desk.payment(params.jobId)?.status, "done");
-  assert.equal(fake.balance(escrow.pkScript), 20_000);
-  console.log("- the escrow holds the job's cap: 20,000 sats");
-
-  // A withdrawal: keeper A names the address and the amount, keeper B reads both and signs, A finishes.
-  const payee = `5120${hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()))}`;
-  const address = arkAddress(conn.deployment.network, hex(xOnly(conn.keys.server)), payee);
-  await a.page.getByRole("button", { name: "Refresh" }).click();
-  await a.page.locator("#withdraw summary").click();
-  await a.page.locator("#w-address").fill(address);
-  await a.page.locator("#w-amount").fill("5000");
-  a.page.once("dialog", (dialog: { accept(): Promise<void> }) => void dialog.accept());
-  await a.page.getByRole("button", { name: "Check and sign the withdrawal" }).click();
-  await a.page.waitForFunction(
-    () => /^Signed\./.test(document.getElementById("payments-msg")?.textContent ?? ""),
-    null,
-    { timeout: 60_000 },
-  );
-  await shoot(a.page, "keeper-console-withdrawal");
-  // Keeper B's console shows the address it worked out itself, in full, before B signs.
-  await b.page.getByRole("button", { name: "Refresh" }).click();
-  await b.page.getByRole("button", { name: "Check and sign" }).first().click();
-  assert.equal(await b.page.getByText(address).count(), 1);
+  // The third keeper's console has nothing left to approve, and the desk refuses a second start.
+  await openDesk(c.page, desk.url, hive);
+  await c.page.getByRole("button", { name: "Refresh" }).click();
   assert.equal(
-    await b.page.getByText("The address shown is the one this withdrawal pays.").getAttribute("data-ok"),
-    "true",
+    await c.page.locator("#payment-list").getByRole("button", { name: "Check and approve" }).count(),
+    0,
   );
-  await b.page.getByRole("button", { name: "Back" }).click();
-  assert.match(await signFirstPayment(b.page, "Check and sign"), /The other keeper finishes it/);
-  assert.match(await signFirstPayment(a.page, "Finish: sign once more"), /on its way\./);
-  const withdrawal = desk.desk.overview().withdrawals[0]!.payment;
-  await desk.desk.drive(withdrawal.jobId);
-  assert.equal(desk.desk.payment(withdrawal.jobId)?.status, "done");
-  assert.equal(fake.balance(payee), 5_000);
-  console.log("- two keepers withdrew 5,000 sats to an address both read");
-  assert.deepEqual([...a.errors, ...b.errors], []);
-  await desk.close();
-  console.log("ok: two keepers funded a job and made a withdrawal from their consoles");
+  await assert.rejects(
+    fetch(`${desk.url}/desk/v1/payments/${jobId}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assertion: { authenticatorData: "", clientDataJSON: "{}", signature: "" } }),
+    }).then(async (r) => (r.ok ? r : Promise.reject(new Error((await r.json()).error)))),
+  );
+  step("nothing more to approve, and a bare approval refused");
+
+  // 5. A withdrawal to a member's Arkade wallet, read and approved by two keepers.
+  const member = await newWallet(deployment.arkdUrl, deployment.emulatorUrl!);
+  await startWithdrawal(a.page, await member.getAddress(), 5_000);
+  await shoot(a.page, "keeper-console-withdrawal");
+  assert.match(
+    await approveFirstPayment(b.page, "Check and approve", "#withdrawal-list"),
+    /Two keepers have approved/,
+  );
+  await waitFor("the withdrawal paid", async () => (await member.getBalance()).available >= 5_000, 180);
+  const coin = (await treasuryCoins(contract, counter.assetId)).treasury!;
+  assert.equal(
+    unitsOn(coin, counter.assetId),
+    BigInt(record.passkeys!.supply) - 2n,
+    "two payments, two units",
+  );
+  step("withdrawal paid", { treasury: coin.value, units: String(unitsOn(coin, counter.assetId)) });
+  for (const d of [a, b, c]) assert.deepEqual(d.errors, [], "no errors in the consoles");
+  console.log("PASSED");
 } finally {
+  await desk?.close();
   await browser.close();
   site.close();
-  await fake.close();
-  for (const p of [opsPaths(hive).local(), opsPaths(hive).secret(), files])
-    rmSync(p, { recursive: true, force: true });
 }
+process.exit(0);

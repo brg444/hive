@@ -430,7 +430,7 @@ test("HiveBot: an agent of the plugin's own type says hello once in the hive's c
     // The tools any agent here can use, the guide included.
     const tool = (name) => seen.tools.find((t) => t.name === name);
     assert.match(await tool("hive_guide").call(), /^This hive: Test Hive\. It has 2 keepers, any 2 of whom approve/);
-    assert.match(await tool("hive_guide").call(), /iCloud Drive or Google Drive/);
+    assert.match(await tool("hive_guide").call(), /iCloud Keychain, Google Password Manager/);
     assert.equal(await tool("hive_proposals").call(), "No proposal has been posted in the hive's channel yet.");
 
     // The repository's docs, a section at a time, from the hive's own origin.

@@ -47,7 +47,7 @@ test("keepers volunteer with ✅, the founder confirms, and the plugin follows w
     assert.deepEqual(posts.map((p) => p.key), ["plugin", "keys", "propose"]);
     assert.ok(posts[0].plugin);
     assert.match(posts[0].text, /^Keepers are set: @Ari, @Cy and @Bo\. Any 2 of them approve\./);
-    assert.match(posts[1].text, /^Keepers, your treasury keys next\. Each of you creates one in the keeper console, which the Hive team shares with you\./);
+    assert.match(posts[1].text, /^Keepers, your keys next\. Each of you creates a keeper passkey in the keeper console, which the Hive team shares with you\./);
     assert.deepEqual(posts[1].mentions, [A, C, B]);
     assert.match(posts[2].text, /\nProposal: What the work is, in a few words\nBudget: 20,000 sats\n/);
     assert.match(posts[2].text, /Discussion runs 48 hours, or 24 under 20,000 sats, and then 2 keepers' ✅ approve it\.$/);
@@ -61,7 +61,7 @@ test("keepers volunteer with ✅, the founder confirms, and the plugin follows w
     events.push(say(B, "Hive keeper key: not-a-key", T0 + 23), say(B, `hive keeper key: ${key("B")}`, T0 + 24));
     ({ posts, record } = step(record, cfg(events)));
     assert.deepEqual(posts.map((p) => p.key), ["keys-in", "treasury"]);
-    assert.equal(posts[0].text, "All 3 keys are in, from @Ari, @Cy and @Bo. The treasury is built from them, and any 2 keepers sign its payments together.");
+    assert.equal(posts[0].text, "All 3 keys are in, from @Ari, @Cy and @Bo. The treasury is built from them, and any 2 keepers approve its payments together.");
     assert.match(posts[1].text, /sets it up from the keepers' keys, and I'll post its address here once it's ready/);
     assert.deepEqual(keepersKeys(events, [A, B, C]), { [A]: key("a"), [C]: key("c"), [B]: key("b") });
     ({ posts } = step(record, cfg(events, { console: "https://keepers.example.org" })));

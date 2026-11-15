@@ -4,15 +4,16 @@
  * to the service.
  *
  *   1. HiveBot asks the service for each hive; the service's operator approves both.
- *   2. Each hive's keepers create their keys in the keeper console (a browser with a virtual passkey)
- *      and post them in the channel; members' plugins forward the channel, and the service builds
- *      each treasury by itself once the third key is in.
+ *   2. Each hive's keepers create their keeper passkeys in the keeper console (a browser with a
+ *      virtual passkey that supports PRF) and post their lines in the channel; members' plugins
+ *      forward the channel, and the service builds each v5 treasury by itself once the third line is
+ *      in, its counter issued by the host's issuer.
  *   3. The first hive's agent starts on the service. For the second, a keeper names the community's
  *      own node in the channel, and the node's worker links it to the service.
  *   4. A member chips in to each treasury; a proposal is approved in each channel, and each member's
  *      node is acknowledged by HiveBot.
  *   5. Each member asks the `hive` model; each agent asks the provider for a job; two keepers of each
- *      hive sign its payment at the hive's desk on the service, and the escrows hold the cap.
+ *      hive approve its payment at the hive's desk on the service, and the escrows hold the cap.
  *   6. The provider claims each job before its deadline, and the rest returns to each treasury.
  *
  * Needs what `test/rehearsal.ts` needs:
@@ -26,18 +27,20 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { regtestDeployment } from "@hive/ark";
 import { hex, localPath } from "@hive/kit";
-import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import { MeshAgents } from "../tools/agents.js";
 import { opsPaths } from "../tools/ops.js";
+import { issuerWallet } from "../tools/treasury-v5.js";
 import { hiveIdFor, startService } from "../tools/service.js";
 import {
   chromium,
+  approveFirstPayment,
   keeperDevice,
   openDesk,
   type Page,
   serveConsole,
-  signFirstPayment,
 } from "./support/keeper-console.js";
+import { sendOffchain } from "./support/treasury-sdk.js";
 import {
   ARKD,
   chat,
@@ -144,8 +147,8 @@ try {
     const devices = [
       await keeperDevice(browser, site.url, ARKD),
       await keeperDevice(browser, site.url, ARKD),
+      await keeperDevice(browser, site.url, ARKD),
     ];
-    const third = secp256k1.utils.randomSecretKey();
     hives.push({
       name,
       own,
@@ -154,7 +157,7 @@ try {
       bot,
       buzz: [0, 1, 2, 3].map(() => schnorr.utils.randomSecretKey()),
       devices,
-      keys: [devices[0]!.key, devices[1]!.key, hex(secp256k1.getPublicKey(third, true))],
+      keys: devices.map((d) => d.key) as [string, string, string],
       sent: [call],
     });
   }
@@ -169,6 +172,12 @@ try {
   const pub = (k: Uint8Array) => hex(schnorr.getPublicKey(k));
 
   // 2. The keepers HiveBot records, their keys in the channel, and the treasury the service builds.
+  // The host's issuer, which issues each hive's counter, holds a few thousand sats of the host's own.
+  const issuer = await issuerWallet(regtestDeployment());
+  if ((await issuer.getBalance()).available < 5_000) {
+    sendOffchain(await issuer.getAddress(), 20_000);
+    await until("the issuer's funds", async () => (await issuer.getBalance()).available >= 5_000, 60);
+  }
   for (const h of hives) {
     await forward(h, [
       signed(h.bot, h.channel, 9, "Keepers are set.", now() - 1100, [
@@ -367,7 +376,8 @@ try {
   await until(
     "the own node's job at its desk",
     async () =>
-      (await server.service.desk(server.service.registration(own.channel))).overview().payments.length > 0,
+      (await (await server.service.desk(server.service.registration(own.channel))).overview()).payments
+        .length > 0,
     60,
   );
   for (const h of hives) {
@@ -376,13 +386,14 @@ try {
     await openDesk(b.page, desk, h.hive);
     await openDesk(a.page, desk, h.hive);
   }
-  // Both hives' keepers sign in turn, interleaved, at the same service.
-  for (const [label, who, button] of [
-    ["keeper A", 0, "Check and sign"],
-    ["keeper B", 1, "Check and sign"],
-    ["keeper A again", 0, "Finish: sign once more"],
+  // Both hives' keepers approve in turn, interleaved, at the same service.
+  for (const [label, who] of [
+    ["keeper A", 0],
+    ["keeper B", 1],
   ] as const) {
-    const answers = await Promise.all(hives.map((h) => signFirstPayment(h.devices[who]!.page, button)));
+    const answers = await Promise.all(
+      hives.map((h) => approveFirstPayment(h.devices[who]!.page, "Check and approve")),
+    );
     step(label, { consoles: answers });
   }
   for (const h of hives) {
@@ -400,9 +411,8 @@ try {
     );
     await until(`the job open on the provider`, () => first(sellerLog, "job_open", { job_id: h.jobId }), 120);
   }
-  step("escrows funded and jobs open", {
-    treasuries: await Promise.all(hives.map((h) => coins(h.treasury!.script))),
-  });
+  const funded = await Promise.all(hives.map((h) => coins(h.treasury!.script)));
+  step("escrows funded and jobs open", { treasuries: funded });
 
   // 6. Work, receipts, and the claims.
   for (const h of hives) {
@@ -411,17 +421,19 @@ try {
     assert.deepEqual(served, [200, 200, 200]);
   }
   step("members' requests served");
-  for (const h of hives) {
+  for (const [i, h] of hives.entries()) {
+    const before = funded[i]!.reduce((n, v) => n + v, 0);
     const closed = await until(
       `${h.name}'s claim`,
       () => events(h.agentLog!).find((e) => e.event === "job_closed" && e.job_id === h.jobId && e.txid),
       PERIOD + 180,
     );
+    // The remainder lands beside the treasury coin, and the desk folds it in: the total is what counts.
     const held = await until(
       `the remainder back in ${h.name}`,
       async () => {
         const c = await coins(h.treasury!.script);
-        return c.includes(Number(closed.returned_sats)) ? c : null;
+        return c.reduce((n, v) => n + v, 0) >= before + Number(closed.returned_sats) ? c : null;
       },
       120,
     );
