@@ -1158,7 +1158,7 @@ export function apply(ctx) {
                 : h("ul", { style: list }, shown.map((p, i) => h(ProposalRow, { key: p.id, p, gov, me, first: i === 0 }))));
     }
 
-    /** Where keepers sign: the keeper console, opened on this hive's signing desk. */
+    /** Where keepers approve: the keeper console, opened on this hive's desk. */
     function consoleLink(state) {
         const desk = state?.keepersDesk?.desk;
         const page = state?.keepersDesk?.console ?? KEEPER_CONSOLE;
@@ -1170,7 +1170,7 @@ export function apply(ctx) {
         return h(Card, { title: "Jobs to fund", aside: state.funding.length ? h(Pill, { tone: "honey" }, `${state.funding.length} waiting`) : null },
             state.funding.length && link
                 ? h("div", { style: { marginBottom: "var(--space-4)" } },
-                    h(Well, { label: "Sign in the keeper console", value: link, copy: link }),
+                    h(Well, { label: "Approve in the keeper console", value: link, copy: link }),
                     h("p", { style: { ...p0, ...muted, ...small, marginTop: "var(--space-2)" } },
                         "Open it in your browser and unlock it with your passkey. It checks each job against the escrow's own terms before your passkey approves it, and any two keepers' approvals send the payment."))
                 : null,
@@ -1180,9 +1180,13 @@ export function apply(ctx) {
                     h("div", { style: { ...row, alignItems: "center" } },
                         h("strong", { style: tnum }, `${amount(j.capSats)} for ${modelName(j.model)}`),
                         h("span", { style: { ...muted, ...small } }, `deadline ${until(j.deadline)}`)),
+                    // With a desk, keepers approve in the console and the desk pays: the cap and the escrow are for
+                    // checking against what the console shows. Without one, someone sends the payment by hand.
                     h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
-                        h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: amount(j.capSats, true), copy: String(j.capSats), mono: false })),
-                        h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
+                        link
+                            ? h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Cap", value: amount(j.capSats, true), mono: false }))
+                            : h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: amount(j.capSats, true), copy: String(j.capSats), mono: false })),
+                        h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: link ? "Escrow" : "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
                     h("p", { style: { ...p0, ...muted, ...small } },
                         link
                             ? `For provider ${short(j.providerPk)}. Whatever the job does not use comes back to the treasury after the deadline.`
