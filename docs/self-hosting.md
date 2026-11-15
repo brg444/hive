@@ -65,9 +65,17 @@ downloads match the checksums their publishers list, which `setup.sh` carries fo
 names, and dependencies come at the versions the lockfiles name, with no install script run.
 
 The keys on the host are files, readable by their own user only: the delegate key, each agent's
-receipt key, and nothing that moves a treasury. A file whose mode lets other users read it is
+receipt key, the issuer's key, and nothing that moves a treasury. A file whose mode lets other users read it is
 refused. To keep them encrypted at rest as well, put the host on an encrypted disk, or hand the
 delegate key to the delegatee through systemd's encrypted credentials.
+
+Each hive's treasury is named by its counter, an asset the host issues for it from the issuer, a
+small wallet of the host's own whose key the service makes once in `.secrets/issuer/<network>.json`.
+The issuer sends the whole counter to the new treasury with 1,000 sats as its carrier, so it needs a
+few thousand sats before the first hive: the service names its address when it runs short. It holds
+only the host's own sats, never a treasury's. The treasury's payments go out through the Emulator,
+whose address the service takes from `BUZZ_EMULATOR_URL` on mainnet, the same one the delegatee is
+given.
 
 Mainnet stays off until you uncomment `BUZZ_MAINNET=enabled` in `hive.env` and restart the service.
 The Operator's key and exit delay and the Emulator's key are pinned in
@@ -203,38 +211,30 @@ keepers and the keys in its channel, before it announces the treasury.
 
 HiveBot then asks for keepers; three people react ✅, and the founder confirms them.
 
-### 2. The keepers' keys
+### 2. The keepers' passkeys
 
 Each keeper opens the keeper console at `https://<console host>/` on their own device, creates their
-key with their passkey, saves the encrypted backup to iCloud Drive or Google Drive with the
-passphrase kept elsewhere, and posts the line the console gives them in the channel. HiveBot
-acknowledges each key and says when all three are in.
+keeper passkey, and posts the line the console gives them in the channel. The passkey is the key, so
+it belongs in a password manager that syncs, such as iCloud Keychain or Google Password Manager, and
+there is nothing else to keep. HiveBot acknowledges each line and says when all three are in.
 
 ### 3. The treasury and the agent
 
 Members' plugins forward the channel to the service, which checks every event's signature and reads
-the keepers HiveBot recorded and the keys they posted. Once the third key is in, it builds the
-treasury from the three keys, in the order HiveBot confirmed the keepers, keeps none of them,
-registers the treasury's renewal with the delegatee, and starts the hive's agent node unless a keeper
-names the community's own. HiveBot posts the treasury's address, and the plugin shows it.
+the keepers HiveBot recorded and the lines they posted. Once the third line is in, it issues the
+hive's counter from the issuer, builds the treasury from the three passkeys in the order HiveBot
+confirmed the keepers, keeps none of them, registers the treasury's renewal with the delegatee, sends
+the whole counter to the treasury and checks that it arrived, and starts the hive's agent node unless
+a keeper names the community's own. HiveBot posts the treasury's address, and the plugin shows it.
 
-### 4. The signing desk
+### 4. The desk
 
-Every hive has its signing desk on the service, under `https://<service host>/c/<channel ID>`, the
-address the console asks for, and the plugin's Keepers tab links each keeper to the console with it
-filled in. Each keeper opens it once and unlocks it with their passkey, which shares the nonces their
-later signatures need and pins the treasury's address in that browser. Only a keeper reads the hive's
-payments at the desk: each read carries the keeper's signature, as starting or cancelling a payment
-does. A keeper who opens the desk
-later from another browser has none of the nonces the first one shared, so a payment paired with them
-there is cancelled by the other keeper and started again.
-
-The hive's listing, for discovery on Nostr, is written on the host and signed by the keepers at the
-same desk:
-
-```bash
-sudo -u hive pnpm ops listing <hive> --name "<hive name>" --purpose "<what the hive is for>"
-```
+Every hive has its desk on the service, under `https://<service host>/c/<channel ID>`, the address
+the console asks for, and the plugin's Keepers tab links each keeper to the console with it filled
+in. A keeper unlocks it with their passkey, which pins the treasury's address in that browser. Only a
+keeper reads the hive's payments at the desk: each read carries a signature by the keeper's Bitcoin
+key, as starting or cancelling a payment does. The desk also folds each chip-in and each escrow's
+remainder into the treasury coin as they arrive.
 
 ### 5. Chip-ins and the first proposal
 
@@ -253,16 +253,19 @@ The provider joins the hive's mesh, and the agent's `--allow-peer` names it. The
 asks the keepers to fund it. The plugin's Keepers tab shows the job waiting, with a link to the
 console.
 
-### 7. Two keepers sign
+### 7. Two keepers approve
 
 The first keeper opens the console, checks the job (the escrow is rebuilt from the job's terms and
-gives back to this treasury, and the amount fits what approved work has left) and signs. The console
-shows the key of the agent that signs the job's receipts, remembers it, and asks before it signs for
-a job that names another: a hive changes its agent node rarely, and says so in its channel. What
-approved work has left is the desk's count, which the console cannot check against the channel, so
-a keeper looks at the proposal there before signing. The second
-keeper does the same later, signing both remaining steps, and the first comes back once to finish.
-The desk then hands the payment to the delegatee, and the escrow holds exactly the job's cap.
+gives back to this treasury, and the amount fits what approved work has left) and approves it with
+their passkey, which starts the payment and gives it its number. The console shows the key of the
+agent that signs the job's receipts, remembers it, and asks before it approves a job that names
+another: a hive changes its agent node rarely, and says so in its channel. What approved work has
+left is the desk's count, which the console cannot check against the channel, so a keeper looks at
+the proposal there before approving. A second keeper does the same, at any time before the approvals
+lapse, ten minutes before the job's deadline at the latest. The desk then submits the payment
+through the Emulator, and the escrow holds exactly the job's cap. Payments go out in the order
+keepers started them; one cancelled or lapsed passes its number to the next, whose keepers approve it
+again.
 
 ### 8. The work, the claim and the return
 
@@ -274,16 +277,16 @@ signing.
 
 Two keepers can send the treasury's Bitcoin to an Arkade address: to move the hive to a new
 treasury or a new host, or to wind it down. They agree on the address and the amount in the hive's
-channel. One opens the console, enters both under Withdraw from the treasury and signs; the other
+channel. One opens the console, enters both under Withdraw from the treasury and approves; another
 reads the same address and amount in their own console, which works out what the address pays
-itself, and signs both remaining steps; the first finishes. A withdrawal waits at most 23 hours for
-its second signature, one is under way at a time, and the address must be on the hive's Operator.
+itself, and approves. A withdrawal's approvals lapse after 23 hours, and the address must be on the
+hive's Operator.
 Nothing in the console judges the destination. That is the keepers' own decision, which is why it
 takes two of them.
 
 ## A keeper who trusts no host with the console
 
-The console holds a keeper's key while it is unlocked, and the host serves the console. The host's
+The console is where a keeper reads what their passkey approves, and the host serves the console. The host's
 check compares what is served with what was built every five minutes, and anyone can do the same
 from a checkout at the host's commit:
 
@@ -300,9 +303,10 @@ node keeper/build.mjs dist/keeper --mainnet
 node keeper/serve.mjs dist/keeper        # http://localhost:8788
 ```
 
-A passkey belongs to the address it was made at, so this console gets a passkey of its own: the
-keeper restores their key there from its backup file. The hive's desk takes calls from a console
-served on the keeper's own machine.
+A passkey belongs to the address it was made at, and the treasury names each keeper's site, so a
+keeper who wants their own console makes their keeper passkey there, before the treasury is built,
+and approves from there. The hive's desk takes calls from a console served on the keeper's own
+machine.
 
 ## Trying it locally first
 

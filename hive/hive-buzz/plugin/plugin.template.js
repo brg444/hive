@@ -30,7 +30,7 @@ const LOOKBACK_DAYS = 90;
 
 // Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
 const INSTALL = /*__INSTALL__*/null;
-// The keeper console, where keepers create their treasury keys and sign payments, when built with --console.
+// The keeper console, where keepers create their keeper passkeys and approve payments, when built with --console.
 const KEEPER_CONSOLE = /*__CONSOLE__*/null;
 // The repository's documentation as one Markdown file, for the Hive guide, when built with --docs.
 const HIVE_DOCS = /*__DOCS__*/null;
@@ -657,7 +657,7 @@ export function apply(ctx) {
         const { state, gov } = snapshot;
         return [
             `This hive: ${state?.name ?? HIVE_NAME}.`,
-            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and sign a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their treasury key. ${gov.discussionSeconds ? `Discussion runs ${Math.round(gov.discussionSeconds / 60)} minutes on this test hive.` : `Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.`}` : "Its keepers are not set yet.",
+            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their keeper key. ${gov.discussionSeconds ? `Discussion runs ${Math.round(gov.discussionSeconds / 60)} minutes on this test hive.` : `Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.`}` : "Its keepers are not set yet.",
             KEEPER_CONSOLE ? `The keeper console is at ${KEEPER_CONSOLE}.` : null,
             INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings. That repository is also Hive's source and documentation.` : null,
             state?.chipIn?.lightningAddress ? `Its Lightning address is ${state.chipIn.lightningAddress}.` : null,
@@ -666,7 +666,7 @@ export function apply(ctx) {
     }
     ctx.agents.addTool({
         name: "hive_guide",
-        description: `How the ${HIVE_NAME} hive works: proposals and approvals, allowances, keepers, keys and their backups, payments and chip-ins, with this hive's own settings. Read it before answering any question about the hive.`,
+        description: `How the ${HIVE_NAME} hive works: proposals and approvals, allowances, keepers and their passkeys, payments and chip-ins, with this hive's own settings. Read it before answering any question about the hive.`,
         inputSchema: { type: "object", properties: {} },
         async call() {
             return `${hiveFacts()}\n\n${HOW_IT_WORKS}`;
@@ -1172,7 +1172,7 @@ export function apply(ctx) {
                 ? h("div", { style: { marginBottom: "var(--space-4)" } },
                     h(Well, { label: "Sign in the keeper console", value: link, copy: link }),
                     h("p", { style: { ...p0, ...muted, ...small, marginTop: "var(--space-2)" } },
-                        "Open it in your browser and unlock it with your passkey. It checks each job against the escrow's own terms before you sign, and any two keepers' signatures send the payment."))
+                        "Open it in your browser and unlock it with your passkey. It checks each job against the escrow's own terms before your passkey approves it, and any two keepers' approvals send the payment."))
                 : null,
             state.funding.length === 0
                 ? h(Empty, null, "No job is waiting for funding.")
@@ -1198,10 +1198,10 @@ export function apply(ctx) {
                     h(Hex, { size: 14, filled: Boolean(gov.keys?.[k]) }), h("code", { style: small }, short(k, 8, 4)),
                     h("span", { style: { ...small, ...muted } }, `${k === me ? "you, " : ""}${gov.keys?.[k] ? "key in" : "no key yet"}`)))),
             me && gov.keepers.includes(me) && !gov.keys?.[me]
-                ? h("p", { style: { ...p0, ...small } }, "Create your treasury key in the keeper console", KEEPER_CONSOLE ? [" at ", h("code", { key: "c" }, KEEPER_CONSOLE)] : null,
+                ? h("p", { style: { ...p0, ...small } }, "Create your keeper passkey in the keeper console", KEEPER_CONSOLE ? [" at ", h("code", { key: "c" }, KEEPER_CONSOLE)] : null,
                     ", then post the line it gives you, starting with “Hive keeper key:”, in the hive's channel.")
                 : null,
-            h("p", { style: { ...p0, ...muted, ...small } }, `Keepers approve proposals with ✅ in the channel, and each payment from the treasury with their own key in the keeper console. Any ${gov.threshold} of them sign together.`));
+            h("p", { style: { ...p0, ...muted, ...small } }, `Keepers approve proposals with ✅ in the channel, and each payment from the treasury with their passkey in the keeper console. Any ${gov.threshold} of them approve together.`));
     }
 
     function Jobs({ state }) {

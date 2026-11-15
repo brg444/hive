@@ -1,29 +1,30 @@
-// What the keeper console does with the key once the keeper has unlocked it: check a payment against
-// the Operator and the job's own terms, then sign it, and nothing else. The checks and the signing
-// are the hive's own code (packages/steward), bundled into the console, so the console decides for
-// itself; the signing desk only carries messages between keepers.
-import { Arkd, deriveAccount, jobEscrow, MAINNET_PINS, parseArkAddress, sendMessages, treasuryArguments } from "../../../packages/ark/src/index.ts";
-import { checkKeeperWithdrawal, checkPayment, keeperView } from "../../../packages/steward/src/policy.ts";
-import { deskAuthDigest, nonceBatch, signOver, signShared, withdrawalId } from "../../../packages/steward/src/keeper.ts";
+// What the keeper console checks before the keeper's passkey approves anything: the treasury the
+// keepers' keys build, the escrow a job's terms build, the address a withdrawal pays, and the exact
+// message the contract will rebuild. The checks are the hive's own code (packages/ark and
+// packages/treasury), bundled into the console, so the console decides for itself; the desk only
+// carries approvals between keepers and the treasury.
+import { Arkd, instantiate, jobEscrow, MAINNET_PINS, parseArkAddress } from "../../../packages/ark/src/index.ts";
+import { deskAuthDigest, withdrawalId } from "../../../packages/steward/src/keeper.ts";
+import { keeperSecret, payMessage, TREASURY_ARTIFACT, treasuryArguments } from "../../../packages/treasury/src/index.ts";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 
 const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 const unhex = (s) => Uint8Array.from(s.match(/../g) ?? [], (b) => parseInt(b, 16));
 
-/**
- * The Operator as the console reads it: its keys and terms straight from the Operator, and the
- * delegatee's keys (the treasury is built with them) through the hive's desk, which relays them
- * because the delegatee serves no browser. A desk that relayed other keys would describe another
- * treasury, whose address the console compares with the hive's before anything is signed.
- */
 /** The console built for real funds (`build.mjs --mainnet`) knows mainnet's Operator itself. */
 export const MAINNET = typeof __HIVE_MAINNET__ !== "undefined" && __HIVE_MAINNET__ === true;
 const MAINNET_ARKD = "https://arkade.computer";
 
+/**
+ * The Operator as the console reads it: its keys and terms straight from the Operator, and the
+ * delegatee's keys (the treasury is built with them) through the hive's desk, which relays them
+ * because the delegatee serves no browser. A desk that relayed other keys would describe another
+ * treasury, whose address the console compares with the hive's before anything is approved.
+ */
 export async function connection(desk, hive) {
     // The mainnet console reads the Operator at its own address and holds it to the pinned keys,
     // whatever the desk says: a dishonest host cannot slip in an Operator or an Emulator of its own.
-    if (MAINNET && hive.network !== "bitcoin") throw new Error("This console signs for mainnet hives only.");
+    if (MAINNET && hive.network !== "bitcoin") throw new Error("This console approves for mainnet hives only.");
     if (!MAINNET && hive.network === "bitcoin") throw new Error("This is the test networks' console: open your hive's desk in the mainnet console.");
     const arkd = new Arkd(MAINNET ? MAINNET_ARKD : hive.deployment.arkdUrl);
     const operator = await arkd.info();
@@ -43,28 +44,50 @@ export async function connection(desk, hive) {
     };
 }
 
-/** The treasury the hive's keepers' keys build on this Operator, as the script its coins sit at. */
-export function treasuryScriptOf(conn, hive) {
-    return deriveAccount(conn, "treasury", treasuryArguments(keeperView(hive.keepers, hive.treasury.terms).treasuryTerms)).pkScript;
+/** The treasury's terms as the desk describes them, for the contract's arguments. */
+export function termsOf(hive) {
+    const t = hive.treasury.terms;
+    return {
+        keepers: hive.passkeys,
+        counter: t.counter,
+        delegateKey: t.delegateKey,
+        renewalWindowSeconds: t.renewalWindowSeconds,
+        maxFeeSats: t.maxFeeSats,
+        exitDelaySeconds: t.exitDelaySeconds,
+    };
 }
 
 /**
- * What the console can say about a job before anyone plans its payment: whether the address is the
+ * The treasury the hive's keepers' keys build on this Operator, as the script its coins sit at. The
+ * keepers' Bitcoin keys are the ones the hive lists, its delegate key the delegatee's own, and its exit
+ * delay the Operator's: a desk that changed any of them describes another treasury.
+ */
+export function treasuryScriptOf(conn, hive) {
+    const terms = termsOf(hive);
+    if (terms.keepers.map((k) => k.bitcoinKey).join() !== hive.keepers.join()) throw new Error("The desk names the keepers' keys twice, differently.");
+    if (terms.delegateKey !== conn.keys.delegate) throw new Error("The treasury names another delegatee than the hive's.");
+    if (terms.exitDelaySeconds !== conn.operator.unilateralExitDelay) throw new Error("The treasury's exit delay is not the Operator's.");
+    return instantiate(TREASURY_ARTIFACT, treasuryArguments(terms), conn.keys).pkScript;
+}
+
+/**
+ * What the console can say about a job before anyone starts its payment: whether the address is the
  * escrow the job's terms build, and whether that escrow gives back to this hive's treasury.
  */
 export function escrowFacts(conn, hive, request) {
-    let address = null;
-    try { address = jobEscrow(conn, request.params).address; } catch { /* malformed terms */ }
+    let escrow = null;
+    try { escrow = jobEscrow(conn, request.params); } catch { /* malformed terms */ }
     return {
-        escrowMatches: address !== null && address === request.address.trim().toLowerCase() && request.params.jobId === request.jobId
+        escrowMatches: escrow !== null && escrow.address === request.address.trim().toLowerCase() && request.params.jobId === request.jobId
             && request.params.providerPk === request.providerPk && request.params.deadline === request.deadline,
         returnsHere: request.params.treasuryProgram === hive.treasury.script.slice(4),
+        program: escrow ? escrow.pkScript.slice(4) : null,
     };
 }
 
 /**
  * The script an Arkade address pays, worked out here from the address the keeper reads: a
- * withdrawal is signed for this script and no other. An address on another Operator is refused.
+ * withdrawal is approved for this script and no other. An address on another Operator is refused.
  */
 export function withdrawalScript(conn, address) {
     let decoded;
@@ -74,52 +97,27 @@ export function withdrawalScript(conn, address) {
     return decoded.pkScript;
 }
 
-/** The keeper's public key, as the hive lists it. */
+/** The keeper's Bitcoin key, from the passkey's PRF output: the key the hive lists, compressed. */
+export const bitcoinSecret = (prf) => keeperSecret(prf);
 export const publicKeyOf = (secret) => hex(secp256k1.getPublicKey(secret, true));
 
-/** A fresh batch of nonces to share, and the secrets the console keeps until it signs. */
-export function freshNonces(secret, count = 32) {
-    return nonceBatch(secret, count);
-}
-
 /** A request to the desk, signed so nobody else can start or cancel a payment in this keeper's name. */
-export function deskAuth(secret, hiveName, action, jobId, at = Math.floor(Date.now() / 1000)) {
-    const digest = deskAuthDigest(hiveName, action, jobId, at);
+export function deskAuth(secret, hiveName, action, id, at = Math.floor(Date.now() / 1000)) {
+    const digest = deskAuthDigest(hiveName, action, id, at);
     return { keeper: publicKeyOf(secret), at, signature: hex(schnorr.sign(digest, secret)) };
 }
 
-/** The keeper's signature over the hive's listing. */
-export function signListing(secret, listingId) {
-    return hex(schnorr.sign(unhex(listingId), secret));
-}
-
 /**
- * Checks one session of a payment and returns its messages, recomputed here: the console never
- * signs a message it was handed. Throws, with the check's code, when anything is off.
+ * The message the keeper's passkey signs, rebuilt here: the hive's counter, the payment's number, the
+ * amount, the lapse time and the program the console worked out itself from what the keeper read.
  */
-export async function checkSession(conn, hive, session, shown, remainingSats) {
-    const view = keeperView(hive.keepers, hive.treasury.terms);
-    const treasury = hive.treasury.script;
-    // The keeper approves what the console showed them, a job's funding or a withdrawal's address and
-    // amount; the session must carry exactly it.
-    const now = Math.floor(Date.now() / 1000);
-    const checked = session.purpose.kind === "withdrawal"
-        ? await checkKeeperWithdrawal(view, conn, session, { withdrawal: shown }, now)
-        : await checkPayment(view, conn, session, { request: shown, remainingSats }, now);
-    // The treasury these keys build must be the hive's, as its channel and listing name it.
-    const plan = session.purpose.plan;
-    if (!plan.coins.every((c) => c.script === treasury)) throw Object.assign(new Error("These coins are not the hive's treasury."), { code: "NOT_OUR_TREASURY" });
-    return checked;
+export function approvalMessage(hive, payment, program) {
+    return payMessage(hive.treasury.terms.counter, {
+        left: BigInt(payment.left),
+        amount: BigInt(payment.amountSats),
+        validUntil: payment.validUntil,
+        program: unhex(program),
+    });
 }
 
-/** Signs a session first, over the other keeper's shared nonces: the nonces and partials to send. */
-export function signFirst(pairSession, secret, messages) {
-    return signOver(pairSession, secret, messages);
-}
-
-/** Signs a session second, with this keeper's own shared nonces; their secrets must be in `kept`. */
-export function signSecond(pairSession, secret, messages, kept) {
-    return signShared(pairSession, secret, messages, kept);
-}
-
-export { sendMessages, withdrawalId };
+export { hex, unhex, withdrawalId };

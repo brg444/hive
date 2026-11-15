@@ -1,17 +1,18 @@
 /**
  * The whole of a keepers' hive on a local regtest stack, end to end, as the live test will run it:
  *
- *   1. Two keepers create their keys in the keeper console (a browser with a virtual passkey); the
- *      third keeper's key is made here. The hive's treasury is built from the three keys.
+ *   1. Three keepers create their keeper passkeys in the keeper console (a browser with a virtual
+ *      passkey that supports PRF). The hive's v5 treasury is built from their lines: the host issues
+ *      its counter, and the delegatee watches it for renewal.
  *   2. A member chips in: the stack's wallet sends to the treasury's address.
  *   3. The channel, as members' plugins forward it to hive-api: a proposal, two keepers' ✅, and the
  *      member's node. hive-api works out the governance and writes the agent's members file.
  *   4. The member asks the `hive` model on their own MeshLLM node; the hive's agent asks a provider
  *      for a job and writes the funding request, with the escrow's terms.
- *   5. Two keepers sign the payment in their consoles through the signing desk, in turn; the desk
- *      hands it to the delegatee, and the escrow holds the cap.
+ *   5. Two keepers approve the payment in their consoles at the approvals desk, in either order; the
+ *      desk folds the chip-in into the treasury coin, pays the escrow, and the escrow holds the cap.
  *   6. The member's requests are served and receipted; the provider claims before the deadline, and
- *      the rest returns to the treasury.
+ *      the rest returns to the treasury, where the desk folds it into the treasury coin.
  *
  * Needs the regtest stack (arkd on 7070, the emulator on 7073), the delegatee on 7090
  * (`tools/delegatee.sh`), MeshLLM 0.79, a small GGUF model, the pay-arkade plugin and worker built,
@@ -26,16 +27,19 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { regtestDeployment } from "@hive/ark";
 import { hex, localPath, repositoryRoot } from "@hive/kit";
-import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
-import { startDesk } from "../tools/desk.js";
+import { type Keeper, keeperOf } from "@hive/treasury";
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { startApprovalDesk } from "../tools/approvals-desk.js";
 import { initHive, opsPaths } from "../tools/ops.js";
+import { issuerWallet } from "../tools/treasury-v5.js";
 import {
+  approveFirstPayment,
   chromium,
   keeperDevice,
   openDesk,
   serveConsole,
-  signFirstPayment,
 } from "./support/keeper-console.js";
+import { sendOffchain } from "./support/treasury-sdk.js";
 import {
   ARKD,
   chat as ask,
@@ -73,18 +77,24 @@ const step = (name: string, detail: Record<string, unknown> = {}) => {
 
 const site = await serveConsole();
 const browser = await chromium.launch();
-let deskServer: Awaited<ReturnType<typeof startDesk>> | null = null;
+let deskServer: Awaited<ReturnType<typeof startApprovalDesk>> | null = null;
 try {
-  // 1. Keys, and the treasury they build.
+  // 1. Passkeys, and the treasury they build.
   const a = await keeperDevice(browser, site.url, ARKD);
   const b = await keeperDevice(browser, site.url, ARKD);
-  const third = secp256k1.utils.randomSecretKey();
-  const keepers = [a.key, b.key, hex(secp256k1.getPublicKey(third, true))] as [string, string, string];
+  const c = await keeperDevice(browser, site.url, ARKD);
+  const keepers = [a, b, c].map((d) => keeperOf(d.key)) as [Keeper, Keeper, Keeper];
   const deployment = regtestDeployment();
-  const record = await initHive(hive, { network: "regtest", deployment, keepers }, {});
-  step("treasury built from the keepers' keys", {
+  // The host's issuer, which issues each hive's counter, holds a few thousand sats of the host's own.
+  const issuer = await issuerWallet(deployment);
+  if ((await issuer.getBalance()).available < 5_000) {
+    sendOffchain(await issuer.getAddress(), 20_000);
+    await until("the issuer's funds", async () => (await issuer.getBalance()).available >= 5_000, 60);
+  }
+  const record = await initHive(hive, { network: "regtest", deployment, passkeys: keepers }, {});
+  step("treasury built from the keepers' passkeys", {
     address: record.treasuryAddress,
-    keepers: keepers.map((k) => k.slice(0, 10)),
+    counter: record.passkeys?.counter.assetId,
   });
 
   // 2. A chip-in, from the stack's own wallet.
@@ -245,8 +255,8 @@ try {
     signed(buzz[1]!, channel, 7, "✅", now() - 290, [["e", proposal.id]]),
     claim,
     signed(buzz[0]!, channel, 7, "✅", now() - 50, [["e", claim.id]]),
-    signed(buzz[0]!, channel, 9, `Hive keeper key: ${keepers[0]}`, now() - 900),
-    signed(buzz[1]!, channel, 9, `Hive keeper key: ${keepers[1]}`, now() - 890),
+    signed(buzz[0]!, channel, 9, a.line, now() - 900),
+    signed(buzz[1]!, channel, 9, b.line, now() - 890),
   ];
   const posted = await http(`${api}/hive/v1/channel`, { events: forwarded });
   assert.equal(posted.status, 200, JSON.stringify(posted.body));
@@ -274,27 +284,23 @@ try {
   );
   step("funding requested", { job: String(requested.job_id).slice(0, 12), cap: requested.cap_sats });
 
-  deskServer = await startDesk(
-    hive,
-    {
-      agentLog,
-      governance,
-      port: deskPort,
-      tickMs: 5000,
-      deadlineMarginSeconds: 60,
-      minimumValiditySeconds: 60,
-    },
-    {},
-  );
+  deskServer = await startApprovalDesk(hive, {
+    agentLog,
+    governance,
+    port: deskPort,
+    tickMs: 5000,
+    deadlineMarginSeconds: 60,
+    minimumValiditySeconds: 60,
+  });
   await openDesk(b.page, deskUrl, hive);
   await openDesk(a.page, deskUrl, hive);
-  step("keeper A", { console: await signFirstPayment(a.page, "Check and sign") });
-  step("keeper B", { console: await signFirstPayment(b.page, "Check and sign") });
-  step("keeper A again", { console: await signFirstPayment(a.page, "Finish: sign once more") });
+  step("keeper A", { console: await approveFirstPayment(a.page, "Check and approve") });
+  step("keeper B", { console: await approveFirstPayment(b.page, "Check and approve") });
   const jobId = String(requested.job_id);
   await until("the payment executed", () => deskServer?.desk.payment(jobId)?.status === "done", 300);
   await until("the job open on the agent", () => first(agentLog, "job_open", { job_id: jobId }), 120);
   await until("the job open on the provider", () => first(sellerLog, "job_open", { job_id: jobId }), 120);
+  const fundedTreasury = (await coins(record.treasuryScript)).reduce((n, v) => n + v, 0);
   step("escrow funded and job open", { treasury: await coins(record.treasuryScript) });
 
   // 6. Work, receipts, and the claim.
@@ -308,11 +314,12 @@ try {
     PERIOD + 180,
   );
   step("provider claimed", { paid: closed.paid_sats, returned: closed.returned_sats });
+  // The remainder lands beside the treasury coin, and the desk folds it in: the total is what counts.
   const treasuryAfter = await until(
     "the remainder back in the treasury",
     async () => {
       const held = await coins(record.treasuryScript);
-      return held.includes(Number(closed.returned_sats)) ? held : null;
+      return held.reduce((n, v) => n + v, 0) >= fundedTreasury + Number(closed.returned_sats) ? held : null;
     },
     120,
   );

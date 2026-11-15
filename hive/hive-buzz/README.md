@@ -177,31 +177,28 @@ sample data, marked as such, with addresses that no wallet accepts.
 
 ## The keeper console
 
-`keeper/` is where keepers create their treasury key and sign the hive's payments. The key is
-made on the keeper's own device, kept there encrypted under their passkey (WebAuthn's PRF
-extension), and backed up to a file encrypted with a passphrase they choose. The file goes through
-the system's own save sheet, so a keeper can put it in iCloud Drive or Google Drive without the
-page ever signing in anywhere: a save dialog on desktop Chrome and Edge, Save to Files from the
-share sheet on phones and Safari, and a plain download elsewhere. It gives the keeper the line to
-post in the hive's channel, `Hive keeper key: <key>`, which ties the key to their Buzz identity.
+`keeper/` is where keepers create their keeper passkey and approve the hive's payments. The
+passkey is the keeper's key: its own P-256 key approves payments, which the treasury's covenant
+checks itself, and through WebAuthn's PRF extension it gives the console a secret from which the
+keeper's Bitcoin key is derived for each sitting. Kept in a password manager that syncs, it is on
+the keeper's other devices too, and nothing secret is ever stored in the browser. The console gives
+the keeper the line to post in the hive's channel, `Hive keeper key: <Bitcoin key> <passkey key>
+<site>`, which ties the passkey to their Buzz identity.
 
-To sign, a keeper opens the hive's signing desk in the console, on the Hive service or from
-`pnpm ops desk` on a host of its own, and unlocks the key
-with their passkey for one sitting. The console shares nonces for later signatures, keeping their
-secret halves on the device under the same passkey and deleting each before the signature that uses
-it. For each job waiting, it rebuilds the escrow from the job's terms with the hive's own code,
-checks that it gives back to this hive's treasury, that the amount fits what approved work has left
-and that every coin is the treasury's and lasts long enough, then signs only the messages it computed
-itself. The page talks to the desk and the Arkade Operator only, and sends them signatures and public
-nonces, never the key. It shows the key of the agent that signs a job's receipts, remembers it, and
-asks before signing for a job that names another. What approved work has left is the desk's count:
-the console cannot check it against the channel, so a keeper looks at the proposal there.
+To approve, a keeper opens the hive's desk in the console, on the Hive service or from
+`pnpm ops desk` on a host of its own, and unlocks it with their passkey for one sitting. For each job
+waiting, the console rebuilds the escrow from the job's terms with the hive's own code, checks that it
+gives back to this hive's treasury and that the amount fits what approved work has left, rebuilds the
+exact message the covenant checks (the payment's number, amount, recipient and lapse time) and asks
+the passkey to sign that. The page talks to the desk and the Arkade Operator only. It shows the key
+of the agent that signs a job's receipts, remembers it, and asks before approving a job that names
+another, and it never approves one job under two payment numbers while the first approval can still
+pay. What approved work has left is the desk's count: the console cannot check it against the
+channel, so a keeper looks at the proposal there.
 
 Two keepers can also withdraw from the treasury to an Arkade address on the hive's Operator, to
-move a hive or wind it down. One enters the address and the amount and signs; the other reads both
-in their own console, which works out what the address pays itself, and signs. A keeper who signed
-a payment that lapsed or was cancelled signs no other for that job, so the desk plans the next one
-around them, and the console does not offer them one that would be refused.
+move a hive or wind it down. One enters the address and the amount and approves; another reads both
+in their own console, which works out what the address pays itself, and approves.
 
 ```bash
 node keeper/build.mjs dist/keeper [--mainnet]   # index.html and console.js, the hive's checks bundled in
@@ -212,17 +209,18 @@ node keeper/serve.mjs dist/keeper               # the console from your own mach
 The build is the same byte for byte from the same commit, and the page names its script by hash,
 so a browser runs `console.js` only as that build made it. `verify.mjs` compares what a host serves
 with what the checkout builds. A keeper who wants no host between them and their key serves the
-console themselves with `serve.mjs` and restores their key there from its backup; the desk takes
-calls from a console on the keeper's own machine. Reads of a hive's payments at the desk carry the
-keeper's signature, so the desk shows them to keepers only.
+console themselves with `serve.mjs` and makes their keeper passkey there: the treasury names each
+keeper's site, and the desk takes calls from a console on the keeper's own machine. Reads of a hive's
+payments at the desk carry the keeper's signature, so the desk shows them to keepers only.
 
 The repo's `Demo` workflow publishes it on GitHub Pages at `/keeper/`, for test networks; a hive's
-host serves the `--mainnet` build for real funds. A passkey belongs to one web address, so keys made
-on one console stay with it. `test/keeper.test.mjs` covers the key handling, and
-`node test/keeper-browser.mjs` runs the page in Chromium with a virtual passkey: creating a key,
-saving its backup, keeping it across a reload and restoring it on another device. The repository's
-`test/keeper-console-e2e.ts` has two keepers sign a payment and a withdrawal in their consoles, and
-`test/rehearsal-service.ts` runs two whole hives on a Hive service on regtest.
+host serves the `--mainnet` build for real funds. A passkey belongs to one web address, so a
+passkey made on one console stays with it. `test/keeper.test.mjs` covers the line keepers post, and
+`node test/keeper-browser.mjs` runs the page in Chromium with a virtual passkey: creating the keeper
+passkey, keeping it across a reload and finding it again once the browser forgot it. The
+repository's `test/keeper-console-e2e.ts` has three keepers make their passkeys and two of them
+approve a payment and a withdrawal in their consoles on regtest, and `test/rehearsal-service.ts`
+runs two whole hives on a Hive service on regtest.
 
 ## The hive's bot
 

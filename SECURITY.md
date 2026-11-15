@@ -14,29 +14,39 @@ A fork that runs a host for others should say here who answers reports about tha
 
 ## What each part is trusted with
 
-**The keepers.** Three keys, made in each keeper's own console and kept on their device behind a
-passkey. Any two fund a job or withdraw from the treasury; one alone moves nothing. Two keepers who
-agree can send the treasury anywhere, and nothing in the code stops them: that is what a 2-of-3
-treasury is.
+**The keepers.** Three passkeys, one per keeper, made in the keeper console and kept in each
+keeper's own password manager. The treasury's covenant checks each keeper's approval itself, as a
+P-256 signature over the payment's number, amount, recipient and lapse time, so any two keepers fund
+a job or withdraw from the treasury and one alone moves nothing. Two keepers who agree can send the
+treasury anywhere, and nothing in the code stops them: that is what a 2-of-3 treasury is. A keeper
+who loses their passkey, with no synced copy, loses their part of the treasury, including the Bitcoin
+key it derives for the exit; the other two still move funds.
 
 **The Operator and the Emulator.** Ark Labs' services co-sign every spend of the treasury and of
 each escrow. On mainnet their keys are pinned in `packages/ark/src/deployment.ts`, and a console
 refuses a desk that names others. They cannot move funds on their own; if they stop, funds leave
 by the exit path, for which this repository has no tooling yet.
 
-**The host.** It holds no key that moves a treasury. It carries the keepers' signatures between
-their consoles, forwards signed payments to the delegatee, and holds the delegatee's delegate key,
-which renews the treasury's coins and cannot spend them elsewhere. A dishonest or broken host can
-do these things:
+**The host.** It holds no key that moves a treasury. It collects the keepers' approvals at the desk
+and submits each payment once two are in, and it holds the delegatee's delegate key, the only
+cosigner the treasury's renewal accepts, which renews the treasury's coins and cannot spend them
+elsewhere. It also issues each hive's counter from an issuer wallet of its own and sends the whole
+supply to the treasury, after which the treasury is the only holder of the counter and the issuer has
+no further part. A dishonest or broken host can do these things:
 
-- Serve a keeper console other than the one in this repository. The console is where a key is
-  unlocked, so this is the host's one way to a keeper's key. The build is reproducible, the page
-  names its script by hash, `keeper/verify.mjs` compares a host's copy with a checkout's build,
-  and a keeper can serve the console from their own machine with `keeper/serve.mjs`.
+- Serve a keeper console other than the one in this repository. The console is where a keeper reads
+  what their passkey approves, so a console that showed one payment and asked the passkey for another
+  is the host's one way to a keeper's approval. The build is reproducible, the page names its script
+  by hash, `keeper/verify.mjs` compares a host's copy with a checkout's build, and a keeper can serve
+  the console from their own machine with `keeper/serve.mjs`; a passkey belongs to the site it was
+  made on, and the treasury names each keeper's site, so a keeper who serves their own console
+  approves from there.
+- Hold approvals back, or submit them late. An approval pays only its own payment, once, and only
+  until it lapses.
 - Report a budget that is not the channel's. The console checks a payment's escrow, coins and
   amount itself, and holds mainnet payments under a fixed ceiling, yet what approved work has left
   comes from the desk. Keepers read the proposal in the channel before they sign.
-- Withhold: refuse to carry signatures, stop renewing, or go away. The keepers' keys are not on it,
+- Withhold: refuse to carry approvals, stop renewing, or go away. The keepers' keys are not on it,
   and its state is in the backups it writes; see [Running Hive](docs/self-hosting.md) for a restore.
 - Approve a request for a hive that did not come from the community's HiveBot. The operator names
   HiveBot's key from the channel when approving, and HiveBot checks the hive is its own before it
@@ -50,7 +60,7 @@ hive has answered in a bounded space of their own.
 
 **The agent.** Each hive's agent node holds a receipt key. It can pay a job's provider up to the
 cap the keepers funded for that job, and nothing more. A keeper's console shows the agent's key,
-remembers it, and asks before signing for a job that names another. On a host, every hive's agent
+remembers it, and asks before approving a job that names another. On a host, every hive's agent
 node runs as the same user as the service; a community that wants its agent apart runs its own.
 
 **A provider.** It is paid what the agent's latest receipt says, up to the job's cap, and the rest
@@ -60,6 +70,8 @@ the providers it pays for that reason.
 
 ## What is not covered
 
-The escrow and treasury scripts have had no formal review. The exit path has no tooling. A keeper
-cannot be replaced without building a new treasury and withdrawing to it. The flow has run end to
+The escrow and treasury scripts have had no formal review. The exit path has no tooling: the exit
+leaves are MuSig2 keys over the keepers' passkey-derived Bitcoin keys, and nothing here signs with
+them yet. A keeper cannot be replaced without building a new treasury and withdrawing to it. The v5
+treasury does not yet sign the hive's directory listing. The flow has run end to
 end on regtest and in pieces on mainnet, never whole on mainnet.

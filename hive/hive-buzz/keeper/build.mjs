@@ -40,11 +40,11 @@ await build({
     inject: [join(here, "shims/buffer.mjs")],
     nodePaths: [join(root, "node_modules"), join(here, "../node_modules")],
     define: { "process.env": "{}", "import.meta.dirname": '"/"', __HIVE_MAINNET__: process.argv.includes("--mainnet") ? "true" : "false" },
-    alias: Object.fromEntries(["kit", "ark", "steward", "protocol", "hive", "agent", "provider"].map((p) => [`@hive/${p}`, join(root, `packages/${p}/src/index.ts`)])),
+    alias: Object.fromEntries(["kit", "ark", "steward", "protocol", "hive", "agent", "provider", "treasury"].map((p) => [`@hive/${p}`, join(root, `packages/${p}/src/index.ts`)])),
     logLevel: "warning",
 });
-const TEST_NOTE = "This console is for test networks. Keys made here are for trying Hive; mainnet keys get a console of their own.";
-const MAINNET_NOTE = "This console signs for real Bitcoin. Keep your backup file and its passphrase apart, and sign only payments you have checked.";
+const TEST_NOTE = "This console is for test networks. Passkeys made here are for trying Hive; mainnet hives get a console of their own.";
+const MAINNET_NOTE = "This console approves payments of real Bitcoin. Keep your passkey in a password manager that syncs, and approve only payments you have checked.";
 const page = readFileSync(join(here, "index.html"), "utf8");
 if (!page.includes(TEST_NOTE)) throw new Error("the console's network note moved; update build.mjs");
 const LOCAL = " http://127.0.0.1:* http://localhost:*";

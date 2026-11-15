@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@arkade-os/sdk": "0.5.0-rc.18",
+    "@arkade-os/sdk-0.5.6": "npm:@arkade-os/sdk@0.5.6",
     "@arkade-os/swap": "0.0.24",
     "@biomejs/biome": "2.5.14",
     "@hive/agent": "workspace:*",
@@ -43,6 +44,7 @@
     "@hive/protocol": "workspace:*",
     "@hive/provider": "workspace:*",
     "@hive/steward": "workspace:*",
+    "@hive/treasury": "workspace:*",
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1",
     "@scure/btc-signer": "2.0.1",

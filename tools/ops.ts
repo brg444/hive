@@ -141,10 +141,21 @@ import {
 } from "@hive/provider";
 import { approveRequest, approveWithdrawal, writeStewardConfig } from "@hive/steward";
 import { StewardClient, type StewardEndpoint } from "@hive/steward/client";
+import { counterOf, type Keeper } from "@hive/treasury";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { type HiveRoutes, type HostedHive, startHiveHost, startHivePage } from "../app/server.js";
 import { handleStewardRequest } from "../packages/steward/src/service.js";
 import { freePort, type Service, startService } from "./services.js";
+import {
+  checkEmulator,
+  counterHome,
+  fundWithCounter,
+  issueCounter,
+  type PasskeyTreasury,
+  v5Account,
+  v5Contract,
+  v5Terms,
+} from "./treasury-v5.js";
 
 export interface HiveRecord {
   schema: "hive-ops-hive/v4";
@@ -154,6 +165,11 @@ export interface HiveRecord {
   stewardKeys: [string, string, string];
   /** True when the keepers hold these keys themselves and sign in the keeper console; none is kept here. */
   keepersHold?: boolean;
+  /**
+   * A v5 treasury: its keepers approve each payment with their passkeys. `stewardKeys` are then the
+   * Bitcoin keys the keepers' passkeys derive, and `treasury` the exit pairs over them.
+   */
+  passkeys?: PasskeyTreasury;
   treasury: TreasuryTerms;
   treasuryScript: string;
   treasuryAddress: string;
@@ -283,6 +299,11 @@ class InProcessSteward implements StewardEndpoint {
 
 /** The coordinator's handle on the treasury: the connection, the terms and three steward processes. */
 export async function treasuryOf(record: HiveRecord, ctx: OpsContext = {}): Promise<Treasury> {
+  ensure(
+    !record.passkeys,
+    "PASSKEY_TREASURY",
+    `${record.name}'s keepers approve each payment with their passkeys`,
+  );
   const conn = await connect(record.deployment, ctx.fetch);
   const account = await treasuryAccount(conn, record.treasury);
   ensure(
@@ -325,12 +346,15 @@ export async function initHive(
     renewalMaxFeeSats?: number;
     /** The keepers' own keys: the treasury is theirs, and no steward key is made or kept here. */
     keepers?: [string, string, string];
+    /** The keepers' passkeys, from their key lines: the hive gets a v5 treasury. */
+    passkeys?: [Keeper, Keeper, Keeper];
   },
   ctx: OpsContext = {},
 ): Promise<HiveRecord> {
   const paths = opsPaths(hive);
   const saved = readJsonIfPresent<HiveRecord>(paths.local("hive.json"));
   if (saved) return saved;
+  if (options.passkeys) return initPasskeyHive(hive, { ...options, passkeys: options.passkeys }, ctx);
   const deployment = options.deployment ?? deploymentFor(options.network);
   // Real funds are only ever the keepers' own: no steward key for mainnet is made or kept here.
   ensure(
@@ -408,6 +432,97 @@ export async function initHive(
     renewalWatch: account.watch,
     payerReceiptKey: hex(schnorr.getPublicKey(unhex(seed.payer))),
     registration,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * A hive whose keepers approve each payment with their passkeys: the v5 treasury. The host issues the
+ * hive's counter and sends the whole supply to the treasury, whose renewal watch is registered with
+ * the delegatee and checked against our own derivation first. Idempotent: an interrupted creation
+ * resumes from the counter it already issued.
+ */
+async function initPasskeyHive(
+  hive: string,
+  options: {
+    network: string;
+    perRequestMaxSats?: string;
+    deployment?: Deployment;
+    renewalWindowSeconds?: number;
+    renewalMaxFeeSats?: number;
+    passkeys: [Keeper, Keeper, Keeper];
+  },
+  ctx: OpsContext,
+): Promise<HiveRecord> {
+  const paths = opsPaths(hive);
+  const deployment = options.deployment ?? deploymentFor(options.network);
+  const conn = await connect(deployment, ctx.fetch);
+  await checkEmulator(deployment, conn.keys.emulator);
+  const defaults = RENEWAL_DEFAULTS[deployment.network];
+  const seed = stateExists(paths.secret("seed.json"))
+    ? readPrivateJson<HiveSeed>(paths.secret("seed.json"))
+    : writePrivateOnce<HiveSeed>(paths.secret("seed.json"), {
+        schema: "hive-ops-seed/v4",
+        stewards: null,
+        payer: key(),
+      });
+  ensure(!seed.stewards, "INVALID", "this hive's seed was made for steward keys; start a new hive");
+  const issued =
+    readJsonIfPresent<{ assetId: string; supply: string }>(paths.local("counter.json")) ??
+    writeOnce<{ assetId: string; supply: string }>(
+      paths.local("counter.json"),
+      await issueCounter(deployment).then((c) => ({ assetId: c.assetId, supply: String(c.supply) })),
+    );
+  const base = {
+    keepers: options.passkeys,
+    counter: counterOf(issued.assetId),
+    delegateKey: conn.keys.delegate,
+    renewalWindowSeconds: options.renewalWindowSeconds ?? defaults.windowSeconds,
+    maxFeeSats: options.renewalMaxFeeSats ?? defaults.maxFeeSats,
+    exitDelaySeconds: conn.operator.unilateralExitDelay,
+  };
+  const terms = v5Terms(base);
+  const account = await v5Account(conn, terms);
+  const funded =
+    readJsonIfPresent<{ txid: string }>(paths.local("counter-funded.json")) ??
+    writeOnce(paths.local("counter-funded.json"), {
+      txid: await fundWithCounter(deployment, account.address, terms.counter),
+    });
+  const { contract } = await v5Contract(deployment, terms);
+  ensure(
+    hex(contract.pkScript) === account.pkScript,
+    "DELEGATEE_MISMATCH",
+    "the SDK derives another treasury",
+  );
+  await counterHome(contract, terms.counter);
+  const stewardKeys = options.passkeys.map((k) => k.bitcoinKey) as [string, string, string];
+  writeAgentConfig(paths.secret("agent.json"), {
+    schema: "hive-agent/v4",
+    receiptSecret: seed.payer,
+    stateDirectory: paths.local("agent"),
+    approvedRequests: [],
+    perRequestMaxSats: options.perRequestMaxSats ?? "5000",
+    sidecarBearerTokens: {},
+  });
+  return writeOnce<HiveRecord>(paths.local("hive.json"), {
+    schema: "hive-ops-hive/v4",
+    name: hive,
+    network: deployment.network,
+    deployment,
+    stewardKeys,
+    keepersHold: true,
+    passkeys: { version: 5, ...base, supply: issued.supply, fundedTxid: funded.txid },
+    treasury: {
+      pairs: pairKeys(stewardKeys),
+      exitDelaySeconds: base.exitDelaySeconds,
+      renewalWindowSeconds: base.renewalWindowSeconds,
+      maxFeeSats: base.maxFeeSats,
+    },
+    treasuryScript: account.pkScript,
+    treasuryAddress: account.address,
+    renewalWatch: account.watch,
+    payerReceiptKey: hex(schnorr.getPublicKey(unhex(seed.payer))),
+    registration: null,
     createdAt: new Date().toISOString(),
   });
 }
@@ -1486,8 +1601,11 @@ async function main(argv: string[]): Promise<void> {
     }
     case "desk": {
       const { startDesk } = await import("./desk.js");
+      const { startApprovalDesk } = await import("./approvals-desk.js");
       const port = option(rest, "port");
-      const desk = await startDesk(hive!, {
+      // A passkey treasury's keepers approve at the approvals desk, behind the same routes.
+      const start = loadHive(hive!).passkeys ? startApprovalDesk : startDesk;
+      const desk = await start(hive!, {
         agentLog: required(rest, "agent-log"),
         ...(option(rest, "governance") ? { governance: option(rest, "governance")! } : {}),
         ...(port ? { port: Number(port) } : {}),

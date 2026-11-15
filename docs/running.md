@@ -49,7 +49,7 @@ keys under `.secrets/`, both ignored by git.
 | --- | --- |
 | `pnpm ops init <hive> --network <regtest\|mutinynet> [--keepers <k1,k2,k3>] [--lnurl <url>]` | Builds the treasury and the Lightning address; with `--keepers`, from the keepers' own keys, keeping none |
 | `pnpm ops listing <hive> --name <name> [--purpose <text>] [--relay <url> …]` | Writes the hive's signed listing, and publishes it when relays are given; a keepers' hive's keepers sign it in their consoles |
-| `pnpm ops desk <hive> --agent-log <log> [--governance <file>] [--port <n>] [--origin <url> …]` | Runs the signing desk: keepers' consoles check and sign each payment there, and it hands each signed one to the delegatee |
+| `pnpm ops desk <hive> --agent-log <log> [--governance <file>] [--port <n>] [--origin <url> …]` | Runs the hive's desk: keepers' consoles check each payment there and approve it with their passkeys, and it submits each one two keepers approved |
 | `pnpm ops publish <hive> --relay <url> [--relay <url> …]` | Publishes the newest listing to Nostr relays |
 | `pnpm ops hives --network <regtest\|mutinynet> --relay <url> […]` | Lists the hives those relays carry whose keys build the treasury they name |
 | `pnpm ops provider-add <hive> <provider> --model … --input-rate … --output-rate … --relay …` | Creates a provider: payout wallet, card and solver configuration |

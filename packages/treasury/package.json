@@ -1,0 +1,18 @@
+{
+  "name": "@hive/treasury",
+  "version": "5.0.0-dev",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./message": "./src/message.ts",
+    "./approval": "./src/approval.ts"
+  },
+  "dependencies": {
+    "@hive/ark": "workspace:*",
+    "@hive/kit": "workspace:*",
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "@scure/base": "2.0.0"
+  }
+}

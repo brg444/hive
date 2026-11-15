@@ -11,7 +11,7 @@ How a hive works
 
 A hive is a community's shared Bitcoin treasury for open AI. Members chip in, propose work, and
 spend approved budgets on AI models that MeshLLM providers serve. Keepers hold the treasury's keys
-together; any two of them sign each payment.
+together; any two of them approve each payment.
 
 Proposals. A member posts a message starting with "Proposal:" in the hive's channel, with Budget,
 For and Purpose lines (Work, Provider and Report are optional), or presses the hexagon button under
@@ -26,17 +26,19 @@ of them a daily allowance. A member spends it through the hive's agent: from the
 after posting "Hive node: <node id>" in the channel, or by asking the hive's agent.
 
 Keepers. Keepers volunteer when HiveBot asks during setup, by reacting ✅, and the community owner
-confirms them. Each keeper creates a treasury key in the keeper console: it is made on their own
-device and locked with their passkey, and the key never leaves the device. The console then has
-them save an encrypted backup file; the best place is iCloud Drive or Google Drive, with the
-passphrase kept somewhere else, such as a password manager. File and passphrase together restore
-the key on another device. A keeper then posts the line the console gives them, "Hive keeper key:
-<key>", in the channel from their own account, which ties the key to them.
+confirms them. Each keeper creates a keeper passkey in the keeper console, with Touch ID, Face ID or
+their device's screen lock. The passkey is their key: it approves payments itself, and it gives the
+console the keeper's Bitcoin key, the one that can take the treasury onchain if the Arkade Operator
+ever goes away. Kept in iCloud Keychain, Google Password Manager or another manager that syncs, it is
+on the keeper's other devices too, and there is nothing else to back up. A keeper then posts the
+line the console gives them, "Hive keeper key: <keys> <site>", in the channel from their own account,
+which ties the passkey to them.
 
 Payments. Approving a proposal and paying for its work are separate decisions. When a job needs
 funding, keepers are notified in Buzz, open the request in the keeper console, check the amount,
-the escrow, the provider and what is left of the budget, and sign with their passkey. Two keepers
-sign; the first confirms once more to send it. Nobody, and nothing, signs for a keeper. Each job's
+the escrow, the provider and what is left of the budget, and approve with their passkey. Two keepers
+approve, in any order and hours apart if they like, and the hive's desk then sends the payment.
+Nobody, and nothing, approves for a keeper. Each job's
 money sits in an escrow: the provider is paid what the agent's signed receipts show, the rest goes
 back to the treasury, and an unclaimed escrow returns whole at its deadline with no one's signature.
 

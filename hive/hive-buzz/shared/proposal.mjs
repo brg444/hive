@@ -94,14 +94,18 @@ export function parseNodeClaim(text) {
 }
 
 /**
- * A keeper tells the hive which treasury key is theirs: `Hive keeper key: <compressed key>`, the line
- * the keeper console gives them. Sent from their Buzz identity, it ties the key to the person.
+ * A keeper tells the hive which keys are theirs with the line the keeper console gives them:
+ * `Hive keeper key: <Bitcoin key> <passkey key> <site>`, the Bitcoin key their passkey derives, the
+ * passkey's own P-256 key and the site the passkey belongs to. Sent from their Buzz identity, it ties
+ * the keys to the person. The three come back as one string, as the hive keeps them. A line with a
+ * Bitcoin key alone is an earlier console's, for a hive whose keepers sign with MuSig2.
  */
 export function parseKeeperKey(text) {
     // Pasting can wrap the line in Markdown, such as `code` or **bold**: that is dropped first.
     const plain = String(text ?? "").replace(/[`*_]/g, "");
-    const m = /^\s*hive keeper key\s*:\s*(0[23][0-9a-f]{64})\s*$/i.exec(plain);
-    return m ? m[1].toLowerCase() : null;
+    const m = /^\s*hive keeper key\s*:\s*(0[23][0-9a-f]{64})(?:\s+(11[0-9a-f]{66})\s+((?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})))?\s*$/i.exec(plain);
+    if (!m) return null;
+    return m[2] ? `${m[1]} ${m[2]} ${m[3]}`.toLowerCase() : m[1].toLowerCase();
 }
 
 /** How long discussion stays open: 48 hours, or 24 under the small-proposal threshold. */

@@ -43,15 +43,16 @@ export async function serveConsole(): Promise<{ url: string; close(): void }> {
 }
 
 /**
- * A keeper's device: a fresh browser profile with a passkey, on which the keeper creates their key and
- * saves its backup. `arkdUrl` is answered with the CORS header a public Operator sends.
+ * A keeper's device: a fresh browser profile with a platform authenticator that supports PRF, on which
+ * the keeper creates their keeper passkey. Returns the line's token: the keeper's Bitcoin key, the
+ * passkey's P-256 key and its site. `arkdUrl` is answered with the CORS header a public Operator sends.
  */
 export async function keeperDevice(
   browser: Page,
   consoleUrl: string,
   arkdUrl: string,
   contextOptions: Record<string, unknown> = {},
-  /** Called on each screen of key creation, for screenshots. */
+  /** Called on each screen of passkey creation, for screenshots. */
   onScreen: (page: Page, name: string) => Promise<void> = async () => {},
 ) {
   const context = await browser.newContext(contextOptions);
@@ -70,28 +71,19 @@ export async function keeperDevice(
       automaticPresenceSimulation: true,
     },
   });
-  // A string, not a function: the test's own compiler would add helpers the page does not have.
-  await page.addInitScript(
-    "window.showSaveFilePicker = async () => ({ createWritable: async () => ({ write: async () => {}, close: async () => {} }) });",
-  );
   await page.route(`${arkdUrl}/**`, async (route: Page) => {
     const response = await route.fetch();
     await route.fulfill({ response, headers: { ...response.headers(), "access-control-allow-origin": "*" } });
   });
   const errors: string[] = [];
   page.on("pageerror", (e: Error) => errors.push(e.message));
+  page.on("dialog", (d: Page) => d.accept());
   await page.goto(consoleUrl);
-  await page.getByRole("heading", { name: "Create your keeper key" }).waitFor();
+  await page.getByRole("heading", { name: "Create your keeper passkey" }).waitFor();
   await onScreen(page, "create");
-  await page.getByRole("button", { name: "Create my key" }).click();
-  await page.locator("#b-pass").waitFor();
-  await page.locator("#b-pass").fill("correct horse battery staple");
-  await page.locator("#b-again").fill("correct horse battery staple");
-  await onScreen(page, "backup");
-  await page.getByRole("button", { name: "Encrypt the backup" }).click();
-  await page.getByRole("button", { name: "Save the backup file" }).click();
+  await page.getByRole("button", { name: "Create my keeper passkey" }).click();
   await page
-    .getByRole("heading", { name: "Your keeper key is ready" })
+    .getByRole("heading", { name: "Your keeper passkey is ready" })
     .waitFor()
     .catch(async (error: Error) => {
       const shown = await page.locator("section:not([hidden]) h1").allTextContents();
@@ -100,8 +92,9 @@ export async function keeperDevice(
         `${error.message}\nshown: ${shown.join(" | ")}\nmessages: ${messages.filter(Boolean).join(" | ")}`,
       );
     });
+  await onScreen(page, "key");
   const line = (await page.locator("#line").textContent()) ?? "";
-  return { page, errors, key: line.replace("Hive keeper key: ", "").trim() };
+  return { page, errors, line, key: line.replace("Hive keeper key: ", "").trim() };
 }
 
 /** Unlocks the console with the passkey and opens the hive's desk. */
@@ -116,19 +109,38 @@ export async function openDesk(page: Page, desk: string, hive: string) {
     });
 }
 
-/** Signs whatever the keeper is asked to sign for the first payment listed, and returns the console's answer. */
-export async function signFirstPayment(page: Page, button: string) {
+/**
+ * Approves the first payment whose button reads `button` with the keeper's passkey, after the
+ * console's own checks, and returns the console's answer.
+ */
+export async function approveFirstPayment(page: Page, button: string, list = "#payment-list") {
   await page.getByRole("button", { name: "Refresh" }).click();
-  await page.getByRole("button", { name: button }).first().click();
+  await page.locator(list).getByRole("button", { name: button }).first().click();
   await page.locator("#act").click();
-  const message = page.locator("#payment-msg");
   await page.waitForFunction(
-    () => /^Signed\.|Nothing was signed/.test(document.getElementById("payment-msg")?.textContent ?? ""),
+    () => /^Approved\.|Nothing was approved/.test(document.getElementById("payment-msg")?.textContent ?? ""),
     null,
     { timeout: 60_000 },
   );
-  const text = (await message.textContent()) ?? "";
-  if (!text.startsWith("Signed.")) throw new Error(text);
+  const text = (await page.locator("#payment-msg").textContent()) ?? "";
+  if (!text.startsWith("Approved.")) throw new Error(text);
   await page.getByRole("button", { name: "Back" }).click();
   return text;
+}
+
+/** Starts a withdrawal in the console and approves it with the keeper's passkey. */
+export async function startWithdrawal(page: Page, address: string, amountSats: number) {
+  await page.getByText("Withdraw from the treasury").first().click();
+  await page.locator("#w-address").fill(address);
+  await page.locator("#w-amount").fill(String(amountSats));
+  await page.getByRole("button", { name: "Check and approve the withdrawal" }).click();
+  await page.waitForFunction(
+    () =>
+      /^Approved\./.test(document.getElementById("payments-msg")?.textContent ?? "") ||
+      Boolean(document.getElementById("withdraw-msg")?.textContent),
+    null,
+    { timeout: 60_000 },
+  );
+  const failed = (await page.locator("#withdraw-msg").textContent()) ?? "";
+  if (failed) throw new Error(failed);
 }
