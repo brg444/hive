@@ -7,13 +7,15 @@
 //     [--agent-console http://127.0.0.1:3131 [--serve-invite]] [--governance <file>]
 //     [--channel <channel UUID> (--keepers <npub or hex,…> | --bot <HiveBot's pubkey>)
 //      [--members-file <path>] [--model <id>] [--threshold 2] [--small-sats 20000] [--discussion-minutes <n>]]
-//     [--desk <https url of the signing desk>] [--console <https url of the keeper console>]
+//     [--payments <the approvals desk's payments file>]
 //     [--tls-cert <pem> --tls-key <pem>]
 //
 // With --channel, members' Hive plugins forward the channel's signed events to POST /hive/v1/channel,
 // and hive-api works out the governance itself and writes it to --governance, with the agent's
 // members file to --members-file: the host needs no Buzz key. --discussion-minutes gives every
-// proposal one discussion length, for a test hive.
+// proposal one discussion length, for a test hive. --payments names the file the hive's approvals desk
+// (`pnpm ops desk <hive> --events <governance>.events.json --payments-file <file>`) keeps its payments
+// in, so keepers' plugins show what waits for their approval.
 //
 // With --tls-cert and --tls-key it serves HTTPS itself, which is enough to try the plugin on one
 // machine with a locally trusted certificate (mkcert localhost); a public host puts it behind its
@@ -56,9 +58,8 @@ const cfg = {
     threshold: Number(arg("--threshold", "2")),
     smallSats: Number(arg("--small-sats", "20000")),
     discussionSeconds: arg("--discussion-minutes") ? Math.round(Number(arg("--discussion-minutes")) * 60) : undefined,
-    desk: arg("--desk"),
+    payments: arg("--payments"),
     priceUrl: arg("--price-url"),
-    keeperConsole: arg("--console"),
     serveInvite: argv.includes("--serve-invite"),
     cacheMs: Number(arg("--cache-secs", "15")) * 1000,
     tlsCert: arg("--tls-cert"),
@@ -126,6 +127,10 @@ function writeAtomic(path, value) {
 }
 
 const storePath = () => `${cfg.governance}.events.json`;
+/** The approvals desk's payments, as it last wrote them; none while it has not. */
+function readPayments() {
+    try { return JSON.parse(readFileSync(cfg.payments, "utf8")); } catch { return null; }
+}
 function storedEvents() {
     try { return JSON.parse(readFileSync(storePath(), "utf8")); } catch { return []; }
 }
@@ -235,7 +240,7 @@ async function refresh() {
         governance: governanceFile() ?? (cfg.channel ? { v: 1, channelId: cfg.channel, keepers: cfg.keepers ?? [], threshold: cfg.threshold,
             smallSats: cfg.smallSats, ...(cfg.discussionSeconds !== undefined ? { discussionSeconds: cfg.discussionSeconds } : {}),
             updatedAt: Math.floor(Date.now() / 1000), proposals: [], members: {} } : null),
-        ...(cfg.desk || cfg.keeperConsole ? { keepersDesk: { desk: cfg.desk ?? null, console: cfg.keeperConsole ?? null } } : {}),
+        payments: cfg.payments ? readPayments() : null,
     }), price: currentPrice(cfg.priceUrl ?? process.env.HIVE_PRICE_URL ?? undefined) ?? null });
     // A governance worked out meanwhile is not in this answer: it is given, but not kept.
     if (generation === started) cached = { at: Date.now(), body };

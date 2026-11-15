@@ -1,14 +1,14 @@
 #!/bin/sh
 # Sets up a Hive host on Debian 12 or Ubuntu 24.04: the Hive service, the delegatee and its
-# Postgres database, the keeper console on its own origin, TLS through Caddy, and backups. Run it as
+# Postgres database, TLS through Caddy, and backups. Run it as
 # root from a checkout of the repository; it copies the checkout to /opt/hive and can be run again
 # after each update.
 #
 #   sudo deploy/setup.sh
 #
 # The first run writes /etc/hive/hive.env from deploy/hive.env.example and stops, for the two host
-# names, the Emulator's address, the delegatee's admin users and the backup key to be filled in.
-# Point both host names at this server before the second run, so Caddy can obtain certificates.
+# name, the Emulator's address, the delegatee's admin users and the backup key to be filled in.
+# Point the host name at this server before the second run, so Caddy can obtain its certificate.
 #
 # Two users run the host, so what faces the network holds as little as it can. `hive` runs the
 # service and each hive's agent node: it keeps the channels, the desks and the agents' receipt
@@ -61,7 +61,7 @@ fi
 # A host set up when one user ran everything named that user's database role here.
 sed -i 's|^\(DELEGATEE_DATABASE_URL="\{0,1\}postgres://\)hive@/|\1hive-delegatee@/|' "$ENV"
 set -a; . "$ENV"; set +a
-for v in HIVE_HOST KEEPER_HOST DELEGATEE_EMULATOR_URL HIVE_BACKUP_RECIPIENT; do
+for v in HIVE_HOST DELEGATEE_EMULATOR_URL HIVE_BACKUP_RECIPIENT; do
   eval "[ -n \"\${$v:-}\" ]" || { echo "$v is empty in $ENV" >&2; exit 2; }
 done
 [ -f "${DELEGATEE_ADMIN_USERS_FILE:-/nonexistent}" ] || { echo "DELEGATEE_ADMIN_USERS_FILE names no file" >&2; exit 2; }
@@ -147,13 +147,6 @@ if [ -f "$APP/.secrets/$KEYS/delegate-key" ] && [ ! -f "$DHOME/.secrets/$KEYS/de
 fi
 (cd "$DHOME" && as_user hive-delegatee "$DHOME" env DELEGATEE_BUILD_ONLY=1 "$APP/tools/delegatee.sh")
 
-echo "== the keeper console, on its own origin"
-CONSOLE_FLAG=""
-[ "${HIVE_NETWORK:-}" = bitcoin ] && CONSOLE_FLAG=--mainnet
-(cd "$APP/hive/hive-buzz" && as_user hive /var/lib/hive node keeper/build.mjs "$APP/.local/keeper" $CONSOLE_FLAG)
-install -d -m 755 /srv/hive/keeper
-install -m 644 "$APP/.local/keeper/index.html" "$APP/.local/keeper/console.js" "$APP/.local/keeper/SHA256SUMS" /srv/hive/keeper/
-
 echo "== services"
 install -m 644 "$APP"/deploy/systemd/*.service "$APP"/deploy/systemd/*.timer /etc/systemd/system/
 install -m 644 "$APP/deploy/Caddyfile" /etc/caddy/Caddyfile
@@ -177,8 +170,6 @@ systemctl start hive-backup.service
 
 echo
 echo "Service:  https://$HIVE_HOST/healthz"
-echo "Console:  https://$KEEPER_HOST/  (hashes below; keepers can build the same and compare)"
-cat /srv/hive/keeper/SHA256SUMS
 echo "Delegate key: $KEY"
 echo "Backups:  $BACKUPS, every six hours; copy them off this host"
 echo "Approve a hive once HiveBot asks for it, with HiveBot's key as its profile in the channel shows it:"

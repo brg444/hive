@@ -1,9 +1,16 @@
 pragma arkade ^0.1.0;
 
-// A Buzz community's treasury, kept by three keepers: any two of them approve each payment, each
-// with a P-256 key of their own. A keeper's key is a passkey, whose approval arrives wrapped in
-// WebAuthn, or a raw P-256 key such as one in a Secure Enclave, which signs sha256 of the message.
-// The two approvals are independent signatures, made from any device at any time, in any order.
+// A Buzz community's treasury, kept by three keepers: any two of them approve each payment, each by
+// sending a message in the hive's channel. A keeper's approval is an ordinary Buzz message, signed by
+// their Buzz identity's key like every message they send: a kind 9 event whose text is exactly
+// "I approve Hive payment " and the payment's code. The covenant rebuilds the event from the keeper's
+// key, the payment's code and the two parts of the event Buzz chooses itself, its created_at and its
+// tags, and checks the keeper's signature over its id. The two approvals are independent messages,
+// sent from any device at any time, in any order.
+//
+// Only the text binds the approval: JSON writes a quote inside a string as \", so the last unescaped
+// quote before the end of an event's serialization opens its content, and an event whose text says
+// anything more, or anything else, has another id.
 //
 // The payment number is a counter asset: a fixed supply issued once and held only by the treasury
 // coin, one unit burned by each payment. An approval names the treasury (the counter's asset id),
@@ -13,30 +20,27 @@ pragma arkade ^0.1.0;
 //
 // Payments and merges run offchain only. Renewal runs in an intent that only the host's delegatee
 // may cosign, as in the v4 treasury: whoever cosigns a batch holds its new coins together with the
-// Arkade Operator. The exits are v4's: one MuSig2 key per pair of keepers, here over the Bitcoin
-// keys their passkeys derive, after the exit delay.
+// Arkade Operator. The exits are v4's: one MuSig2 key per pair of keepers, over their Buzz keys, after
+// the exit delay.
 contract HiveTreasury(
-  bytes keeperA,        // 0x11 ‖ the compressed P-256 key of each keeper
+  bytes keeperA,        // each keeper's Buzz key: the x-only key their Buzz identity signs with
   bytes keeperB,
   bytes keeperC,
-  int kindA,            // 1: a WebAuthn passkey; 2: a raw P-256 key
-  int kindB,
-  int kindC,
-  bytes32 siteA,        // sha256 of the domain each keeper's passkey belongs to: the keeper
-  bytes32 siteB,        // console's site where they made it, the host's or their own
-  bytes32 siteC,
+  bytes hexA,           // the same key as Buzz writes it in every event: 64 lowercase hex characters
+  bytes hexB,
+  bytes hexC,
   bytes32 counterTxid,  // the counter asset: its issuance transaction, in internal byte order
   int counterGidx,      // and its group in that transaction
   bytes delegateKey,    // the host's delegatee, as an intent names its cosigner: 66 hex characters
   int renewalWindow,    // how long before its expiry, in seconds, the coin may be renewed
   int maxFee,           // the most a renewal may pay the operator, in sats
-  pubkey pair01,        // the pairs' MuSig2 keys over the keepers' Bitcoin keys
+  pubkey pair01,        // the pairs' MuSig2 keys over the keepers' Buzz keys
   pubkey pair02,
   pubkey pair12,
   int exitDelay
 ) {
   const bytes ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  const bytes CLIENT_PREFIX = "{\"type\":\"webauthn.get\",\"challenge\":\"";
+  const bytes APPROVE = "I approve Hive payment ";
 
   static function byteAt(bytes data, int i) int {
     return bin2num(substr(data, i, 1) + 0x00);
@@ -46,7 +50,7 @@ contract HiveTreasury(
     return substr(ALPHABET, v, 1);
   }
 
-  // base64url without padding, as WebAuthn writes the challenge: 43 characters for 32 bytes.
+  // base64url without padding: the payment's code, 43 characters for 32 bytes.
   static function b64url(bytes32 m) bytes {
     bytes out = "";
     for (g, start) in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27] {
@@ -59,9 +63,10 @@ contract HiveTreasury(
   }
 
   // Two keepers approve this: the treasury, the payment's number, its amount and recipient, and the
-  // time the approval lapses. A keeper who did not approve passes an empty signature.
-  @allow(unsigned-spend-path, "two keepers' keys sign the treasury, payment number, amount, recipient and lapse time")
-  function pay(int amount, ScriptPubKey to, int validUntil, bytes[3] sigs, bytes[3] authData, bytes[3] clientTails) {
+  // time the approval lapses. Each passes their message's signature, created_at (as its digits) and
+  // tags (as JSON); a keeper who did not approve passes an empty signature.
+  @allow(unsigned-spend-path, "two keepers' Buzz messages sign the treasury, payment number, amount, recipient and lapse time")
+  function pay(int amount, ScriptPubKey to, int validUntil, bytes[3] sigs, bytes[3] times, bytes[3] tags) {
     require(!tx.intent.has("type"), "offchain");
     require(!checkTime(validUntil), "approval lapsed");
     require(tx.numInputs == 1, "one coin");
@@ -71,29 +76,17 @@ contract HiveTreasury(
     int left = tx.inputs[0].assets.lookup(counterTxid, counterGidx);
     require(left > 1, "counter");
     bytes32 message = sha256("hive/treasury/pay/v1" + counterTxid + num2bin(counterGidx, 2) + num2bin(left, 8) + num2bin(amount, 8) + num2bin(validUntil, 8) + to.program + num2bin(to.version, 1));
-    bytes challenge = b64url(message);
+    bytes code = b64url(message);
     bytes[3] keys = [keeperA, keeperB, keeperC];
-    bytes[3] sites = [siteA, siteB, siteC];
-    int[3] kinds = [kindA, kindB, kindC];
+    bytes[3] names = [hexA, hexB, hexC];
     int valid = 0;
     for (i, sig) in sigs {
       if (size(sig) > 0) {
-        bytes32 digest;
-        if (kinds[i] == 1) {
-          // The authenticator's data: the keeper's site, the keeper present and verified.
-          require(substr(authData[i], 0, 32) == sites[i], "passkey site");
-          int flags = byteAt(authData[i], 32);
-          require(flags % 2 == 1, "keeper present");
-          require(flags / 4 % 2 == 1, "keeper verified");
-          // The browser's data: a WebAuthn assertion whose challenge is exactly this payment.
-          require(substr(clientTails[i], 0, 1) == "\"", "challenge ends");
-          digest = sha256(authData[i] + sha256(CLIENT_PREFIX + challenge + clientTails[i]));
-        } else {
-          require(kinds[i] == 2, "kind");
-          digest = sha256(message);
-        }
+        require(size(times[i]) <= 10, "created_at");
+        // NIP-01: the event's id is sha256 of [0, pubkey, created_at, kind, tags, content].
+        bytes32 id = sha256("[0,\"" + names[i] + "\"," + times[i] + ",9," + tags[i] + ",\"" + APPROVE + code + "\"]");
         signature keeperSig = signature(sig);
-        require(checkSigFromStack(keeperSig, keys[i], digest), "keeper signature");
+        require(checkSigFromStack(keeperSig, keys[i], id), "keeper's message");
         valid = valid + 1;
       }
     }

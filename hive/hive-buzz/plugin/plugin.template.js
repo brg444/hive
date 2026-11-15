@@ -1,6 +1,7 @@
 // Hive for Buzz (API v1): a hive inside its community. Members follow the treasury, propose work and
-// use their allowances; keepers see what waits for them. It shows and routes and holds no keys: every
-// proposal, support and approval is an ordinary Buzz message or reaction signed by its author.
+// use their allowances; keepers see what waits for them and approve it. It shows and routes and holds
+// no keys: every proposal, support and approval is an ordinary Buzz message or reaction signed by its
+// author, and a keeper's approval of a payment is a message the treasury's covenant checks itself.
 //
 // Where proposals stand, the plugin works out itself from the hive's channel, with the same rules
 // the hive's bot uses. The treasury, jobs and payouts come from the hive's host over the one origin
@@ -28,10 +29,10 @@ const LOOKBACK_DAYS = 90;
 
 /*__AMOUNTS__*/
 
+/*__CHECKS__*/
+
 // Where members install this plugin from, when it was built with --install: "<repository>#<branch>".
 const INSTALL = /*__INSTALL__*/null;
-// The keeper console, where keepers create their keeper passkeys and approve payments, when built with --console.
-const KEEPER_CONSOLE = /*__CONSOLE__*/null;
 // The repository's documentation as one Markdown file, for the Hive guide, when built with --docs.
 const HIVE_DOCS = /*__DOCS__*/null;
 
@@ -106,17 +107,15 @@ function governanceFrom(state, events) {
         const usage = Object.fromEntries((state?.proposals ?? []).map((b) => [b.proposal, b.usedSats]));
         const r = coordinate(events, { ...cfg, now: nowS(), usage });
         const members = Object.fromEntries(Object.entries(r.nodes).map(([k, v]) => [k, { node: v.node }]));
-        const keys = Object.fromEntries(Object.entries(r.keys ?? {}).map(([k, v]) => [k, v.key]));
-        return { ...cfg, proposals: r.proposals, members, keys, source: "channel" };
+        return { ...cfg, proposals: r.proposals, members, source: "channel" };
     }
     const g = state?.governance;
-    if (g?.channelId === cfg.channelId) {
-        // The host lists each keeper's treasury key in the keepers' order.
-        const keys = Object.fromEntries((g.keepers ?? []).map((k, i) => [k, g.keeperKeys?.[i]]).filter(([, key]) => key));
-        return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, keys, source: "host" };
-    }
+    if (g?.channelId === cfg.channelId) return { ...cfg, proposals: g.proposals ?? [], members: g.members ?? {}, source: "host" };
     return { ...cfg, proposals: [], members: {}, source: "none" };
 }
+
+/** The payments waiting for keepers' approvals, as the hive's approvals desk reports them. */
+const waitingPayments = (state) => (state?.payments?.payments ?? []).filter((p) => p.status === "approving" || p.status === "ready");
 
 /** A one-line account of the hive, for agents in the community. */
 function summarize(state, gov) {
@@ -129,6 +128,7 @@ function summarize(state, gov) {
             state.chipIn?.lightningAddress ? `Chip in at ${state.chipIn.lightningAddress}.` : null,
             `${open.length} open job(s), ${state.funding.length} awaiting funding by keepers.`,
             ...state.funding.map((j) => `- Fund ${sats(j.capSats)} to ${j.escrowAddress} for ${modelName(j.model)} (deadline ${when(j.deadline)}).`),
+            ...waitingPayments(state).map((p) => `- Payment of ${sats(p.amountSats)} ${p.kind === "withdrawal" ? `withdrawn to ${p.address}` : `to fund job ${short(p.id)}`}: ${p.approvedBy.length} of ${gov?.threshold ?? 2} keepers approved, until ${when(p.validUntil)}.`),
         );
     }
     lines.push(...(gov?.proposals ?? []).filter((p) => ["open", "approved", "running"].includes(p.state)).map((p) =>
@@ -180,6 +180,7 @@ export function apply(ctx) {
 
     const funding = ctx.notifications.register({ id: "funding", label: "Hive funding requests" });
     const decisions = ctx.notifications.register({ id: "decisions", label: "Hive proposals waiting for keepers" });
+    const approvals = ctx.notifications.register({ id: "approvals", label: "Hive payments waiting for your approval" });
     const announced = new Set();
     const pageTarget = { version: 1, kind: "plugin", pluginId: PLUGIN_ID, pageId: "main" };
 
@@ -195,6 +196,13 @@ export function apply(ctx) {
         }
         const me = viewer();
         if (!me || !gov?.keepers.includes(me)) return;
+        for (const p of waitingPayments(state)) {
+            if (p.approvedBy.includes(me) || !p.code || announced.has(`a:${p.code}`)) continue;
+            announced.add(`a:${p.code}`);
+            approvals.submit({ sourceKey: `approve:${p.code}`, target: pageTarget,
+                title: `${name}: a payment waits for your approval`,
+                body: `${amount(p.amountSats)} ${p.kind === "withdrawal" ? "to withdraw" : "to fund a job"}. Check it and approve it from the hive's channel.` })?.catch?.(() => {});
+        }
         for (const p of gov.proposals) {
             if (p.state !== "open" || p.discussionEnds > nowS() || p.approvals.includes(me) || announced.has(`d:${p.id}`)) continue;
             announced.add(`d:${p.id}`);
@@ -255,7 +263,7 @@ export function apply(ctx) {
             if (res.status !== 200) throw new Error(`the hive's host answered ${res.status}`);
             const state = JSON.parse(res.body);
             if (state?.v !== 1) throw new Error("the hive's host speaks another version");
-            // A new hive has no treasury until its keepers' keys are in.
+            // A new hive has no treasury until its keepers are confirmed.
             state.treasury ??= { address: null, balanceSats: null };
             publish({ ...snapshot, state, error: null, loadedAt: Date.now() });
             // Whatever the host has not taken yet is sent again: a hive just opened on the service
@@ -512,7 +520,7 @@ export function apply(ctx) {
             const founder = handle.owner ?? bot.owner;
             const names = await profileNames(handle, [...new Set([founder, ...events.filter((e) => e.kind === 7).map((e) => e.pubkey)])]);
             const { posts, record: next } = onboardingPlan(record, { events, bot: bot.pubkey, founder, needed, threshold, smallSats,
-                state: snapshot.state, proposals, name: (k) => names[k] ?? k.slice(0, 8), botName: bot.name, install: installText(), console: KEEPER_CONSOLE });
+                state: snapshot.state, proposals, name: (k) => names[k] ?? k.slice(0, 8), botName: bot.name, install: installText() });
             for (const post of posts) {
                 const extra = post.key === "call" ? [`needed=${needed}`] : post.key === "treasury" && next.treasuryReady ? ["ready"] : [];
                 await handle.publish({ kind: 9, content: post.text,
@@ -543,47 +551,12 @@ export function apply(ctx) {
             for (const channelId of tagged("call")) {
                 if (!done.has(channelId)) await onboardIn(bot, handle, channelId).catch(() => {});
             }
-            // Keys: the hive's own channel, and every channel this bot set up.
+            // Members' nodes: the hive's own channel, and every channel this bot set up.
             const channels = new Set([...tagged("call"), ...(snapshot.gov?.channelId ? [snapshot.gov.channelId] : [])]);
-            for (const channelId of channels) {
-                await acknowledgeKeys(bot, handle, channelId, mine).catch(() => {});
-                await acknowledgeNodes(bot, handle, channelId, mine).catch(() => {});
-            }
+            for (const channelId of channels) await acknowledgeNodes(bot, handle, channelId, mine).catch(() => {});
         }
     }
 
-    /**
-     * Answers each "Hive keeper key:" post once, in its thread: whether it counts and how many keepers
-     * have theirs in. The answers carry the post they answer, so the bot reads back what it has done.
-     */
-    async function acknowledgeKeys(bot, handle, channelId, mine) {
-        const since = nowS() - 30 * 86400;
-        const events = await handle.query([{ kinds: [9], "#h": [channelId], since, limit: 500 }]);
-        const answered = new Set(mine.flatMap((e) => (e.tags ?? []).filter((t) => t[0] === "hive" && t[1] === "key-ack").map((t) => t[2])));
-        const posts = events.filter((e) => e.pubkey !== bot.pubkey && parseKeeperKey(e.content) && !answered.has(e.id)).sort((a, b) => a.created_at - b.created_at);
-        if (!posts.length) return;
-        // Keepers: those this bot's setup confirmed in the channel, else the hive's own.
-        const record = recordFromChannel(events, bot.pubkey, 2);
-        const gov = snapshot.gov;
-        const keepers = record.keepers ?? (gov?.channelId === channelId ? gov.keepers : null);
-        const names = await profileNames(handle, [...new Set(posts.map((e) => e.pubkey))]);
-        for (const post of posts) {
-            const name = `@${names[post.pubkey] ?? post.pubkey.slice(0, 8)}`;
-            let text;
-            if (!keepers) {
-                text = `${name}, this channel has no keepers yet, so the key doesn't count. Keepers are set during setup: the community owner mentions me with “set up”.`;
-            } else if (!keepers.includes(post.pubkey)) {
-                text = `${name}, only this hive's keepers post treasury keys here, so this one doesn't count.`;
-            } else {
-                const upTo = events.filter((e) => e.created_at <= post.created_at);
-                const keys = keepersKeys(upTo, keepers);
-                const earlier = keepersKeys(upTo.filter((e) => e.id !== post.id), keepers)[post.pubkey];
-                const count = Object.keys(keys).length;
-                text = `Got it, ${name}: your keeper key is in${earlier && earlier !== keys[post.pubkey] ? ", replacing the one you posted before" : ""}. ${count} of ${keepers.length} keepers have posted theirs${count === keepers.length ? ", so every key is in." : "."}`;
-            }
-            await handle.publish({ kind: 9, content: text, tags: [...replyTags(post, channelId), ["hive", "key-ack", post.id]] });
-        }
-    }
     /**
      * Members' nodes, acknowledged once each. HiveBot reads the channel itself, so its acknowledgement
      * tells the hive's host, which gets the channel forwarded, that the member really posted it here.
@@ -657,8 +630,8 @@ export function apply(ctx) {
         const { state, gov } = snapshot;
         return [
             `This hive: ${state?.name ?? HIVE_NAME}.`,
-            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and a payment; ${Object.keys(gov.keys ?? {}).length} of them have posted their keeper key. ${gov.discussionSeconds ? `Discussion runs ${Math.round(gov.discussionSeconds / 60)} minutes on this test hive.` : `Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.`}` : "Its keepers are not set yet.",
-            KEEPER_CONSOLE ? `The keeper console is at ${KEEPER_CONSOLE}.` : null,
+            gov ? `It has ${gov.keepers.length} keepers, any ${gov.threshold} of whom approve a proposal and a payment. ${gov.discussionSeconds ? `Discussion runs ${Math.round(gov.discussionSeconds / 60)} minutes on this test hive.` : `Discussion runs 24 hours for proposals under ${nf.format(gov.smallSats)} sats, 48 hours otherwise.`}` : "Its keepers are not set yet.",
+            state?.payments ? `${waitingPayments(state).length} payment(s) wait for keepers' approvals.` : null,
             INSTALL ? `Members install the Hive plugin from ${INSTALL.split("#")[0]}, branch ${INSTALL.split("#")[1]}, with Add from Git in Buzz's plugin settings. That repository is also Hive's source and documentation.` : null,
             state?.chipIn?.lightningAddress ? `Its Lightning address is ${state.chipIn.lightningAddress}.` : null,
             state?.demo ? "Its treasury figures are sample data for trying Hive." : null,
@@ -666,7 +639,7 @@ export function apply(ctx) {
     }
     ctx.agents.addTool({
         name: "hive_guide",
-        description: `How the ${HIVE_NAME} hive works: proposals and approvals, allowances, keepers and their passkeys, payments and chip-ins, with this hive's own settings. Read it before answering any question about the hive.`,
+        description: `How the ${HIVE_NAME} hive works: proposals and approvals, allowances, keepers and how they approve payments, chip-ins, with this hive's own settings. Read it before answering any question about the hive.`,
         inputSchema: { type: "object", properties: {} },
         async call() {
             return `${hiveFacts()}\n\n${HOW_IT_WORKS}`;
@@ -695,7 +668,7 @@ export function apply(ctx) {
     }
     ctx.agents.addTool({
         name: "hive_docs",
-        description: `The Hive repository's documentation, for details hive_guide does not cover: how Hive works end to end, its safeguards, the plugin and HiveBot, the keeper console, and how providers serve a hive. Give a topic in a few words; without one it lists the sections.`,
+        description: `The Hive repository's documentation, for details hive_guide does not cover: how Hive works end to end, its safeguards, the plugin and HiveBot, keepers' approvals, and how providers serve a hive. Give a topic in a few words; without one it lists the sections.`,
         inputSchema: { type: "object", properties: { topic: { type: "string", description: "What to look up, in a few words" } } },
         async call(_client, _context, args) {
             if (!HIVE_DOCS) return "This hive's plugin was built without the repository's docs.";
@@ -1090,7 +1063,7 @@ export function apply(ctx) {
             chip.lightningAddress ? h(Well, { label: "Lightning address", value: chip.lightningAddress, copy: chip.lightningAddress }) : null,
             state.treasury.address
                 ? h(Well, { label: "Treasury address", value: short(state.treasury.address, 14, 8), copy: state.treasury.address })
-                : h(Empty, null, "The treasury is built once every keeper's key is in, and its address shows here."),
+                : h(Empty, null, "The treasury is built from the keepers' Buzz keys once they are confirmed, and its address shows here."),
             h("p", { style: { ...p0, ...muted, ...small } },
                 "Pay from any Lightning or Arkade wallet. Chip-ins are donations toward the hive's purpose, and every one lands in the treasury as Bitcoin."));
     }
@@ -1158,39 +1131,203 @@ export function apply(ctx) {
                 : h("ul", { style: list }, shown.map((p, i) => h(ProposalRow, { key: p.id, p, gov, me, first: i === 0 }))));
     }
 
-    /** Where keepers approve: the keeper console, opened on this hive's desk. */
-    function consoleLink(state) {
-        const desk = state?.keepersDesk?.desk;
-        const page = state?.keepersDesk?.console ?? KEEPER_CONSOLE;
-        return desk && page ? `${page}${page.includes("?") ? "&" : "?"}desk=${encodeURIComponent(desk)}` : null;
+    // ---- Payments: checked here, approved with a message in the hive's channel -------------------
+
+    const PAYMENT_STATUS = { approving: "Waiting for keepers", ready: "Approved, paying", submitted: "Paying", done: "Paid", lapsed: "Lapsed", declined: "Declined", failed: "Not paid" };
+    const PAYMENT_TONE = { approving: "honey", ready: "good", submitted: "good", done: "good", lapsed: "quiet", declined: "bad", failed: "bad" };
+    const paymentTitle = (p) => p.kind === "withdrawal"
+        ? `${amount(p.amountSats)} withdrawn to ${short(p.address, 12, 6)}`
+        : `${amount(p.amountSats)} for ${modelName(p.request?.model)}`;
+
+    /**
+     * A payment as this plugin checks it, with the hive's own code: the escrow the job's terms build or
+     * the address the withdrawal pays, and the exact approval the treasury's covenant will accept. Kept
+     * per payment and number, since a renumbered payment is approved again.
+     */
+    const checked = new Map();
+    function checkOf(state, gov, p) {
+        const key = `${p.id}:${p.left}:${p.validUntil}`;
+        if (!checked.has(key)) {
+            let result;
+            try {
+                result = hiveChecks().checkPayment({ payments: state.payments, payment: p, keepers: gov?.keepers ?? [], treasury: state.treasury?.address });
+            } catch (e) {
+                result = { problems: [String(e?.message ?? e)], code: null, approve: null, decline: null };
+            }
+            checked.set(key, result);
+        }
+        return checked.get(key);
+    }
+    /** The payments waiting for this keeper's approval. */
+    const waitingFor = (state, me) => waitingPayments(state).filter((p) => !p.approvedBy.includes(me));
+
+    // Withdraw opens a form above the composer, as Propose does.
+    let withdrawing = null;
+    const withdrawingListeners = new Set();
+    const setWithdrawing = (channelId) => {
+        withdrawing = channelId;
+        for (const listener of withdrawingListeners) listener(channelId);
+    };
+    function useWithdrawing() {
+        const [value, setValue] = React.useState(withdrawing);
+        React.useEffect(() => {
+            withdrawingListeners.add(setValue);
+            setValue(withdrawing);
+            return () => withdrawingListeners.delete(setValue);
+        }, []);
+        return value;
+    }
+    /** Writes a keeper's message into the hive channel's message box, for them to send. */
+    function compose(channelId, text) {
+        const c = composers.get(channelId);
+        if (!c?.insertText(text)) return false;
+        c.focus?.();
+        return true;
     }
 
+    function PaymentRow({ p, state, gov, me, channelId, first }) {
+        const [note, setNote] = React.useState(null);
+        const keeper = Boolean(me && gov?.keepers.includes(me));
+        const active = p.status === "approving" || p.status === "ready";
+        const threshold = gov?.threshold ?? 2;
+        const c = keeper && active ? checkOf(state, gov, p) : null;
+        const mine = p.approvedBy.includes(me);
+        const write = (text, said) => setNote(compose(channelId, text) ? said : "The message box is not ready. Click into it and try again.");
+        return h("li", { style: { ...item, ...(first ? { borderTop: 0, paddingTop: 0 } : {}) } },
+            h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "flex-start", justifyContent: "space-between" } },
+                h("strong", { style: { lineHeight: 1.35, ...tnum } }, paymentTitle(p)),
+                h(Pill, { tone: PAYMENT_TONE[p.status] }, PAYMENT_STATUS[p.status] ?? p.status)),
+            h("div", { style: { ...row, ...muted, ...small, alignItems: "center" } },
+                h("span", { style: { display: "inline-flex", gap: 6, alignItems: "center", ...tnum } }, h(Pips, { n: p.approvedBy.length, of: threshold }), `${p.approvedBy.length} of ${threshold} keepers`),
+                h("span", null, active ? `approvals lapse ${until(p.validUntil)}` : p.status === "done" && p.txid ? `paid in ${short(p.txid, 8, 4)}` : stamp(p.updatedAt))),
+            p.kind === "withdrawal" ? h(Well, { label: "To", value: p.address, copy: p.address }) : p.request
+                ? h("span", { style: { ...muted, ...small } }, `Escrow ${short(p.address, 14, 8)} for provider ${short(p.request.providerPk)}, before ${when(p.request.deadline)}. What the job does not use comes back to the treasury.`) : null,
+            p.status === "failed" && p.detail ? h("span", { style: { ...small, color: C.bad } }, p.detail) : null,
+            p.status === "declined" ? h("span", { style: { ...small, ...muted } }, `Declined by ${p.declinedBy === me ? "you" : short(p.declinedBy, 8, 4)}.`) : null,
+            c && c.problems.length ? h("div", { role: "alert", style: { ...small, color: C.bad } }, "Don't approve this payment: ", c.problems.join(" ")) : null,
+            c && !c.problems.length && mine ? h("span", { style: { ...small, color: C.good } }, "You approved it.") : null,
+            c && !c.problems.length && !mine && channelId ? h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" } },
+                h("button", { type: "button", style: btn.primary, onClick: () => write(c.approve, "Your approval is in the message box. Send it as it is: the treasury checks every character.") }, "Approve"),
+                h("button", { type: "button", style: { ...btn.quiet, ...small }, onClick: () => write(c.decline, "Your decline is in the message box. Sending it stops the payment.") }, "Decline"),
+                note ? h("span", { style: { ...small, ...muted } }, note) : null) : null,
+            c && !c.problems.length && !mine && channelId && !note ? h("span", { style: { ...small, ...muted, overflowWrap: "anywhere" } }, "Approve writes ", h("code", null, c.approve), " for you to send.") : null,
+            c && !c.problems.length && !mine && !channelId ? h("span", { style: { ...small, ...muted } },
+                `${p.kind === "withdrawal" ? "Checked here: the address is on the hive's Operator, and the approval pays exactly what it says." : "Checked here against the job's own terms."} Approve it from the hive's channel, where the Hive line above the message box writes your approval.`) : null);
+    }
+
+    function Payments({ state, gov, title = "Payments", only }) {
+        const me = viewer();
+        const all = (state?.payments?.payments ?? []).filter(only ?? (() => true)).slice().reverse();
+        return h(Card, { title, aside: h("span", { style: { ...muted, ...small } }, `${all.length}`) },
+            !state?.payments ? h(Empty, null, "The hive's approvals desk starts once its treasury is built.")
+                : all.length === 0 ? h(Empty, null, "No payment is waiting.")
+                : h("ul", { style: list }, all.map((p, i) => h(PaymentRow, { key: p.id, p, state, gov, me, first: i === 0 }))));
+    }
+
+    /** Above the hive channel's message box, for a keeper: what waits for their approval, and Withdraw. */
+    function KeeperBar(props) {
+        const { state, gov } = useSnapshot();
+        const form = useWithdrawing();
+        const me = viewer();
+        if (!gov || !isHiveChannel(props.channelId) || props.threadRootId || !me || !gov.keepers.includes(me) || !state?.payments) return null;
+        if (form === props.channelId) return h(WithdrawForm, { channelId: props.channelId });
+        const waiting = waitingFor(state, me);
+        return h("div", { style: { ...stack("var(--space-2)"), padding: "var(--space-2) var(--space-3)", margin: "0 0 var(--space-2)", background: C.panel,
+            border: `1px solid ${waiting.length ? C.honey : C.line}`, borderRadius: C.radius } },
+            h("div", { style: { ...row, alignItems: "center" } },
+                h("strong", { style: { display: "inline-flex", gap: 8, alignItems: "center", ...small } }, h(Hex, { size: 13 }),
+                    waiting.length ? `${waiting.length} payment${waiting.length === 1 ? "" : "s"} waiting for your approval` : "No payment waits for you"),
+                h("button", { type: "button", style: { ...btn.quiet, ...small, color: C.text, fontWeight: 550 }, onClick: () => setWithdrawing(props.channelId) }, "Withdraw")),
+            waiting.length ? h("ul", { style: list }, waiting.map((p, i) => h(PaymentRow, { key: p.id, p, state, gov, me, channelId: props.channelId, first: i === 0 }))) : null);
+    }
+    ctx.conversation.registerAccessory({ id: "keeper", title: "Hive payments for keepers", order: 40, component: KeeperBar });
+
+    function WithdrawForm({ channelId }) {
+        const { state } = useSnapshot();
+        const [f, setF] = React.useState({ amount: "", address: "" });
+        const [tried, setTried] = React.useState(false);
+        const [failed, setFailed] = React.useState(null);
+        const { text, problem } = hiveChecks().withdrawalRequest(f.amount, f.address, state?.payments);
+        const submit = (e) => {
+            e?.preventDefault?.();
+            setTried(true);
+            if (!text) return;
+            if (compose(channelId, text)) setWithdrawing(null);
+            else setFailed("The message box is not ready. Click into it and try again.");
+        };
+        const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+        return h("form", { onSubmit: submit, style: { ...stack("var(--space-3)"), padding: "var(--space-3) var(--space-4)", margin: "0 0 var(--space-2)", background: C.panel,
+            border: `1px solid ${C.line}`, borderRadius: C.radius, boxShadow: "var(--shadow-xs)" } },
+            h("div", { style: { ...row, alignItems: "center" } },
+                h("strong", { style: { display: "inline-flex", gap: 8, alignItems: "center" } }, h(Hex, { size: 16 }), "Withdraw from the treasury"),
+                h("button", { type: "button", style: { ...btn.quiet, ...small }, onClick: () => setWithdrawing(null) }, "Cancel")),
+            h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
+                h("label", { htmlFor: "hive-w-amount", style: { ...field, flex: "1 1 120px" } }, h("span", { style: label }, "Amount in sats"),
+                    h("input", { id: "hive-w-amount", value: f.amount, onChange: set("amount"), inputMode: "numeric", placeholder: "5,000", style: input })),
+                h("label", { htmlFor: "hive-w-address", style: { ...field, flex: "3 1 260px" } }, h("span", { style: label }, "Arkade address"),
+                    h("input", { id: "hive-w-address", value: f.address, onChange: set("address"), placeholder: "ark1…", autoCorrect: "off", autoCapitalize: "none", spellCheck: false, style: input }))),
+            h("div", { style: { ...row, alignItems: "center" } },
+                h("button", { type: "submit", style: btn.primary }, "Add to message"),
+                h("span", { style: { ...small, ...(tried && problem ? { color: C.bad } : muted) }, role: tried && problem ? "alert" : undefined },
+                    failed ?? (tried && problem ? problem : `Two keepers approve it like any payment; ${amount(state?.treasury?.balanceSats)} in the treasury.`))));
+    }
+
+    /** A keeper's approval, decline or withdrawal in the channel, drawn with the payment it names. */
+    function PaymentMessage({ message }) {
+        const { state, gov } = useSnapshot();
+        const c = hiveChecks();
+        const said = c.paymentWord(message.content);
+        const asked = said ? null : c.withdrawalOf(message.content);
+        const all = state?.payments?.payments ?? [];
+        const p = said ? all.find((x) => x.code === said.code) : all.find((x) => x.id === message.id);
+        const keeper = Boolean(gov?.keepers.includes(message.authorId));
+        const verb = said?.word === "approve" ? "Approved" : said?.word === "decline" ? "Declined" : "Asked to withdraw";
+        const what = p ? paymentTitle(p) : asked ? `${amount(asked.amountSats)} to ${short(asked.address, 12, 6)}` : "a Hive payment";
+        return h("div", { className: "ui-card", style: { ...stack(6), padding: "var(--space-2) var(--space-3)", maxWidth: 520, boxSizing: "border-box" } },
+            h("div", { style: { display: "flex", gap: "var(--space-2)", alignItems: "center", justifyContent: "space-between" } },
+                h("span", { style: { display: "inline-flex", gap: 8, alignItems: "center", minWidth: 0 } }, h(Hex, { size: 14, filled: said?.word !== "decline" }),
+                    h("span", null, h("strong", null, verb), " ", h("span", { style: tnum }, what))),
+                p ? h(Pill, { tone: PAYMENT_TONE[p.status] }, PAYMENT_STATUS[p.status] ?? p.status) : null),
+            !keeper ? h("span", { style: { ...small, color: C.bad } }, "Only this hive's keepers approve its payments: this message counts for nothing.")
+                : p ? h("span", { style: { ...small, ...muted, ...tnum } }, `${p.approvedBy.length} of ${gov?.threshold ?? 2} keepers approved`)
+                : said ? h("span", { style: { ...small, ...muted } }, "Not a payment the hive's desk has waiting now.") : null);
+    }
+    ctx.conversation.registerMessage({
+        id: "payment",
+        title: "Hive payment",
+        matches: (message) => {
+            const gov = snapshot.gov;
+            if (!gov?.channelId || message.channelId !== gov.channelId) return false;
+            try {
+                const c = hiveChecks();
+                return Boolean(c.paymentWord(message.content) || c.withdrawalOf(message.content));
+            } catch { return false; }
+        },
+        component: PaymentMessage,
+    });
+
     function Funding({ state }) {
-        const link = consoleLink(state);
+        const desk = Boolean(state.payments);
+        const byId = new Map((state.payments?.payments ?? []).map((p) => [p.id, p]));
+        const why = new Map((state.payments?.waiting ?? []).map((w) => [w.jobId, w.reason]));
         return h(Card, { title: "Jobs to fund", aside: state.funding.length ? h(Pill, { tone: "honey" }, `${state.funding.length} waiting`) : null },
-            state.funding.length && link
-                ? h("div", { style: { marginBottom: "var(--space-4)" } },
-                    h(Well, { label: "Approve in the keeper console", value: link, copy: link }),
-                    h("p", { style: { ...p0, ...muted, ...small, marginTop: "var(--space-2)" } },
-                        "Open it in your browser and unlock it with your passkey. It checks each job against the escrow's own terms before your passkey approves it, and any two keepers' approvals send the payment."))
-                : null,
             state.funding.length === 0
                 ? h(Empty, null, "No job is waiting for funding.")
                 : h("ul", { style: list }, state.funding.map((j, i) => h("li", { key: j.jobId, style: { ...item, gap: "var(--space-3)", ...(i === 0 ? { borderTop: 0, paddingTop: 0 } : {}) } },
                     h("div", { style: { ...row, alignItems: "center" } },
                         h("strong", { style: tnum }, `${amount(j.capSats)} for ${modelName(j.model)}`),
                         h("span", { style: { ...muted, ...small } }, `deadline ${until(j.deadline)}`)),
-                    // With a desk, keepers approve in the console and the desk pays: the cap and the escrow are for
-                    // checking against what the console shows. Without one, someone sends the payment by hand.
-                    h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
-                        link
-                            ? h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Cap", value: amount(j.capSats, true), mono: false }))
-                            : h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: amount(j.capSats, true), copy: String(j.capSats), mono: false })),
-                        h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: link ? "Escrow" : "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
-                    h("p", { style: { ...p0, ...muted, ...small } },
-                        link
-                            ? `For provider ${short(j.providerPk)}. Whatever the job does not use comes back to the treasury after the deadline.`
-                            : `For provider ${short(j.providerPk)}. Send it in one payment from the treasury; anything else comes back after the deadline.${j.minCoinExpiry ? ` The coins you send must be valid until ${day(j.minCoinExpiry)}, so renew the wallet first if it has not renewed in a few weeks.` : ""}`)))));
+                    // With an approvals desk, keepers approve in the channel and the desk pays. Without one,
+                    // someone sends the payment by hand.
+                    desk
+                        ? h("span", { style: { ...small, ...muted } }, byId.get(j.jobId)
+                            ? `${byId.get(j.jobId).approvedBy.length} of ${snapshot.gov?.threshold ?? 2} keepers approved it. Keepers approve it from the hive's channel, after the plugin checks it against the escrow's own terms.`
+                            : why.get(j.jobId) ? `Not yet a payment: ${why.get(j.jobId)}.` : "The desk turns it into a payment on its next round.")
+                        : h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-3)" } },
+                            h("div", { style: { flex: "1 1 170px" } }, h(Well, { label: "Send exactly", value: amount(j.capSats, true), copy: String(j.capSats), mono: false })),
+                            h("div", { style: { flex: "3 1 260px", minWidth: 0 } }, h(Well, { label: "To escrow", value: short(j.escrowAddress, 14, 8), copy: j.escrowAddress }))),
+                    desk ? null : h("p", { style: { ...p0, ...muted, ...small } },
+                        `For provider ${short(j.providerPk)}. Send it in one payment from the treasury; anything else comes back after the deadline.${j.minCoinExpiry ? ` The coins you send must be valid until ${day(j.minCoinExpiry)}, so renew the wallet first if it has not renewed in a few weeks.` : ""}`)))));
     }
 
     function Keepers({ gov }) {
@@ -1199,13 +1336,10 @@ export function apply(ctx) {
         return h(Card, { title: "Keepers", aside: h("span", { style: { ...muted, ...small } }, `${gov.threshold} of ${gov.keepers.length} approve`) },
             h("div", { style: { display: "flex", flexWrap: "wrap", gap: "var(--space-2)" } },
                 gov.keepers.map((k) => h("span", { key: k, style: { display: "inline-flex", gap: 8, alignItems: "center", padding: "5px 12px 5px 8px", background: C.inset, borderRadius: C.pill } },
-                    h(Hex, { size: 14, filled: Boolean(gov.keys?.[k]) }), h("code", { style: small }, short(k, 8, 4)),
-                    h("span", { style: { ...small, ...muted } }, `${k === me ? "you, " : ""}${gov.keys?.[k] ? "key in" : "no key yet"}`)))),
-            me && gov.keepers.includes(me) && !gov.keys?.[me]
-                ? h("p", { style: { ...p0, ...small } }, "Create your keeper passkey in the keeper console", KEEPER_CONSOLE ? [" at ", h("code", { key: "c" }, KEEPER_CONSOLE)] : null,
-                    ", then post the line it gives you, starting with “Hive keeper key:”, in the hive's channel.")
-                : null,
-            h("p", { style: { ...p0, ...muted, ...small } }, `Keepers approve proposals with ✅ in the channel, and each payment from the treasury with their passkey in the keeper console. Any ${gov.threshold} of them approve together.`));
+                    h(Hex, { size: 14 }), h("code", { style: small }, short(k, 8, 4)),
+                    k === me ? h("span", { style: { ...small, ...muted } }, "you") : null))),
+            h("p", { style: { ...p0, ...muted, ...small } }, `Keepers approve proposals with ✅, and each payment with a message in the hive's channel that the plugin writes for them once it has checked the payment. Their Buzz key signs it like any message, and the treasury checks the signature itself. Any ${gov.threshold} of them approve together.`),
+            me && gov.keepers.includes(me) ? h("p", { style: { ...p0, ...muted, ...small } }, "Your Buzz key is your share of the treasury: back it up in Settings → Identity if you haven't.") : null);
     }
 
     function Jobs({ state }) {
@@ -1255,7 +1389,7 @@ export function apply(ctx) {
         const me = viewer();
         const keeper = Boolean(me && gov?.keepers.includes(me));
         const decide = keeper ? gov.proposals.filter((p) => p.state === "open" && p.discussionEnds <= nowS() && !p.approvals.includes(me)) : [];
-        const waiting = keeper ? decide.length + (state?.funding.length ?? 0) : 0;
+        const waiting = keeper ? decide.length + (state?.payments ? waitingFor(state, me).length : state?.funding.length ?? 0) : 0;
         const live = (p) => ["open", "approved", "running"].includes(p.state);
         const col = (...children) => h("div", { style: stack("var(--space-4)") }, ...children);
         const needsHost = h(Card, null, h(Empty, null, error ? "The hive's host is out of reach, so the treasury and jobs are not shown." : "Loading the treasury…"));
@@ -1269,6 +1403,7 @@ export function apply(ctx) {
                     gov ? h(Proposals, { state, gov, filter: (p) => !live(p), title: "Past proposals", empty: "None yet." }) : null)
                 : tab === "keepers" ? col(
                     keeper ? h(Proposals, { state, gov, filter: (p) => decide.includes(p), title: "Waiting for your decision", empty: "No proposal needs your decision." }) : null,
+                    state?.payments ? h(Payments, { state, gov }) : null,
                     state ? h(Funding, { state }) : needsHost, h(Keepers, { gov }))
                 : state ? h("div", { style: grid }, col(h(Flows, { state }), h(Jobs, { state })), col(h(Providers, { state })))
                 : needsHost;

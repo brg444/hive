@@ -2,7 +2,7 @@
 import { sha256 } from "@noble/hashes/sha2";
 
 export function createHash(name) {
-    if (name !== "sha256") throw new Error(`no ${name} in the console`);
+    if (name !== "sha256") throw new Error(`no ${name} in the Hive plugin`);
     const parts = [];
     return {
         update(data) {
@@ -22,5 +22,5 @@ export const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
 export const timingSafeEqual = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 export default { createHash, randomBytes, timingSafeEqual };
 export const createHmac = () => {
-    throw new Error("createHmac is not available in the keeper console");
+    throw new Error("createHmac is not available in the Hive plugin");
 };

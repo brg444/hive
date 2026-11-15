@@ -1,7 +1,7 @@
-// Node's file, process and server modules have no place in the console: anything that reaches
+// Node's file, process and server modules have no place in the Hive plugin: anything that reaches
 // for them there is a mistake, and fails loudly.
 const refuse = (name) => () => {
-    throw new Error(`${name} is not available in the keeper console`);
+    throw new Error(`${name} is not available in the Hive plugin`);
 };
 export const existsSync = () => false;
 export const readFileSync = refuse("readFileSync");
@@ -25,7 +25,7 @@ export const isDeepStrictEqual = (a, b) => JSON.stringify(a) === JSON.stringify(
 export const spawn = refuse("spawn");
 export class DatabaseSync {
     constructor() {
-        throw new Error("DatabaseSync is not available in the keeper console");
+        throw new Error("DatabaseSync is not available in the Hive plugin");
     }
 }
 export const createServer = refuse("createServer");

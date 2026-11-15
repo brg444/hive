@@ -1,71 +1,63 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { test } from "node:test";
-import { type Connection, jobEscrow } from "@hive/ark";
+import { arkAddress, type Connection, jobEscrow } from "@hive/ark";
 import type { TreasuryContract } from "@hive/executor";
-import { faultCode, hex, localPath } from "@hive/kit";
-import { deskAuthDigest } from "@hive/steward";
-import { CLIENT_PREFIX, challengeOf, counterOf, keeperKey, payMessage, sha256 } from "@hive/treasury";
-import { p256 } from "@noble/curves/nist.js";
+import { hex, localPath } from "@hive/kit";
+import {
+  approvalText,
+  type BuzzEvent,
+  counterOf,
+  declineText,
+  payMessage,
+  sha256,
+  withdrawalText,
+} from "@hive/treasury";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { ApprovalDesk } from "../../tools/approvals-desk.js";
-import type { DeskAuth } from "../../tools/desk.js";
 import { type HiveRecord, opsPaths } from "../../tools/ops.js";
 
 /**
- * The approvals desk between a v5 hive and its keepers' consoles, over a stand-in for the treasury
- * contract that keeps its coins in memory: a payment a keeper starts gets the treasury's next number,
- * two keepers' passkey approvals make it ready, and the desk's round pays it, folding chip-ins in
- * first when the treasury coin cannot cover it. Numbers follow the payments still under way.
+ * The approvals desk of a v5 hive, following its channel, over a stand-in for the treasury contract
+ * that keeps its coins in memory: a job the agent asks the keepers to fund becomes a payment with the
+ * treasury's next number, two keepers' approval messages make it ready, and the desk's round pays it,
+ * folding chip-ins in first when the treasury coin cannot cover it. A keeper's decline stops one, and
+ * numbers follow the payments still under way. A keeper asks for a withdrawal in the channel.
  */
-const SITE = "keepers.example";
-const ORIGIN = "https://keepers.example";
 const SUPPLY = 1_000_000n;
+const CHANNEL = "4f1c2e0a-0000-4000-8000-000000000000";
 const point = () => hex(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true));
-const code = async (p: Promise<unknown>) => {
-  try {
-    await p;
-    return "ok";
-  } catch (error) {
-    return faultCode(error);
-  }
-};
+const utf8 = (s: string) => new TextEncoder().encode(s);
 
-/** A keeper: a passkey on the keeper site, and the Bitcoin key the desk knows them by. */
-function keeper() {
-  const passkey = p256.utils.randomSecretKey();
-  const bitcoin = secp256k1.utils.randomSecretKey();
-  const utf8 = (s: string) => new TextEncoder().encode(s);
+/** A member's Buzz identity: it signs channel messages as Buzz's outbox builds them. */
+function member() {
+  const secret = schnorr.utils.randomSecretKey();
+  const key = hex(schnorr.getPublicKey(secret));
+  let n = 0;
   return {
-    record: {
-      kind: 1 as const,
-      key: hex(keeperKey(p256.getPublicKey(passkey, true))),
-      bitcoinKey: hex(secp256k1.getPublicKey(bitcoin, true)),
-      site: SITE,
-    },
-    auth(hive: string, action: string, id: string, at: number): DeskAuth {
-      const signature = hex(schnorr.sign(deskAuthDigest(hive, action, id, at), bitcoin));
-      return { keeper: hex(secp256k1.getPublicKey(bitcoin, true)), at, signature };
-    },
-    /** What the console posts: the passkey's WebAuthn assertion over the message. */
-    assertion(message: Uint8Array, origin = ORIGIN) {
-      const authData = new Uint8Array([...sha256(utf8(SITE)), 0x05, 0, 0, 0, 1]);
-      const clientDataJSON = `${CLIENT_PREFIX}${challengeOf(message)}","origin":"${origin}","crossOrigin":false}`;
-      const digest = sha256(new Uint8Array([...authData, ...sha256(utf8(clientDataJSON))]));
-      const signature = p256.Signature.fromBytes(
-        p256.sign(digest, passkey, { prehash: false }),
-        "compact",
-      ).toBytes("der");
+    key,
+    message(content: string, at: number): BuzzEvent {
+      const tags = [
+        ["h", CHANNEL],
+        ["client-id", `c${n++}`],
+        ["ms", "417"],
+      ];
+      const id = hex(sha256(utf8(JSON.stringify([0, key, at, 9, tags, content]))));
       return {
-        authenticatorData: Buffer.from(authData).toString("base64url"),
-        clientDataJSON,
-        signature: Buffer.from(signature).toString("base64url"),
+        id,
+        pubkey: key,
+        created_at: at,
+        kind: 9,
+        tags,
+        content,
+        sig: hex(schnorr.sign(Buffer.from(id, "hex"), secret)),
       };
     },
   };
 }
+type Member = ReturnType<typeof member>;
 
 type Coin = { txid: string; vout: number; value: number; assets?: { assetId: string; amount: number }[] };
 
@@ -133,7 +125,7 @@ function fakeTreasury(assetId: string, coins: Coin[]) {
 
 function setup(clock: { now: number }, coins: Coin[]) {
   const hive = `approvals-${randomUUID().slice(0, 8)}`;
-  const keepers = [keeper(), keeper(), keeper()];
+  const keepers = [member(), member(), member()];
   const counter = counterOf(`${hex(randomBytes(32))}0000`);
   const server = point();
   const conn = {
@@ -148,11 +140,11 @@ function setup(clock: { now: number }, coins: Coin[]) {
     name: hive,
     network: "regtest",
     deployment: { network: "regtest", arkdUrl: "http://arkd", delegateeUrl: "http://delegatee" },
-    stewardKeys: keepers.map((k) => k.record.bitcoinKey),
+    stewardKeys: keepers.map((k) => `02${k.key}`),
     keepersHold: true,
-    passkeys: {
+    v5: {
       version: 5,
-      keepers: keepers.map((k) => k.record),
+      keepers: keepers.map((k) => k.key),
       counter,
       supply: String(SUPPLY),
       delegateKey: conn.keys.delegate,
@@ -181,6 +173,16 @@ function setup(clock: { now: number }, coins: Coin[]) {
     }),
   );
   writeFileSync(agentLog, "");
+  const events = `${files}/events.json`;
+  writeFileSync(events, "[]");
+  /** A message in the hive's channel, as members' plugins forward it to the host. */
+  const say = (who: Member, text: string) => {
+    const e = who.message(text, clock.now);
+    writeFileSync(events, JSON.stringify([...JSON.parse(readFileSync(events, "utf8")), e]));
+    return e;
+  };
+  /** An Arkade address on this hive's Operator, or another's. */
+  const address = (server = conn.keys.server) => arkAddress("regtest", server, `5120${hex(randomBytes(32))}`);
   const job = (cap: number) => {
     const jobId = hex(randomBytes(32));
     const deadline = clock.now + 7200;
@@ -209,6 +211,7 @@ function setup(clock: { now: number }, coins: Coin[]) {
   const desk = new ApprovalDesk(hive, conn, fake.contract, {
     agentLog,
     governance,
+    events,
     now: () => clock.now,
     deadlineMarginSeconds: 60,
     minimumValiditySeconds: 60,
@@ -217,7 +220,17 @@ function setup(clock: { now: number }, coins: Coin[]) {
     rmSync(opsPaths(hive).local(), { recursive: true, force: true });
     rmSync(files, { recursive: true, force: true });
   };
-  return { hive, desk, keepers, fake, job, counter, cleanup };
+  return {
+    desk,
+    keepers: keepers as [Member, Member, Member],
+    fake,
+    job,
+    counter,
+    say,
+    address,
+    conn,
+    cleanup,
+  };
 }
 
 const treasuryCoin = (value: number, units = SUPPLY): Coin => ({
@@ -227,56 +240,69 @@ const treasuryCoin = (value: number, units = SUPPLY): Coin => ({
   assets: [{ assetId: "", amount: Number(units) }],
 });
 
-test("a started payment gets the treasury's number, two passkeys approve it, and the desk pays it once", async () => {
+test("a job becomes a payment with the treasury's number; two keepers' messages approve it, and it pays once", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
-  const { hive, desk, keepers, fake, job, counter, cleanup } = setup(clock, [treasuryCoin(100_000)]);
+  const { desk, keepers, fake, job, counter, say, cleanup } = setup(clock, [treasuryCoin(100_000)]);
   try {
     const jobId = job(20_000);
-    const [a, b, c] = keepers as [
-      ReturnType<typeof keeper>,
-      ReturnType<typeof keeper>,
-      ReturnType<typeof keeper>,
-    ];
-    const started = await desk.start(jobId, a.auth(hive, "start", jobId, clock.now));
+    const [a, b, c] = keepers;
+    await desk.tick();
+    const started = desk.payment(jobId)!;
     assert.equal(started.left, String(SUPPLY));
     assert.equal(started.amountSats, 20_000);
+    assert.equal(started.startedBy, "agent");
     const message = payMessage(counter, {
       left: SUPPLY,
       amount: 20_000n,
       validUntil: started.validUntil,
       program: started.program,
     });
-    assert.deepEqual(desk.message(started), message, "the message the consoles rebuild");
-    assert.equal(await code(desk.start(jobId, b.auth(hive, "start", jobId, clock.now))), "PAYMENT_STARTED");
+    assert.deepEqual(desk.message(started), message, "the message the keepers' plugins rebuild");
+    const shown = (await desk.overview()).payments.find((p) => p.id === jobId)!;
+    assert.equal(approvalText(message), `I approve Hive payment ${shown.code}`);
 
-    // Another payment's approval, another site's, and a stranger's are refused at the door.
+    // Another payment's approval, a message that says more, and a stranger's approval count for nothing.
     const other = payMessage(counter, {
       left: SUPPLY - 1n,
       amount: 20_000n,
       validUntil: started.validUntil,
       program: started.program,
     });
-    assert.equal(await code(desk.approve(jobId, { assertion: a.assertion(other) })), "APPROVAL_REFUSED");
-    assert.equal(
-      await code(desk.approve(jobId, { assertion: a.assertion(message, "https://evil.example") })),
-      "NOT_A_KEEPER",
-    );
-    assert.equal(await code(desk.approve(jobId, { assertion: keeper().assertion(message) })), "NOT_A_KEEPER");
-
-    await desk.approve(jobId, { assertion: a.assertion(message) });
+    say(b, approvalText(other));
+    say(b, `${approvalText(message)} 👍`);
+    say(member(), approvalText(message));
+    say(a, approvalText(message));
     await desk.tick();
+    assert.deepEqual(desk.payment(jobId)!.approvals.map(Boolean), [true, false, false]);
     assert.equal(fake.sent.length, 0, "one approval pays nothing");
-    const ready = await desk.approve(jobId, { assertion: c.assertion(message) });
-    assert.equal(ready.status, "ready");
-    assert.deepEqual(ready.approvals.map(Boolean), [true, false, true]);
+
+    say(c, approvalText(message));
     await desk.tick();
     assert.equal(desk.payment(jobId)?.status, "done");
     assert.equal(fake.sent.length, 1);
     assert.equal(fake.sent[0]!.args[0], 20_000n);
     assert.equal(fake.coins[0]!.assets![0]!.amount, Number(SUPPLY) - 1, "one counter unit burned");
+    const [sigs, times, tags] = fake.sent[0]!.args.slice(3) as [Uint8Array[], Uint8Array[], Uint8Array[]];
+    assert.equal(sigs.filter((s) => s.length).length, 2, "two keepers' signatures go to the covenant");
+    assert.equal(new TextDecoder().decode(times[0]), String(clock.now));
+    assert.match(new TextDecoder().decode(tags[2]), /^\[\["h",/);
     await desk.tick();
     assert.equal(fake.sent.length, 1, "paid once");
-    assert.equal(await code(desk.start(jobId, b.auth(hive, "start", jobId, clock.now))), "PAID");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a job above what approved work has left waits, and says why", async () => {
+  const clock = { now: Math.floor(Date.now() / 1000) };
+  const { desk, job, cleanup } = setup(clock, [treasuryCoin(500_000)]);
+  try {
+    const jobId = job(150_000);
+    await desk.tick();
+    assert.equal(desk.payment(jobId), undefined);
+    const { waiting } = await desk.overview();
+    assert.equal(waiting[0]?.jobId, jobId);
+    assert.match(String(waiting[0]?.reason), /approved work has 100000 left/);
   } finally {
     cleanup();
   }
@@ -285,18 +311,16 @@ test("a started payment gets the treasury's number, two passkeys approve it, and
 test("a payment the treasury coin cannot cover waits for the chip-in beside it to fold in", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const chipIn: Coin = { txid: hex(randomBytes(32)), vout: 0, value: 60_000 };
-  const { hive, desk, keepers, fake, job, cleanup } = setup(clock, [treasuryCoin(1_000), chipIn]);
+  const { desk, keepers, fake, job, say, cleanup } = setup(clock, [treasuryCoin(1_000), chipIn]);
   try {
     const jobId = job(20_000);
-    const [a, b] = keepers as [ReturnType<typeof keeper>, ReturnType<typeof keeper>];
-    const started = await desk.start(jobId, a.auth(hive, "start", jobId, clock.now));
-    for (const k of [a, b]) await desk.approve(jobId, { assertion: k.assertion(desk.message(started)) });
     await desk.tick();
     assert.deepEqual(
       fake.sent.map((s) => s.fn),
       ["merge"],
-      "the chip-in folds in first",
+      "the chip-in folds in while the keepers approve",
     );
+    for (const k of keepers.slice(0, 2)) say(k, approvalText(desk.message(desk.payment(jobId)!)));
     await desk.tick();
     assert.deepEqual(
       fake.sent.map((s) => s.fn),
@@ -309,26 +333,29 @@ test("a payment the treasury coin cannot cover waits for the chip-in beside it t
   }
 });
 
-test("payments go out in the order keepers started them; one cancelled gives its number to the next", async () => {
+test("payments go out in the order they started; one declined gives its number to the next", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
-  const { hive, desk, keepers, fake, job, cleanup } = setup(clock, [treasuryCoin(100_000)]);
+  const { desk, keepers, fake, job, say, cleanup } = setup(clock, [treasuryCoin(100_000)]);
   try {
-    const [a, b] = keepers as [ReturnType<typeof keeper>, ReturnType<typeof keeper>];
+    const [a, b] = keepers;
     const first = job(10_000);
     const second = job(5_000);
-    const one = await desk.start(first, a.auth(hive, "start", first, clock.now));
-    const two = await desk.start(second, a.auth(hive, "start", second, clock.now));
+    await desk.tick();
+    const one = desk.payment(first)!;
+    const two = desk.payment(second)!;
     assert.deepEqual([one.left, two.left], [String(SUPPLY), String(SUPPLY - 1n)]);
-    for (const k of [a, b]) await desk.approve(second, { assertion: k.assertion(desk.message(two)) });
+    for (const k of [a, b]) say(k, approvalText(desk.message(two)));
     await desk.tick();
     assert.equal(fake.sent.length, 0, "the second waits for the first");
-    await desk.cancel(first, b.auth(hive, "cancel", first, clock.now));
+    say(b, declineText(desk.message(one)));
     await desk.tick();
+    assert.equal(desk.payment(first)?.status, "declined");
+    assert.equal(desk.payment(first)?.declinedBy, b.key);
     const renumbered = desk.payment(second)!;
     assert.equal(renumbered.left, String(SUPPLY), "the next number");
     assert.equal(renumbered.status, "approving", "its approvals named the old number");
     assert.deepEqual(renumbered.approvals, [null, null, null]);
-    for (const k of [a, b]) await desk.approve(second, { assertion: k.assertion(desk.message(renumbered)) });
+    for (const k of [a, b]) say(k, approvalText(desk.message(renumbered)));
     await desk.tick();
     assert.equal(desk.payment(second)?.status, "done");
   } finally {
@@ -336,24 +363,50 @@ test("payments go out in the order keepers started them; one cancelled gives its
   }
 });
 
+test("a keeper asks for a withdrawal in the channel; two keepers approve it like any payment", async () => {
+  const clock = { now: Math.floor(Date.now() / 1000) };
+  const { desk, keepers, fake, say, address, cleanup } = setup(clock, [treasuryCoin(100_000)]);
+  try {
+    const [a, b, c] = keepers;
+    const to = address();
+    const asked = say(c, withdrawalText(5_000, to));
+    say(member(), withdrawalText(9_000, address()));
+    const elsewhere = say(a, withdrawalText(5_000, address(point())));
+    await desk.tick();
+    const w = desk.payment(asked.id)!;
+    assert.equal(w.status, "approving");
+    assert.equal(w.startedBy, c.key);
+    assert.equal(w.address, to);
+    assert.equal(desk.payment(elsewhere.id)?.status, "failed");
+    assert.match(String(desk.payment(elsewhere.id)?.detail), /another Operator/);
+    assert.equal(desk.payments().length, 2, "a member who is not a keeper asks for nothing");
+    for (const k of [a, b]) say(k, approvalText(desk.message(w)));
+    await desk.tick();
+    assert.equal(desk.payment(asked.id)?.status, "done");
+    assert.equal(fake.sent[0]!.args[0], 5_000n);
+  } finally {
+    cleanup();
+  }
+});
+
 test("approvals lapse; a payment whose answer was lost is done when the counter moved", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
-  const { hive, desk, keepers, fake, job, cleanup } = setup(clock, [treasuryCoin(100_000)]);
+  const { desk, keepers, fake, job, say, cleanup } = setup(clock, [treasuryCoin(100_000)]);
   try {
-    const [a, b] = keepers as [ReturnType<typeof keeper>, ReturnType<typeof keeper>];
+    const [a, b] = keepers;
     const late = job(10_000);
-    const started = await desk.start(late, a.auth(hive, "start", late, clock.now));
+    await desk.tick();
+    const started = desk.payment(late)!;
     clock.now = started.validUntil;
+    for (const k of [a, b]) say(k, approvalText(desk.message(started)));
     await desk.tick();
     assert.equal(desk.payment(late)?.status, "lapsed");
-    assert.equal(
-      await code(desk.approve(late, { assertion: b.assertion(desk.message(started)) })),
-      "WRONG_ROUND",
-    );
+    assert.equal(fake.sent.length, 0);
 
     const lost = job(10_000);
-    const payment = await desk.start(lost, a.auth(hive, "start", lost, clock.now));
-    for (const k of [a, b]) await desk.approve(lost, { assertion: k.assertion(desk.message(payment)) });
+    await desk.tick();
+    const payment = desk.payment(lost)!;
+    for (const k of [a, b]) say(k, approvalText(desk.message(payment)));
     // The Emulator accepted the payment and the answer never came back.
     fake.loseAnswers();
     await desk.tick();

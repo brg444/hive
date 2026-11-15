@@ -2,7 +2,7 @@
 // walks the community through the plugin, the treasury and the first proposal.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY, keepersKeys, onboardingPlan, yesVotes } from "../bot/onboard.mjs";
+import { EMPTY, onboardingPlan, yesVotes } from "../bot/onboard.mjs";
 import { formatProposal } from "../shared/proposal.mjs";
 
 const BOT = "b0".repeat(32), FOUNDER = "f0".repeat(32), A = "a1".repeat(32), B = "b2".repeat(32), C = "c3".repeat(32);
@@ -44,45 +44,33 @@ test("keepers volunteer with ✅, the founder confirms, and the plugin follows w
     events.push(react(FOUNDER, "confirm-id", "✅", T0 + 12), react(FOUNDER, "call-id", "✅", T0 + 13));
     ({ posts, record } = step(record, cfg(events)));
     assert.deepEqual(record.keepers, [A, C, B], "keepers who volunteered before the founder confirmed, in order");
-    assert.deepEqual(posts.map((p) => p.key), ["plugin", "keys", "propose"]);
+    assert.deepEqual(posts.map((p) => p.key), ["plugin", "keys", "treasury", "propose"]);
     assert.ok(posts[0].plugin);
     assert.match(posts[0].text, /^Keepers are set: @Ari, @Cy and @Bo\. Any 2 of them approve\./);
-    assert.match(posts[1].text, /^Keepers, your keys next\. Each of you creates a keeper passkey in the keeper console, which the Hive team shares with you\./);
+    assert.match(posts[1].text, /^Keepers, your Buzz account is your key to the treasury: there is nothing to create or copy\./);
+    assert.match(posts[1].text, /back up your Buzz key in Settings → Identity/);
     assert.deepEqual(posts[1].mentions, [A, C, B]);
-    assert.match(posts[2].text, /\nProposal: What the work is, in a few words\nBudget: 20,000 sats\n/);
-    assert.match(posts[2].text, /Discussion runs 48 hours, or 24 under 20,000 sats, and then 2 keepers' ✅ approve it\.$/);
-
-    // Keys count only from keepers; the treasury step waits for all of them.
-    const key = (c) => `02${c.repeat(64)}`;
-    const say = (pubkey, content, at) => ({ id: id(), kind: 9, pubkey, content, created_at: at, tags: [["h", "chan"]] });
-    events.push(say(A, `Hive keeper key: ${key("a")}`, T0 + 20), say(FOUNDER, `Hive keeper key: ${key("f")}`, T0 + 21), say(C, `Hive keeper key: ${key("c")}`, T0 + 22));
-    ({ posts, record } = step(record, cfg(events)));
-    assert.deepEqual(posts, [], "one keeper still to go; the founder is not a keeper");
-    events.push(say(B, "Hive keeper key: not-a-key", T0 + 23), say(B, `hive keeper key: ${key("B")}`, T0 + 24));
-    ({ posts, record } = step(record, cfg(events)));
-    assert.deepEqual(posts.map((p) => p.key), ["keys-in", "treasury"]);
-    assert.equal(posts[0].text, "All 3 keys are in, from @Ari, @Cy and @Bo. The treasury is built from them, and any 2 keepers approve its payments together.");
-    assert.match(posts[1].text, /sets it up from the keepers' keys, and I'll post its address here once it's ready/);
-    assert.deepEqual(keepersKeys(events, [A, B, C]), { [A]: key("a"), [C]: key("c"), [B]: key("b") });
-    ({ posts } = step(record, cfg(events, { console: "https://keepers.example.org" })));
+    assert.match(posts[2].text, /The hive's host builds it from the keepers' Buzz keys, and I'll post its address here once it's ready\.$/);
+    assert.match(posts[3].text, /\nProposal: What the work is, in a few words\nBudget: 20,000 sats\n/);
+    assert.match(posts[3].text, /Discussion runs 48 hours, or 24 under 20,000 sats, and then 2 keepers' ✅ approve it\.$/);
+    ({ posts } = step(record, cfg(events)));
     assert.deepEqual(posts, [], "said once");
 });
 
 test("the treasury is announced once the host has one, and the first proposal closes the setup", () => {
-    let record = { ...EMPTY, keepers: [A, C], threshold: 2, posts: { call: "call-id", confirm: "confirm-id", plugin: "plugin-id", keys: "k-id", "keys-in": "ki-id", treasury: "t-id", propose: "p-id" } };
+    let record = { ...EMPTY, keepers: [A, C], threshold: 2, posts: { call: "call-id", confirm: "confirm-id", plugin: "plugin-id", keys: "k-id", treasury: "t-id", propose: "p-id" } };
     let r = step(record, cfg([], { state: { demo: true, treasury: { address: "ark1qdemo" } } }));
     assert.deepEqual(r.posts, [], "sample data is not a treasury");
     r = step(record, cfg([], { state: { treasury: { address: "ark1qreal" }, chipIn: { lightningAddress: "hive@example.org" } } }));
     assert.deepEqual(r.posts.map((p) => p.key), ["treasury-ready"]);
     assert.equal(r.posts[0].text, "The treasury is ready. Chip in at hive@example.org, or send to ark1qreal from any Lightning or Arkade wallet. Every chip-in lands in the treasury as Bitcoin.");
-    // A host whose hive is another bot's, or built from other keepers or keys, is not this channel's treasury.
-    const keyOf = { [A]: `02${"11".repeat(32)}`, [C]: `02${"22".repeat(32)}` };
-    const posted = [A, C].map((k, i) => ({ id: `key-${i}`, kind: 9, pubkey: k, created_at: 100 + i, tags: [], content: `Hive keeper key: ${keyOf[k]}` }));
-    const host = (over = {}) => ({ treasury: { address: "ark1qreal" }, hive: { bot: BOT }, governance: { keepers: [A, C], keeperKeys: [keyOf[A], keyOf[C]] }, ...over });
-    assert.deepEqual(step(record, cfg(posted, { state: host() })).posts.map((p) => p.key), ["treasury-ready"]);
-    assert.deepEqual(step(record, cfg(posted, { state: host({ hive: { bot: "ee".repeat(32) } }) })).posts, [], "another bot's hive");
-    assert.deepEqual(step(record, cfg(posted, { state: host({ governance: { keepers: [A, "dd".repeat(32)], keeperKeys: [keyOf[A], keyOf[C]] } }) })).posts, [], "other keepers");
-    assert.deepEqual(step(record, cfg(posted, { state: host({ governance: { keepers: [A, C], keeperKeys: [keyOf[A], `02${"33".repeat(32)}`] } }) })).posts, [], "another key");
+    // A host whose hive is another bot's, or built from other keepers or in another order, is not this
+    // channel's treasury: the keepers' Buzz keys, in the order confirmed here, build it.
+    const host = (over = {}) => ({ treasury: { address: "ark1qreal" }, hive: { bot: BOT }, governance: { keepers: [A, C] }, ...over });
+    assert.deepEqual(step(record, cfg([], { state: host() })).posts.map((p) => p.key), ["treasury-ready"]);
+    assert.deepEqual(step(record, cfg([], { state: host({ hive: { bot: "ee".repeat(32) } }) })).posts, [], "another bot's hive");
+    assert.deepEqual(step(record, cfg([], { state: host({ governance: { keepers: [A, "dd".repeat(32)] } }) })).posts, [], "other keepers");
+    assert.deepEqual(step(record, cfg([], { state: host({ governance: { keepers: [C, A] } }) })).posts, [], "another order");
     record = r.record;
     assert.deepEqual(step(record, cfg([], { state: { treasury: { address: "ark1qreal" } } })).posts, [], "said once");
 

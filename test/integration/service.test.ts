@@ -3,15 +3,15 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { type TestContext, test } from "node:test";
 import { hex, localPath, sha256Hex, unhex } from "@hive/kit";
-import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import { opsPaths } from "../../tools/ops.js";
 import { agentDigest, hiveIdFor, startService } from "../../tools/service.js";
 import { startFakeNetwork } from "../support/fake-network.js";
 
 /**
  * The Hive service: a community asks for a hive through HiveBot, the operator approves it, members'
- * plugins forward the channel, and once the keepers' keys are in the treasury is built with nobody
- * at the service doing anything.
+ * plugins forward the channel, and once its keepers are confirmed the treasury is built from their
+ * Buzz keys with nobody at the service doing anything.
  */
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -34,7 +34,7 @@ function sign(
   return { ...e, id, sig: hex(schnorr.sign(unhex(id), secret)) };
 }
 
-async function setup(t: TestContext) {
+async function setup(t: TestContext, built: { hive: string; keepers: string[] }[] = []) {
   const fake = await startFakeNetwork({ batchLifetimeSeconds: 4 * 86_400 });
   t.after(() => fake.close());
   const root = localPath("service-test", randomUUID().slice(0, 8));
@@ -43,8 +43,11 @@ async function setup(t: TestContext) {
       network: "regtest",
       deployment: fake.deployment(),
       publicUrl: "https://hive.example.org",
-      consoleUrl: "https://hive.example.org/keeper/",
       discussionSeconds: 600,
+      // The v5 treasury needs the Emulator and the issuer's wallet, which the fake network has not.
+      build: async (hive, keepers) => {
+        built.push({ hive, keepers });
+      },
       root,
     },
     {},
@@ -65,13 +68,11 @@ async function setup(t: TestContext) {
   return { fake, server, channel, hive, call };
 }
 
-test("a hive is asked for by HiveBot, approved, and gets its treasury from its keepers' keys by itself", async (t) => {
-  const { server, channel, hive, call } = await setup(t);
+test("a hive is asked for by HiveBot, approved, and gets its treasury from its keepers' Buzz keys by itself", async (t) => {
+  const built: { hive: string; keepers: string[] }[] = [];
+  const { server, channel, hive, call } = await setup(t, built);
   const [bot, k0, k1, k2, member] = [0, 1, 2, 3, 4].map(() => schnorr.utils.randomSecretKey());
   const pub = (k: Uint8Array) => hex(schnorr.getPublicKey(k));
-  const treasuryKeys = [0, 1, 2].map(() =>
-    hex(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)),
-  );
   const first = sign(bot!, channel, 9, "Hi, I'm Hive bot.", now() - 900, [["hive", "call"]]);
 
   // A setup message someone else signed, or from another channel, asks for nothing.
@@ -90,17 +91,15 @@ test("a hive is asked for by HiveBot, approved, and gets its treasury from its k
     ((await call("/hives?community=wss://open.example")).body.hives as { hive: string }[]).map((h) => h.hive);
   assert.deepEqual(await listed(), []);
 
-  // The channel, as members' plugins forward it: the keepers HiveBot recorded, and their keys.
+  // The channel, as members' plugins forward it: the keepers HiveBot recorded, and a member's chat.
   const events = [
     first,
     sign(bot!, channel, 9, "Keepers are set.", now() - 800, [
       ["hive", "plugin"],
       ...[k0, k1, k2].map((k) => ["p", pub(k!)]),
     ]),
-    ...[k0, k1, k2].map((k, i) =>
-      sign(k!, channel, 9, `Hive keeper key: ${treasuryKeys[i]}`, now() - 700 + i),
-    ),
-    sign(member!, channel, 9, `Hive keeper key: 02${"ab".repeat(32)}`, now() - 600),
+    ...[k0, k1, k2].map((k, i) => sign(k!, channel, 9, `Happy to keep, ${i}`, now() - 700 + i)),
+    sign(member!, channel, 9, "Count me in as a member", now() - 600),
   ];
   // Still pending: nothing is kept or built until the operator opens the hive, and plugins are told so.
   const early = await call(`/c/${channel}/hive/v1/channel`, { events });
@@ -109,6 +108,7 @@ test("a hive is asked for by HiveBot, approved, and gets its treasury from its k
   assert.equal(state.treasury, null);
   assert.equal((state.hive as { status: string }).status, "pending");
   assert.deepEqual((state.governance as { keepers: string[] }).keepers, []);
+  assert.deepEqual(built, [], "nothing is built for a hive nobody approved");
 
   // The operator names HiveBot's key, as the channel shows it: no request is approved on its own word.
   await assert.rejects(server.service.approve(hive), /BOT_REQUIRED/);
@@ -125,18 +125,11 @@ test("a hive is asked for by HiveBot, approved, and gets its treasury from its k
     (state.governance as { keepers: string[] }).keepers,
     [k0, k1, k2].map((k) => pub(k!)),
   );
-  const record = server.service.record(hive);
-  assert.ok(record?.keepersHold);
-  assert.deepEqual(record?.stewardKeys, treasuryKeys);
-  state = await server.service.state(channel);
-  assert.equal((state.treasury as { address: string }).address, record?.treasuryAddress);
-  assert.deepEqual(state.keepersDesk, {
-    desk: `https://hive.example.org/c/${channel}`,
-    console: "https://hive.example.org/keeper/",
-  });
-  // The keepers' consoles reach the hive's desk under its channel.
-  const described = await call(`/c/${channel}/desk/v1/hive`);
-  assert.deepEqual((described.body as { keepers: string[] }).keepers, treasuryKeys);
+  // The treasury is built once, from the keepers' Buzz keys in the order HiveBot confirmed them.
+  assert.deepEqual(built, [{ hive, keepers: [k0, k1, k2].map((k) => pub(k!)) }]);
+  assert.equal(state.payments, null, "no payments before the treasury exists");
+  // The desk's routes for keepers' consoles are gone: keepers approve in the channel.
+  assert.equal((await call(`/c/${channel}/desk/v1/hive`)).status, 404);
   assert.equal((await call(`/c/${randomUUID()}/hive/v1/state`)).status, 404);
 });
 

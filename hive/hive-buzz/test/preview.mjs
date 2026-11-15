@@ -1,8 +1,10 @@
-// Render the plugin as a member sees it in Buzz, with sample data, to an HTML file for screenshots:
-// a proposal card and the status line in the hive's channel, the Propose form above the composer,
-// and the hive's page. It uses Buzz's own design tokens when given a buzz-app checkout.
+// Render the plugin as a keeper sees it in Buzz, with sample data, to an HTML file for screenshots:
+// a proposal card, an approval, the payments waiting for the keeper and the status line in the
+// hive's channel, the Propose form above the composer, and the hive's page. It uses Buzz's own
+// design tokens when given a buzz-app checkout. The sample payments are built with the hive's own
+// code, so the plugin's checks pass on them; run it from the repository's root, with tsx:
 //
-//   node test/preview.mjs <out.html> [--buzz-app <path to block/buzz-app>] [--dark]
+//   node --import tsx hive/hive-buzz/test/preview.mjs <out.html> [--buzz-app <path to block/buzz-app>] [--dark]
 import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -11,6 +13,11 @@ import { pathToFileURL } from "node:url";
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { formatProposal } from "../shared/proposal.mjs";
+import { jobEscrow } from "../../../packages/ark/src/job-escrow.ts";
+import { MAINNET_PINS } from "../../../packages/ark/src/deployment.ts";
+import { arkAddress, parseArkAddress } from "../../../packages/ark/src/taproot.ts";
+import { approvalText, payMessage } from "../../../packages/treasury/src/message.ts";
+import { schnorr } from "@noble/curves/secp256k1";
 
 const argv = process.argv.slice(2);
 const out = argv[0];
@@ -39,16 +46,39 @@ const proposals = [
         allowanceSats: null, purpose: "Generate a starting avatar for each new member.", state: "declined", discussionEnds: now - 18 * D, approvedAt: null, starts: null, ends: null,
         usedSats: 0, support: 2, approvals: [], reason: "Image generation is outside the hive's purpose.", replies: 5 },
 ];
+// The treasury and a job's escrow on mainnet's Operator, and a withdrawal's address, built for real.
+const TREASURY = "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3";
+const operator = { network: "bitcoin", server: MAINNET_PINS.operatorKey, emulator: MAINNET_PINS.emulatorKey, exitDelay: MAINNET_PINS.exitDelaySeconds };
+const conn = { deployment: { network: "bitcoin" }, keys: { server: operator.server, emulator: operator.emulator }, operator: { unilateralExitDelay: operator.exitDelay } };
+const treasuryScript = parseArkAddress(TREASURY).pkScript;
+const JOB = "4a2c" + "0".repeat(56) + "b7e1";
+const point = (n) => Buffer.from(schnorr.getPublicKey(new Uint8Array(32).fill(n))).toString("hex");
+const PROVIDER = point(3);
+const params = { agentPk: point(5), providerPk: PROVIDER, treasuryProgram: treasuryScript.slice(4), deadline: now + 20 * H, jobId: JOB };
+const escrow = jobEscrow(conn, params);
+const MOVE_TO = arkAddress("bitcoin", operator.server, `5120${"6e".repeat(32)}`);
+const counter = { assetId: `${"9f".repeat(32)}0000`, txid: "9f".repeat(32), gidx: 0 };
+const pay = (p) => {
+    const message = payMessage(counter, { left: BigInt(p.left), amount: BigInt(p.amountSats), validUntil: p.validUntil, program: p.program });
+    return { ...p, code: approvalText(message).slice(23) };
+};
+const payments = [
+    pay({ id: JOB, kind: "job", request: { jobId: JOB, address: escrow.address, capSats: 20000, deadline: params.deadline, model: "qwen3-coder-30b", providerPk: PROVIDER, params },
+        address: escrow.address, program: escrow.pkScript.slice(4), amountSats: 20000, left: "999962", validUntil: now + 19 * H, approvedBy: [K[0]], status: "approving",
+        startedBy: "agent", createdAt: now - 2 * H, updatedAt: now - H }),
+    pay({ id: "77".repeat(32), kind: "withdrawal", withdrawal: { destination: `5120${"6e".repeat(32)}`, amountSats: 50000 }, address: MOVE_TO, program: "6e".repeat(32),
+        amountSats: 50000, left: "999961", validUntil: now + 22 * H, approvedBy: [], status: "approving", startedBy: K[2], createdAt: now - H, updatedAt: now - H }),
+];
 const state = {
     v: 1, name: "Buzz Builders", updatedAt: now, agent: { nodeId: "ab".repeat(32) },
-    keepersDesk: { desk: "https://hive.example.org/c/chan-hive", console: "https://keeper.hive.example/" },
     chipIn: { lightningAddress: "builders@hive.example" },
     price: { usdPerBtc: 67235, at: now - 120, source: "mempool.space" },
-    treasury: { address: "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3", balanceSats: 1284500 },
-    funding: [{ jobId: "j42", status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, deadline: now + 20 * H, minCoinExpiry: now + 4 * D,
-        escrowAddress: "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamecescrow0sample0address0for0the0preview0only0xr4t3", providerPk: "3c1d0b7e52" + "0".repeat(48) + "a91f04" }],
+    treasury: { address: TREASURY, balanceSats: 1284500 },
+    payments: { v: 5, counter, keepers: K, treasuryScript, operator, units: "999962", waiting: [], payments },
+    funding: [{ jobId: JOB, status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, deadline: params.deadline, minCoinExpiry: now + 4 * D,
+        escrowAddress: escrow.address, providerPk: PROVIDER }],
     jobs: [
-        { jobId: "j42", status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, usedSats: 0, providerPk: "3c1d0b7e52" + "0".repeat(48) + "a91f04" },
+        { jobId: JOB, status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, usedSats: 0, providerPk: PROVIDER },
         { jobId: "j41", status: "open", model: "llama-3.3-70b", capSats: 20000, usedSats: 6120, providerPk: "8f20aa" + "1".repeat(52) + "c3d2e1" },
         { jobId: "j40", status: "claimed", model: "llama-3.3-70b", capSats: 20000, paidSats: 12120, returnedSats: 7880, providerPk: "8f20aa" + "1".repeat(52) + "c3d2e1" },
         { jobId: "j39", status: "returned", model: "qwen3-coder-30b", capSats: 10000, returnedSats: 10000, providerPk: "3c1d0b7e52" + "0".repeat(48) + "a91f04" },
@@ -63,7 +93,7 @@ const state = {
         { at: now - 3 * D, sats: 5000, rail: "lightning", reference: "c3" },
     ],
     proposals: [],
-    governance: { channelId: "chan-hive", keepers: K, keeperKeys: K.map((_, i) => `02${String(i).repeat(64)}`), threshold: 2, smallSats: 20000, updatedAt: now, proposals, members: { [ME]: { node: "cd".repeat(32) } } },
+    governance: { channelId: "chan-hive", keepers: K, threshold: 2, smallSats: 20000, updatedAt: now, proposals, members: { [ME]: { node: "cd".repeat(32) } } },
 };
 
 // Build and activate the plugin against the sample state.
@@ -93,8 +123,12 @@ const reactions = (support, keepers) => [
     { content: "✅", events: keepers.map((k, i) => ({ id: `k${i}`, authorId: k })) },
 ];
 const Card = seen.messages[0].component;
+const Payment = seen.messages.find((m) => m.id === "payment").component;
 const Tool = seen.tools[0].component;
-const Status = seen.accessories[0].component;
+const Status = seen.accessories.find((a) => a.id === "status").component;
+const Keeper = seen.accessories.find((a) => a.id === "keeper").component;
+const approval = { id: "ab".repeat(32), channelId: "chan-hive", authorId: K[0], createdAt: now - H, mentions: [], reactions: [], content: approvalText(payMessage(counter,
+    { left: 999962n, amount: 20000n, validUntil: payments[0].validUntil, program: payments[0].program })) };
 const toolProps = { channelId: "chan-hive", disabled: false, insertText: () => true, focus: () => {} };
 
 const message = (who, ago, body) => `<div class="msg"><span class="av">${who.slice(0, 2)}</span><div class="mb"><div class="mh"><b>${who}</b><span>${ago}</span></div>${body}</div></div>`;
@@ -104,7 +138,9 @@ const channel = `<div class="chan"><div class="ch">#hive</div><div class="feed">
   ${message("Dana Whitfield", "9:12", render(e(Card, { message: msgFor(proposals[1], reactions(9, [])) })))}
   ${message("Kofi Mensah", "Yesterday", render(e(Card, { message: msgFor(proposals[0], reactions(5, [K[0]])) })))}
   ${message("Hive", "Yesterday", `<p style="margin:0">Paid 12,120 sats to provider 8f20aa1111…c3d2e1 for job j40; 7,880 sats went back to the treasury.</p>`)}
-  </div>${composer(render(e(Status, { channelId: "chan-hive" })), render(e(Tool, toolProps)))}</div>`;
+  ${message("Hive", "11:02", `<p style="margin:0">Keepers, a job is waiting for funding: 20,000 sats for qwen3-coder-30b with provider 3c1d0b7e52…a91f04. Check it on the hive's Keepers tab and press Approve, then send the message it writes; once two of you have, the hive's desk pays the escrow.</p>`)}
+  ${message("Ana Ruiz", "11:20", render(e(Payment, { message: approval })))}
+  </div>${composer(render(e(Keeper, { channelId: "chan-hive" })) + render(e(Status, { channelId: "chan-hive" })), render(e(Tool, toolProps)))}</div>`;
 const running = `<div class="chan"><div class="feed">${message("Dana Whitfield", "Nov 1", render(e(Card, { message: msgFor(proposals[2], reactions(17, [K[0], K[2]])) })))}</div></div>`;
 
 // The form, as it shows once Propose is pressed.

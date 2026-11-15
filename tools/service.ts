@@ -7,7 +7,6 @@
  *   GET  /c/<channel>/hive/v1/state       what the Hive plugin shows
  *   POST /c/<channel>/hive/v1/channel     members' plugins forward the channel's signed events
  *   GET  /c/<channel>/hive/v1/invite      the agent's mesh invite, with --serve-invite
- *   …    /c/<channel>/desk/v1/…           the signing desk, for keepers' consoles
  *   POST /c/<channel>/agent/v1/events     a community's own agent node reports its activity
  *   GET  /c/<channel>/agent/v1/members    and fetches the members it may serve
  *
@@ -16,13 +15,13 @@
  * it agreed to. Any key can sign a request for any channel, and the key approved is the one whose
  * messages name the hive's keepers: the operator takes HiveBot's key from the channel itself, never
  * from the request. Until then a hive keeps nothing but its requests. From then on nothing needs a
- * person here: once every keeper's key is in, the service builds the treasury from the three keys,
- * and the hive's agent node starts. The service holds no key that moves funds; each keeper's console
- * checks every payment itself.
+ * person here: once the hive's three keepers are confirmed in its channel, the service builds the
+ * treasury from their Buzz keys, and the hive's agent node starts. Each hive's approvals desk follows
+ * its channel, where the keepers approve payments with messages their Buzz keys sign. The service
+ * holds no key that moves funds; each keeper's Hive plugin checks every payment itself.
  *
- *   pnpm ops service --network <regtest|bitcoin> --public https://<host> --console https://<host>/keeper/
- *                    [--port 8787] [--model <id>] [--discussion-minutes <n>] [--origin <console origin> …]
- *                    [--serve-invite]
+ *   pnpm ops service --network <regtest|bitcoin> --public https://<host>
+ *                    [--port 8787] [--model <id>] [--discussion-minutes <n>] [--serve-invite]
  */
 import { appendFileSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -45,10 +44,10 @@ import {
 } from "@hive/kit";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { inviteNodeId } from "./agents.js";
-import { type Keeper, keeperOf } from "@hive/treasury";
-import { ApprovalDesk, approvalsRoute } from "./approvals-desk.js";
-import { consoleCors, Desk, type DeskOptions, deskRoute, faultStatus } from "./desk.js";
-import { type HiveRecord, initHive, type OpsContext, treasuryOf } from "./ops.js";
+import { isBuzzKey } from "@hive/treasury";
+import { ApprovalDesk } from "./approvals-desk.js";
+import { type DeskOptions, faultStatus } from "./desk.js";
+import { type HiveRecord, initHive, type OpsContext } from "./ops.js";
 import { currentPrice } from "./price.js";
 
 /** The Buzz plugin's own modules, which the service runs exactly as a single hive's host does. */
@@ -82,7 +81,6 @@ const hiveBuzz = async (): Promise<HiveBuzz> => {
 export interface Governance {
   channelId: string;
   keepers: string[];
-  keeperKeys: (string | null)[];
   agentKey: string | null;
   proposals: { state: string }[];
 }
@@ -112,12 +110,10 @@ export interface ServiceOptions {
   network: string;
   deployment?: Deployment;
   publicUrl: string;
-  consoleUrl: string;
   model?: string;
   threshold?: number;
   smallSats?: number;
   discussionSeconds?: number;
-  origins?: string[];
   /** Starts and stops each hive's agent node; none in tests. */
   agents?: AgentRunner;
   /**
@@ -125,6 +121,8 @@ export interface ServiceOptions {
    * spend, so it is off unless asked for.
    */
   serveInvite?: boolean;
+  /** Builds a hive's v5 treasury from its keepers' Buzz keys: initHive, unless a test stands in. */
+  build?: (hive: string, keepers: [string, string, string]) => Promise<unknown>;
   /** The desks' timing, shortened for a rehearsal whose jobs last minutes. */
   desk?: Pick<DeskOptions, "deadlineMarginSeconds" | "minimumValiditySeconds">;
   root?: string;
@@ -158,7 +156,7 @@ const PENDING_SECONDS = 30 * 86_400;
 /** How many forwards or reports may wait on one hive before more are turned away. */
 const MAX_WAITING = 8;
 /** The largest body each kind of request may carry. */
-const BODY_LIMIT = { hives: 32 * 1024, channel: 4 * 1024 * 1024, desk: 256 * 1024, agent: 2 * 1024 * 1024 };
+const BODY_LIMIT = { hives: 32 * 1024, channel: 4 * 1024 * 1024, agent: 2 * 1024 * 1024 };
 /** The hive's id here: short, stable, and derived from its channel alone. */
 export const hiveIdFor = (channelId: string) => `hive-${channelId.replace(/-/g, "").slice(0, 16)}`;
 export const AGENT_TAG = "hive-agent/v1";
@@ -169,7 +167,7 @@ export const agentDigest = (channelId: string, at: number, what: string) =>
 export class HiveService {
   readonly root: string;
   /** One desk per hive, so its queue is the only one: two requests never build two. */
-  #desks = new Map<string, Promise<Desk | ApprovalDesk>>();
+  #desks = new Map<string, Promise<ApprovalDesk>>();
   #cache = new Map<string, { at: number; body: Record<string, unknown> }>();
   #building = new Set<string>();
   /** Each hive's writes, one after another: two forwards never both start from the same stored events. */
@@ -450,41 +448,41 @@ export class HiveService {
 
   private async buildTreasury(registration: Registration, governance: Governance) {
     if (this.record(registration.hive) || this.#building.has(registration.hive)) return;
-    const keys = governance.keeperKeys;
-    if (keys.length !== 3 || keys.some((k) => !k)) return;
-    // Keepers who posted their passkeys get the v5 treasury; three Bitcoin keys alone, the v4 one.
-    const passkeys = keys.map((k) => keeperOf(String(k)));
-    const v5 = passkeys.every(Boolean);
-    if (!v5 && passkeys.some(Boolean)) return;
+    // The keepers' Buzz keys are their treasury keys: the keys every message they send is signed with.
+    const keepers = governance.keepers;
+    if (keepers.length !== 3 || !keepers.every(isBuzzKey)) return;
     this.#building.add(registration.hive);
     try {
-      await initHive(
-        registration.hive,
-        {
-          network: this.options.network,
-          ...(this.options.deployment ? { deployment: this.options.deployment } : {}),
-          ...(v5
-            ? { passkeys: passkeys as [Keeper, Keeper, Keeper] }
-            : { keepers: keys as [string, string, string] }),
-        },
-        this.ctx,
-      );
+      const buzzKeepers = keepers as [string, string, string];
+      await (this.options.build
+        ? this.options.build(registration.hive, buzzKeepers)
+        : initHive(
+            registration.hive,
+            {
+              network: this.options.network,
+              ...(this.options.deployment ? { deployment: this.options.deployment } : {}),
+              buzzKeepers,
+            },
+            this.ctx,
+          ));
     } finally {
       this.#building.delete(registration.hive);
     }
   }
 
-  /** The hive's desk, once it has a treasury: the approvals desk for a passkey treasury. */
-  async desk(registration: Registration): Promise<Desk | ApprovalDesk> {
+  /** The hive's approvals desk, once it has a treasury: it follows the hive's channel. */
+  async desk(registration: Registration): Promise<ApprovalDesk> {
     const cached = this.#desks.get(registration.hive);
     if (cached) return cached;
     const record = this.record(registration.hive);
-    ensure(record, "NO_TREASURY", "the hive's treasury is built once every keeper's key is in");
+    ensure(record?.v5, "NO_TREASURY", "the hive's treasury is built once its keepers are confirmed");
     const files = this.files(registration.hive);
-    const options = { ...this.options.desk, agentLog: files.agentLog, governance: files.governance };
-    const made: Promise<Desk | ApprovalDesk> = record.passkeys
-      ? ApprovalDesk.open(registration.hive, options)
-      : treasuryOf(record, this.ctx).then((treasury) => new Desk(registration.hive, treasury, options));
+    const made = ApprovalDesk.open(registration.hive, {
+      ...this.options.desk,
+      agentLog: files.agentLog,
+      governance: files.governance,
+      events: files.events,
+    });
     this.#desks.set(registration.hive, made);
     made.catch(() => this.#desks.delete(registration.hive));
     return made;
@@ -506,7 +504,6 @@ export class HiveService {
     const governance = readJsonIfPresent<Governance>(files.governance) ?? {
       channelId,
       keepers: [],
-      keeperKeys: [],
       agentKey: null,
       proposals: [],
     };
@@ -533,8 +530,13 @@ export class HiveService {
             : {}),
           members: (governance as { members?: unknown }).members ?? {},
         },
-        // The console adds /desk/v1/… to this address itself.
-        keepersDesk: record ? { desk: base, console: this.options.consoleUrl } : null,
+        // The payments waiting for the keepers, which each keeper's plugin checks before it offers
+        // the approval.
+        payments: record?.v5
+          ? await this.desk(registration)
+              .then((d) => d.overview())
+              .catch(() => null)
+          : null,
       }),
       hive: {
         id: registration.hive,
@@ -632,7 +634,6 @@ export async function startService(
   const limits = {
     register: rateLimit(10),
     forward: rateLimit(60, 30),
-    desk: rateLimit(240, 120),
     agent: rateLimit(120, 60),
     read: rateLimit(600, 300),
   };
@@ -643,27 +644,17 @@ export async function startService(
       const method = req.method ?? "GET";
       if (parts[0] === "healthz") return res.writeHead(200).end("ok");
       const kind = parts[0] === "hives" ? "hives" : parts[0] === "c" ? parts[2] : undefined;
-      // Keepers' consoles call the desk from their own page.
-      if (kind === "desk" && !consoleCors(req, res, options.origins)) return;
       const limit =
-        kind === "desk"
-          ? limits.desk
-          : kind === "agent"
-            ? limits.agent
-            : method !== "POST"
-              ? limits.read
-              : kind === "hives"
-                ? limits.register
-                : limits.forward;
+        kind === "agent"
+          ? limits.agent
+          : method !== "POST"
+            ? limits.read
+            : kind === "hives"
+              ? limits.register
+              : limits.forward;
       ensure(limit.take(clientAddress(req)), "RATE_LIMITED", "too many requests; try again in a minute");
       const size =
-        kind === "hives"
-          ? BODY_LIMIT.hives
-          : kind === "desk"
-            ? BODY_LIMIT.desk
-            : kind === "agent"
-              ? BODY_LIMIT.agent
-              : BODY_LIMIT.channel;
+        kind === "hives" ? BODY_LIMIT.hives : kind === "agent" ? BODY_LIMIT.agent : BODY_LIMIT.channel;
       const body = method === "POST" ? ((await readJsonBody(req, size)) as Record<string, unknown>) : {};
       ensure(body && typeof body === "object" && !Array.isArray(body), "INVALID_JSON");
       if (parts[0] === "hives" && method === "GET")
@@ -691,17 +682,6 @@ export async function startService(
         return res
           .writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" })
           .end(`${invite}\n`);
-      }
-      if (area === "desk" && version === "v1") {
-        const desk = await service.desk(service.registration(channelId));
-        const keeper = req.headers["x-hive-keeper"];
-        return sendJson(
-          res,
-          200,
-          desk instanceof ApprovalDesk
-            ? await approvalsRoute(desk, method, rest, body, keeper ? String(keeper) : undefined)
-            : await deskRoute(desk, method, rest, body, keeper ? String(keeper) : undefined),
-        );
       }
       if (area === "agent" && version === "v1" && rest[0] === "events" && method === "POST")
         return sendJson(res, 200, await service.agentEvents(channelId, body));

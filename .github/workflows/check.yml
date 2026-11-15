@@ -1,6 +1,6 @@
 # Every check the repository has that needs no stack of its own, on each push and pull request:
 # the formatter, the linter, the type checker and the tests; the offline gates and the audit over
-# the recorded evidence; the Buzz plugin's and the keeper console's tests; the pay-arkade plugin's
+# the recorded evidence; the Buzz plugin's tests; the pay-arkade plugin's
 # tests and lints; and the known advisories against the locked dependencies. The vector checks
 # (`pnpm vectors:check`) need the delegatee's source beside the repository and stay a local step.
 name: Check
@@ -41,7 +41,7 @@ jobs:
         run: pnpm audit
 
   buzz:
-    name: Buzz plugin, hive-api and keeper console
+    name: Buzz plugin and hive-api
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -51,19 +51,18 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      # The console bundles the hive's own checking and signing code from packages/.
+      # The plugin bundles the hive's own checking code from packages/.
       - run: pnpm install --frozen-lockfile
       - run: npm ci --no-audit --no-fund
         working-directory: hive/hive-buzz
       - run: npm test
         working-directory: hive/hive-buzz
-      - name: The keeper console builds the same twice
+      - name: The plugin builds the same twice
         working-directory: hive/hive-buzz
         run: |
-          node keeper/build.mjs "$RUNNER_TEMP/console-a" --mainnet
-          node keeper/build.mjs "$RUNNER_TEMP/console-b" --mainnet
-          cmp "$RUNNER_TEMP/console-a/index.html" "$RUNNER_TEMP/console-b/index.html"
-          cmp "$RUNNER_TEMP/console-a/console.js" "$RUNNER_TEMP/console-b/console.js"
+          node plugin/build.mjs --service https://hive.example.org --out "$RUNNER_TEMP/plugin-a"
+          node plugin/build.mjs --service https://hive.example.org --out "$RUNNER_TEMP/plugin-b"
+          cmp "$RUNNER_TEMP/plugin-a/hive.hive/plugin.js" "$RUNNER_TEMP/plugin-b/hive.hive/plugin.js"
 
   pay-arkade:
     name: pay-arkade plugin and worker

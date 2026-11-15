@@ -1,25 +1,22 @@
 /**
  * The approvals desk: where a v5 hive's payments wait for its keepers, run on the hive's host beside
- * the hive's agent. It holds no key that moves funds and decides nothing. It reads the jobs the
- * agent asks the keepers to fund, gives each payment a keeper starts its number, collects the
- * keepers' passkey approvals as they come, hours apart and in any order, and once two have approved,
- * submits the payment itself through the Emulator. It also folds chip-ins and returned escrows into
- * the treasury coin.
+ * the hive's agent. It holds no key that moves funds and decides nothing. It follows the hive's Buzz
+ * channel, as the members' Hive plugins forward it to the host: each job the agent asks the keepers
+ * to fund becomes a payment, and so does each withdrawal a keeper asks for in the channel. The
+ * keepers approve a payment by sending its approval in the channel, hours apart and in any order;
+ * once two have, the desk submits the payment itself through the Emulator. A keeper's decline stops
+ * it. The desk also folds chip-ins and returned escrows into the treasury coin.
  *
  * A payment's number is the counter units the treasury coin holds when it pays, so payments go out
- * in the order keepers started them, each one when the one before it has paid. An approval names its
- * number, amount, recipient and lapse time; the desk checks each one as the contract will before it
- * keeps it, and a payment whose approvals are all in can be submitted again safely: the covenant pays
- * it once.
+ * in the order they started, each one when the one before it has paid. An approval names its number,
+ * amount, recipient and lapse time; the desk checks each one as the contract will before it keeps it,
+ * and a payment whose approvals are all in can be submitted again safely: the covenant pays it once.
  *
- * Only a keeper reads the hive's payments here: each read carries a signature by the keeper's Bitcoin
- * key, as starting, cancelling and withdrawing do. An approval needs no other signature: it is one.
- *
- * Each keeper's console rebuilds every payment itself before asking for the passkey, from the job's
- * own terms or the withdrawal's address; what the desk says is never taken on its word.
+ * What the desk says about a payment is in the hive's state for every member to read, as the keepers'
+ * approvals are in its channel. Each keeper's Hive plugin rebuilds every payment itself before it
+ * offers the approval, from the job's own terms or the withdrawal's address: what the desk says is
+ * never taken on its word.
  */
-import { readdirSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { type Connection, connect, jobEscrow, parseArkAddress, xOnly } from "@hive/ark";
 import {
   type TreasuryContract,
@@ -28,63 +25,54 @@ import {
   payFromTreasury,
   unitsOn,
 } from "@hive/executor";
-import {
-  clientAddress,
-  ensure,
-  Fault,
-  hex,
-  lockedQueue,
-  rateLimit,
-  readJsonBody,
-  readJsonIfPresent,
-  sendJson,
-  unhex,
-  writeJson,
-} from "@hive/kit";
-import { deskAuthDigest, KEEPER_MAX_VALIDITY_SECONDS, withdrawalId } from "@hive/steward";
+import { ensure, hex, lockedQueue, readJsonIfPresent, unhex, writeJson } from "@hive/kit";
+import { KEEPER_MAX_VALIDITY_SECONDS } from "@hive/steward";
 import {
   type Approval,
   ApprovalRefused,
   approvalHolds,
-  PASSKEY,
-  passkeyApproval,
+  type BuzzEvent,
+  buzzApproval,
+  codeOf,
+  eventHolds,
   payMessage,
-  RAW_P256,
-  rawApproval,
+  paymentWord,
+  withdrawalOf,
 } from "@hive/treasury";
-import { schnorr } from "@noble/curves/secp256k1.js";
-import {
-  type AgentJob,
-  AgentLog,
-  type Budget,
-  budgetOf,
-  consoleCors,
-  type DeskAuth,
-  type DeskOptions,
-  faultStatus,
-} from "./desk.js";
+import { readdirSync } from "node:fs";
+import { type AgentJob, AgentLog, type Budget, budgetOf, type DeskOptions } from "./desk.js";
 import { type HiveRecord, loadHive, opsPaths } from "./ops.js";
-import { currentPrice } from "./price.js";
-import { checkEmulator, type PasskeyTreasury, v5Contract, v5Terms } from "./treasury-v5.js";
+import { checkEmulator, type KeeperTreasury, v5Contract, v5Terms } from "./treasury-v5.js";
 
-const AUTH_WINDOW_SECONDS = 300;
 const DEADLINE_MARGIN_SECONDS = 600;
 /** A payment the desk could not submit this many times is left to the keepers. */
 const MAX_ATTEMPTS = 3;
 /** A withdrawal's approvals lapse after this long; a job's lapse before its deadline. */
 const WITHDRAWAL_VALIDITY_SECONDS = KEEPER_MAX_VALIDITY_SECONDS;
 
-/** One approval as the desk keeps it, hex. */
+export interface ApprovalDeskOptions
+  extends Pick<
+    DeskOptions,
+    "agentLog" | "governance" | "tickMs" | "now" | "deadlineMarginSeconds" | "minimumValiditySeconds"
+  > {
+  /** The hive's channel as the host keeps it: a JSON array of signed events. */
+  events?: string;
+  /** Where a desk running on its own writes its payments after each round, for hive-api to serve. */
+  paymentsFile?: string;
+}
+
+/** One approval as the desk keeps it, hex, with the message it came in. */
 interface StoredApproval {
   sig: string;
-  authData: string;
-  tail: string;
+  time: string;
+  tags: string;
+  event: string;
 }
 
 /** A payment as the desk keeps it: what the keepers approve, and their approvals so far. */
-export interface PasskeyPayment {
-  schema: "hive-desk-passkey-payment/v1";
-  /** The job's id; a withdrawal's own id. */
+export interface KeeperPayment {
+  schema: "hive-desk-payment/v5";
+  /** The job's id; a withdrawal's, the id of the message that asked for it. */
   id: string;
   request?: AgentJob["request"];
   withdrawal?: { destination: string; amountSats: number };
@@ -97,10 +85,14 @@ export interface PasskeyPayment {
   validUntil: number;
   /** One per keeper, in the hive's order. */
   approvals: (StoredApproval | null)[];
+  /** The order payments started in, which is the order they pay. */
+  seq: number;
   /** What approved work had left when the payment was started, by the desk's count. */
   remainingSats: number;
+  /** The keeper who asked for a withdrawal; "agent" for a job. */
   startedBy: string;
-  status: "approving" | "ready" | "submitted" | "done" | "lapsed" | "cancelled" | "failed";
+  status: "approving" | "ready" | "submitted" | "done" | "lapsed" | "declined" | "failed";
+  declinedBy?: string;
   attempts?: number;
   txid?: string;
   detail?: string;
@@ -108,17 +100,16 @@ export interface PasskeyPayment {
   updatedAt: number;
 }
 
-const ACTIVE = new Set<PasskeyPayment["status"]>(["approving", "ready", "submitted"]);
-
-/** A payment as a console reads it: who approved, never the approvals themselves. */
-const shown = ({ approvals, ...p }: PasskeyPayment) => ({ ...p, approved: approvals.map(Boolean) });
+const ACTIVE = new Set<KeeperPayment["status"]>(["approving", "ready", "submitted"]);
 
 export class ApprovalDesk {
   readonly paths: ReturnType<typeof opsPaths>;
   readonly record: HiveRecord;
-  readonly passkeys: PasskeyTreasury;
+  readonly v5: KeeperTreasury;
   readonly #queue: <T>(action: () => Promise<T>) => Promise<T>;
   readonly #log: AgentLog;
+  /** Why a job waiting for funding has no payment yet, as the last round found. */
+  readonly #waiting = new Map<string, string>();
   #ticking: Promise<void> | null = null;
 
   /** The desk over a connection and a treasury contract already open; `open` is the usual way in. */
@@ -126,22 +117,22 @@ export class ApprovalDesk {
     readonly hive: string,
     readonly conn: Connection,
     readonly contract: TreasuryContract,
-    readonly options: DeskOptions,
+    readonly options: ApprovalDeskOptions,
   ) {
     this.record = loadHive(hive);
-    ensure(this.record.passkeys, "INVALID", `${hive}'s treasury is not a passkey treasury`);
-    this.passkeys = this.record.passkeys;
+    ensure(this.record.v5, "INVALID", `${hive}'s treasury is not a v5 treasury`);
+    this.v5 = this.record.v5;
     this.paths = opsPaths(hive);
     this.#queue = lockedQueue(this.file("desk.lock"));
     this.#log = new AgentLog(options.agentLog);
   }
 
-  static async open(hive: string, options: DeskOptions): Promise<ApprovalDesk> {
+  static async open(hive: string, options: ApprovalDeskOptions): Promise<ApprovalDesk> {
     const record = loadHive(hive);
-    ensure(record.passkeys, "INVALID", `${hive}'s treasury is not a passkey treasury`);
+    ensure(record.v5, "INVALID", `${hive}'s treasury is not a v5 treasury`);
     const conn = await connect(record.deployment);
     await checkEmulator(record.deployment, conn.keys.emulator);
-    const { contract } = await v5Contract(record.deployment, v5Terms(record.passkeys));
+    const { contract } = await v5Contract(record.deployment, v5Terms(record.v5));
     ensure(
       hex(contract.pkScript) === record.treasuryScript,
       "DELEGATEE_MISMATCH",
@@ -150,12 +141,13 @@ export class ApprovalDesk {
     return new ApprovalDesk(hive, conn, contract, options);
   }
 
+  /** The keepers' Buzz keys, in the hive's order. */
   get keepers(): [string, string, string] {
-    return this.record.stewardKeys;
+    return this.v5.keepers;
   }
 
   get assetId(): string {
-    return this.passkeys.counter.assetId;
+    return this.v5.counter.assetId;
   }
 
   now(): number {
@@ -181,17 +173,22 @@ export class ApprovalDesk {
     return budgetOf(governance, jobs);
   }
 
-  payment(id: string): PasskeyPayment | undefined {
+  payment(id: string): KeeperPayment | undefined {
     ensure(/^[0-9a-f]{64}$/.test(id), "INVALID", "payment id");
-    return readJsonIfPresent<PasskeyPayment>(this.file("payments", `${id}.json`));
+    return readJsonIfPresent<KeeperPayment>(this.file("payments", `${id}.json`));
   }
 
-  private save(payment: PasskeyPayment) {
+  /** A new payment's place in the order. */
+  private nextSeq(): number {
+    return this.payments().reduce((n, p) => Math.max(n, p.seq), 0) + 1;
+  }
+
+  private save(payment: KeeperPayment) {
     payment.updatedAt = this.now();
     writeJson(this.file("payments", `${payment.id}.json`), payment);
   }
 
-  payments(): PasskeyPayment[] {
+  payments(): KeeperPayment[] {
     let files: string[] = [];
     try {
       files = readdirSync(this.file("payments")).filter((f) => /^[0-9a-f]{64}\.json$/.test(f));
@@ -200,12 +197,12 @@ export class ApprovalDesk {
     }
     return files
       .map((f) => this.payment(f.slice(0, 64)))
-      .filter((p): p is PasskeyPayment => Boolean(p))
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+      .filter((p): p is KeeperPayment => Boolean(p))
+      .sort((a, b) => a.seq - b.seq);
   }
 
-  /** The payments still under way, in the order they pay: the order keepers started them. */
-  active(): PasskeyPayment[] {
+  /** The payments still under way, in the order they pay: the order they started. */
+  active(): KeeperPayment[] {
     return this.payments().filter((p) => ACTIVE.has(p.status));
   }
 
@@ -220,198 +217,9 @@ export class ApprovalDesk {
     return unitsOn(treasury, this.assetId);
   }
 
-  /** What the console needs to know about the hive: its keepers, its treasury and where to check them. */
-  describe() {
-    const p = this.passkeys;
-    return {
-      hive: this.hive,
-      network: this.record.network,
-      version: 5,
-      deployment: {
-        arkdUrl: this.record.deployment.arkdUrl,
-        delegateeUrl: this.record.deployment.delegateeUrl,
-        ...(this.record.deployment.emulatorUrl ? { emulatorUrl: this.record.deployment.emulatorUrl } : {}),
-      },
-      keepers: this.keepers,
-      passkeys: p.keepers,
-      treasury: {
-        address: this.record.treasuryAddress,
-        script: this.record.treasuryScript,
-        terms: {
-          counter: p.counter,
-          delegateKey: p.delegateKey,
-          renewalWindowSeconds: p.renewalWindowSeconds,
-          maxFeeSats: p.maxFeeSats,
-          exitDelaySeconds: p.exitDelaySeconds,
-        },
-        supply: p.supply,
-      },
-      // For a keeper who reads amounts in dollars; nothing approved depends on it.
-      price: currentPrice(),
-    };
-  }
-
-  /**
-   * A keeper reading the hive's payments: `<key>.<time>.<signature>`, signed as a start or a cancel
-   * is, so what the keepers approve is shown to them and to nobody else.
-   */
-  verifyRead(header: string | undefined) {
-    const [keeper = "", at = "", signature = ""] = String(header ?? "").split(".");
-    ensure(keeper, "AUTH_REQUIRED", "a keeper's console signs what it reads here");
-    this.verifyAuth("read", "", { keeper, at: Number(at), signature });
-  }
-
-  private verifyAuth(action: string, id: string, auth: DeskAuth) {
-    ensure(this.keepers.includes(auth?.keeper), "NOT_A_KEEPER");
-    ensure(
-      Number.isSafeInteger(auth.at) && Math.abs(this.now() - auth.at) <= AUTH_WINDOW_SECONDS,
-      "AUTH_STALE",
-      "the console's clock is off, or the request is old",
-    );
-    ensure(
-      /^[0-9a-f]{128}$/.test(auth.signature ?? "") &&
-        schnorr.verify(
-          unhex(auth.signature),
-          deskAuthDigest(this.hive, action, id, auth.at),
-          unhex(auth.keeper.slice(2)),
-        ),
-      "AUTH_INVALID",
-    );
-  }
-
-  /** The jobs waiting for the keepers and the withdrawals, each with its payment's progress. */
-  async overview() {
-    const jobs = this.jobs();
-    const budget = this.budget(jobs);
-    const all = this.payments();
-    const byId = new Map(all.map((p) => [p.id, p]));
-    const payments = jobs
-      .filter((j) => j.status === "awaiting_funding" || byId.has(j.request.jobId))
-      .map((j) => {
-        const p = byId.get(j.request.jobId);
-        return { job: j, payment: p ? shown(p) : null };
-      });
-    const withdrawals = all
-      .filter((p) => p.withdrawal)
-      .reverse()
-      .slice(0, 20)
-      .map((p) => ({ payment: shown(p) }));
-    const units = await this.units().catch(() => null);
-    return { budget, units: units === null ? null : String(units), payments, withdrawals };
-  }
-
-  /** The number the next payment a keeper starts gets. */
-  private async nextNumber(): Promise<bigint> {
-    const units = await this.units();
-    const next = units - BigInt(this.active().length);
-    ensure(next > 1n, "COUNTER_SPENT", "the treasury has made all the payments its counter allows");
-    return next;
-  }
-
-  /** A keeper starts a job's payment: it gets its number, its amount and its lapse time. */
-  async start(jobId: string, auth: DeskAuth) {
-    this.verifyAuth("start", jobId, auth);
-    return this.lock(async () => {
-      const existing = this.payment(jobId);
-      ensure(
-        !existing || !ACTIVE.has(existing.status),
-        "PAYMENT_STARTED",
-        "this job's payment is already under way",
-      );
-      ensure(existing?.status !== "done", "PAID", "this job is funded");
-      const job = this.jobs().find((j) => j.request.jobId === jobId);
-      ensure(
-        job?.status === "awaiting_funding",
-        "NOT_WAITING",
-        "the agent is not waiting for this job's funding",
-      );
-      const request = job.request;
-      const escrow = jobEscrow(this.conn, request.params);
-      ensure(escrow.address === request.address.toLowerCase(), "ESCROW_MISMATCH");
-      ensure(
-        request.params.treasuryProgram === this.record.treasuryScript.slice(4),
-        "ESCROW_MISMATCH",
-        "it returns elsewhere",
-      );
-      const budget = this.budget();
-      ensure(request.capSats <= budget.remainingSats, "ABOVE_BUDGET", `${budget.remainingSats} sats left`);
-      const validUntil = Math.min(
-        this.now() + KEEPER_MAX_VALIDITY_SECONDS,
-        request.deadline - (this.options.deadlineMarginSeconds ?? DEADLINE_MARGIN_SECONDS),
-      );
-      ensure(
-        validUntil - this.now() > (this.options.minimumValiditySeconds ?? 600),
-        "PAYMENT_LATE",
-        "too close to the job's deadline for two keepers to approve",
-      );
-      const payment: PasskeyPayment = {
-        schema: "hive-desk-passkey-payment/v1",
-        id: jobId,
-        request,
-        address: request.address.toLowerCase(),
-        program: escrow.pkScript.slice(4),
-        amountSats: request.capSats,
-        left: String(await this.nextNumber()),
-        validUntil,
-        approvals: [null, null, null],
-        remainingSats: budget.remainingSats,
-        startedBy: auth.keeper,
-        status: "approving",
-        createdAt: this.now(),
-        updatedAt: this.now(),
-      };
-      this.save(payment);
-      return payment;
-    });
-  }
-
-  /** A keeper starts a withdrawal to an Arkade address on the hive's Operator. */
-  async startWithdrawal(auth: DeskAuth, asked: { address?: unknown; amountSats?: unknown }) {
-    const address = String(asked.address ?? "")
-      .trim()
-      .toLowerCase();
-    let decoded: { serverKey: string; pkScript: string };
-    try {
-      decoded = parseArkAddress(address);
-    } catch {
-      throw new Fault("INVALID_DESTINATION", "not an Arkade address");
-    }
-    ensure(
-      decoded.serverKey === hex(xOnly(this.conn.keys.server)),
-      "INVALID_DESTINATION",
-      "an address on another Operator",
-    );
-    ensure(decoded.pkScript !== this.record.treasuryScript, "INVALID_DESTINATION", "the treasury itself");
-    const amountSats = Number(asked.amountSats);
-    ensure(Number.isSafeInteger(amountSats) && amountSats >= this.conn.operator.dust, "INVALID", "amount");
-    const id = withdrawalId(this.hive, decoded.pkScript, amountSats, Number(auth?.at));
-    this.verifyAuth("withdraw", id, auth);
-    return this.lock(async () => {
-      ensure(!this.payment(id), "PAYMENT_STARTED", "this withdrawal is already under way");
-      const payment: PasskeyPayment = {
-        schema: "hive-desk-passkey-payment/v1",
-        id,
-        withdrawal: { destination: decoded.pkScript, amountSats },
-        address,
-        program: decoded.pkScript.slice(4),
-        amountSats,
-        left: String(await this.nextNumber()),
-        validUntil: this.now() + WITHDRAWAL_VALIDITY_SECONDS,
-        approvals: [null, null, null],
-        remainingSats: 0,
-        startedBy: auth.keeper,
-        status: "approving",
-        createdAt: this.now(),
-        updatedAt: this.now(),
-      };
-      this.save(payment);
-      return payment;
-    });
-  }
-
   /** The message a payment's keepers approve, as the contract rebuilds it. */
-  message(payment: PasskeyPayment): Uint8Array {
-    return payMessage(this.passkeys.counter, {
+  message(payment: Pick<KeeperPayment, "left" | "amountSats" | "validUntil" | "program">): Uint8Array {
+    return payMessage(this.v5.counter, {
       left: BigInt(payment.left),
       amount: BigInt(payment.amountSats),
       validUntil: payment.validUntil,
@@ -419,92 +227,210 @@ export class ApprovalDesk {
     });
   }
 
+  /** A payment as members read it in the hive's state: who approved, never the approvals themselves. */
+  shown({ approvals, ...p }: KeeperPayment) {
+    return {
+      ...p,
+      kind: p.withdrawal ? "withdrawal" : "job",
+      approvedBy: this.keepers.filter((_, i) => approvals[i]),
+      // The approval's code, for the plugins to match keepers' messages with; none for a refused request.
+      ...(p.program ? { code: codeOf(this.message(p)) } : {}),
+    };
+  }
+
   /**
-   * A keeper's approval: a passkey's WebAuthn assertion, or a raw key's signature with its keeper's
-   * place. Checked as the contract will check it before it is kept; a passkey's keeper is the one
-   * whose key it verifies under.
+   * Where the hive's payments stand, for its state: the treasury's counter and the Operator's keys a
+   * keeper's plugin checks them with, the jobs waiting for funding, and each payment's progress.
    */
-  async approve(
-    id: string,
-    body: {
-      assertion?: { authenticatorData?: unknown; clientDataJSON?: unknown; signature?: unknown };
-      keeper?: unknown;
-      signature?: unknown;
-    },
-  ) {
-    return this.lock(async () => {
-      const payment = this.payment(id);
-      ensure(payment, "NO_PAYMENT");
-      ensure(payment.status === "approving" || payment.status === "ready", "WRONG_ROUND", payment.status);
-      ensure(payment.validUntil > this.now() + 30, "LAPSED", "this payment's approvals have lapsed");
-      const message = this.message(payment);
-      const keepers = this.passkeys.keepers;
-      let at = -1;
-      let approval: Approval | null = null;
-      if (body.assertion) {
-        const a = body.assertion;
-        const assertion = {
-          authenticatorData: Buffer.from(String(a.authenticatorData ?? ""), "base64url"),
-          clientDataJSON: String(a.clientDataJSON ?? ""),
-          signature: Buffer.from(String(a.signature ?? ""), "base64url"),
-        };
-        let reason = "NOT_A_KEEPER";
-        for (const [i, k] of keepers.entries()) {
-          if (k.kind !== PASSKEY) continue;
-          try {
-            approval = passkeyApproval(k.key, message, k.site, assertion);
-            at = i;
-            break;
-          } catch (error) {
-            // Another keeper's passkey refuses with BAD_SIGNATURE; anything else is this approval's fault.
-            if (
-              error instanceof ApprovalRefused &&
-              error.reason !== "BAD_SIGNATURE" &&
-              error.reason !== "ANOTHER_SITE"
-            )
-              reason = error.reason;
-          }
-        }
-        ensure(approval, reason === "NOT_A_KEEPER" ? "NOT_A_KEEPER" : "APPROVAL_REFUSED", reason);
-      } else {
-        at = Number(body.keeper);
-        const k = keepers[at];
-        ensure(k && k.kind === RAW_P256, "NOT_A_KEEPER");
-        try {
-          approval = rawApproval(k.key, message, unhex(String(body.signature ?? "")));
-        } catch (error) {
-          throw new Fault(
-            "APPROVAL_REFUSED",
-            error instanceof ApprovalRefused ? error.reason : String(error),
-          );
-        }
-      }
-      payment.approvals[at] = {
-        sig: hex(approval.sig),
-        authData: hex(approval.authData),
-        tail: hex(approval.tail),
-      };
-      if (payment.approvals.filter(Boolean).length >= 2) payment.status = "ready";
-      this.save(payment);
-      return payment;
-    });
+  async overview() {
+    const jobs = this.jobs();
+    const budget = this.budget(jobs);
+    const units = await this.units().catch(() => null);
+    const all = this.payments();
+    const byId = new Set(all.map((p) => p.id));
+    return {
+      v: 5,
+      counter: this.v5.counter,
+      keepers: this.keepers,
+      treasuryScript: this.record.treasuryScript,
+      operator: {
+        network: this.record.network,
+        server: this.conn.keys.server,
+        emulator: this.conn.keys.emulator,
+        exitDelay: this.conn.operator.unilateralExitDelay,
+      },
+      units: units === null ? null : String(units),
+      budget,
+      waiting: jobs
+        .filter((j) => j.status === "awaiting_funding" && !byId.has(j.request.jobId))
+        .map((j) => ({ jobId: j.request.jobId, reason: this.#waiting.get(j.request.jobId) ?? null })),
+      payments: all
+        .filter((p) => ACTIVE.has(p.status) || p.updatedAt > this.now() - 7 * 86_400)
+        .slice(-40)
+        .map((p) => this.shown(p)),
+    };
   }
 
-  async cancel(id: string, auth: DeskAuth) {
-    this.verifyAuth("cancel", id, auth);
-    return this.lock(async () => {
-      const payment = this.payment(id);
-      ensure(payment, "NO_PAYMENT");
-      ensure(payment.status === "approving" || payment.status === "ready", "WRONG_ROUND", payment.status);
-      payment.status = "cancelled";
-      this.save(payment);
-      return payment;
+  /** A job's payment, which the desk starts itself once the job fits the hive's approved budget. */
+  private startJob(job: AgentJob, number: bigint): KeeperPayment | string {
+    const request = job.request;
+    let escrow: ReturnType<typeof jobEscrow>;
+    try {
+      escrow = jobEscrow(this.conn, request.params);
+    } catch {
+      return "the job's terms do not build an escrow";
+    }
+    if (escrow.address !== request.address.toLowerCase()) return "the job's address is not its escrow";
+    if (request.params.treasuryProgram !== this.record.treasuryScript.slice(4))
+      return "the job's escrow returns elsewhere";
+    const budget = this.budget();
+    if (request.capSats > budget.remainingSats)
+      return `the job asks ${request.capSats} sats and approved work has ${budget.remainingSats} left`;
+    const validUntil = Math.min(
+      this.now() + KEEPER_MAX_VALIDITY_SECONDS,
+      request.deadline - (this.options.deadlineMarginSeconds ?? DEADLINE_MARGIN_SECONDS),
+    );
+    if (validUntil - this.now() <= (this.options.minimumValiditySeconds ?? 600))
+      return "too close to the job's deadline for two keepers to approve";
+    return {
+      schema: "hive-desk-payment/v5",
+      id: request.jobId,
+      request,
+      address: request.address.toLowerCase(),
+      program: escrow.pkScript.slice(4),
+      amountSats: request.capSats,
+      left: String(number),
+      validUntil,
+      approvals: [null, null, null],
+      seq: this.nextSeq(),
+      remainingSats: budget.remainingSats,
+      startedBy: "agent",
+      status: "approving",
+      createdAt: this.now(),
+      updatedAt: this.now(),
+    };
+  }
+
+  /** A keeper's withdrawal, asked for in the channel, to an Arkade address on the hive's Operator. */
+  private startWithdrawal(event: BuzzEvent, asked: { amountSats: number; address: string }, number: bigint) {
+    const base = {
+      schema: "hive-desk-payment/v5" as const,
+      id: event.id,
+      address: asked.address,
+      amountSats: asked.amountSats,
+      left: String(number),
+      validUntil: this.now() + WITHDRAWAL_VALIDITY_SECONDS,
+      approvals: [null, null, null],
+      seq: this.nextSeq(),
+      remainingSats: 0,
+      startedBy: event.pubkey,
+      createdAt: this.now(),
+      updatedAt: this.now(),
+    };
+    const refused = (detail: string): KeeperPayment => ({
+      ...base,
+      program: "",
+      withdrawal: { destination: "", amountSats: asked.amountSats },
+      status: "failed",
+      detail,
     });
+    let decoded: { serverKey: string; pkScript: string };
+    try {
+      decoded = parseArkAddress(asked.address);
+    } catch {
+      return refused("not an Arkade address");
+    }
+    if (decoded.serverKey !== hex(xOnly(this.conn.keys.server)))
+      return refused("an address on another Operator than the hive's");
+    if (decoded.pkScript === this.record.treasuryScript) return refused("the treasury itself");
+    if (asked.amountSats < this.conn.operator.dust) return refused(`below ${this.conn.operator.dust} sats`);
+    return {
+      ...base,
+      program: decoded.pkScript.slice(4),
+      withdrawal: { destination: decoded.pkScript, amountSats: asked.amountSats },
+      status: "approving",
+    } as KeeperPayment;
+  }
+
+  /** The keepers' messages in the hive's channel, oldest first, each one checked. */
+  private keeperMessages(): BuzzEvent[] {
+    const events = this.options.events ? (readJsonIfPresent<BuzzEvent[]>(this.options.events) ?? []) : [];
+    const keepers = new Set<string>(this.keepers);
+    return events
+      .filter((e) => e?.kind === 9 && keepers.has(e.pubkey) && eventHolds(e))
+      .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
   }
 
   /**
-   * The desk's round: lapsed payments end, numbers follow the payments still under way, chip-ins and
-   * returned escrows fold into the treasury coin, and the next payment goes out once approved.
+   * Starts what waits to be paid and takes in the keepers' messages: new withdrawals, then the
+   * approvals and declines of the payments under way, each matched to a payment by its code.
+   */
+  private follow(units: bigint) {
+    const known = new Set(this.payments().map((p) => p.id));
+    let next = units - BigInt(this.active().length);
+    // Jobs first: the agent asked before any keeper could ask after it.
+    for (const job of this.jobs()) {
+      if (job.status !== "awaiting_funding" || known.has(job.request.jobId)) continue;
+      if (next <= 1n) break;
+      const made = this.startJob(job, next);
+      if (typeof made === "string") {
+        this.#waiting.set(job.request.jobId, made);
+        continue;
+      }
+      this.#waiting.delete(job.request.jobId);
+      this.save(made);
+      known.add(made.id);
+      next -= 1n;
+    }
+    const messages = this.keeperMessages();
+    for (const e of messages) {
+      const asked = withdrawalOf(e.content);
+      if (!asked || known.has(e.id) || e.created_at < this.now() - WITHDRAWAL_VALIDITY_SECONDS) continue;
+      if (next <= 1n) break;
+      const made = this.startWithdrawal(e, asked, next);
+      this.save(made);
+      known.add(made.id);
+      if (made.status === "approving") next -= 1n;
+    }
+    const byCode = new Map(
+      this.active()
+        .filter((p) => p.status !== "submitted")
+        .map((p) => [codeOf(this.message(p)), p] as const),
+    );
+    for (const e of messages) {
+      const said = paymentWord(e.content);
+      const p = said && byCode.get(said.code);
+      if (!said || !p || !ACTIVE.has(p.status)) continue;
+      const at = this.keepers.indexOf(e.pubkey);
+      if (said.word === "decline") {
+        p.status = "declined";
+        p.declinedBy = e.pubkey;
+        this.save(p);
+        continue;
+      }
+      if (p.approvals[at]?.event === e.id) continue;
+      let approval: Approval;
+      try {
+        approval = buzzApproval(e.pubkey, this.message(p), e);
+      } catch (error) {
+        if (!(error instanceof ApprovalRefused)) throw error;
+        continue;
+      }
+      p.approvals[at] = {
+        sig: hex(approval.sig),
+        time: hex(approval.time),
+        tags: hex(approval.tags),
+        event: e.id,
+      };
+      if (p.approvals.filter(Boolean).length >= 2) p.status = "ready";
+      this.save(p);
+    }
+  }
+
+  /**
+   * The desk's round: lapsed payments end, numbers follow the payments still under way, new payments
+   * start and the keepers' messages come in, chip-ins and returned escrows fold into the treasury
+   * coin, and the next payment goes out once approved.
    */
   tick(): Promise<void> {
     this.#ticking ??= this.round().finally(() => {
@@ -513,40 +439,41 @@ export class ApprovalDesk {
     return this.#ticking;
   }
 
+  /**
+   * A payment the keepers declined, or that lapsed, gives its number to the ones after it, whose
+   * approvals named the old numbers and are asked for again.
+   */
+  private renumber(units: bigint) {
+    for (const [i, p] of this.active().entries()) {
+      const expected = String(units - BigInt(i));
+      if (p.left !== expected && p.status !== "submitted") {
+        p.left = expected;
+        p.approvals = [null, null, null];
+        p.status = "approving";
+        this.save(p);
+      }
+    }
+  }
+
   private async round() {
-    await this.lock(async () => {
-      const now = this.now();
-      for (const p of this.active())
-        if (p.status !== "submitted" && p.validUntil <= now + 30) {
-          p.status = "lapsed";
-          this.save(p);
-        }
-    });
     const coins = await treasuryCoins(this.contract, this.assetId);
     if (!coins.treasury) return;
     let treasury = coins.treasury;
-    let units = unitsOn(treasury, this.assetId);
+    const units = unitsOn(treasury, this.assetId);
     // A payment whose approvals all came in pays first; until it is done, nothing else spends the coin.
     const head = await this.lock(async () => {
-      // A payment submitted before the host stopped, which the counter shows went out, is done.
-      for (const p of this.active())
-        if (p.status === "submitted" && BigInt(p.left) > units) {
-          p.status = "done";
-          this.save(p);
-        }
-      const active = this.active();
-      // A payment the keepers stopped, or that lapsed, gives its number to the ones after it, whose
-      // approvals named the old numbers and are asked for again.
-      for (const [i, p] of active.entries()) {
-        const expected = String(units - BigInt(i));
-        if (p.left !== expected && p.status !== "submitted") {
-          p.left = expected;
-          p.approvals = [null, null, null];
-          p.status = "approving";
-          this.save(p);
-        }
+      const now = this.now();
+      for (const p of this.active()) {
+        // A payment submitted before the host stopped, which the counter shows went out, is done.
+        if (p.status === "submitted" && BigInt(p.left) > units) p.status = "done";
+        else if (p.status !== "submitted" && p.validUntil <= now + 30) p.status = "lapsed";
+        else continue;
+        this.save(p);
       }
-      return active[0];
+      this.renumber(units);
+      this.follow(units);
+      this.renumber(units);
+      return this.active()[0];
     });
     const due =
       head && (head.status === "ready" || head.status === "submitted") && BigInt(head.left) === units;
@@ -566,12 +493,11 @@ export class ApprovalDesk {
     if (other) {
       await mergeIntoTreasury(this.contract, treasury, other, this.assetId).catch(() => {});
       treasury = (await treasuryCoins(this.contract, this.assetId)).treasury ?? treasury;
-      units = unitsOn(treasury, this.assetId);
     }
   }
 
   private async submit(
-    head: PasskeyPayment,
+    head: KeeperPayment,
     coin: Awaited<ReturnType<typeof treasuryCoins>>["treasury"] & object,
   ) {
     await this.lock(async () => {
@@ -581,13 +507,10 @@ export class ApprovalDesk {
       this.save(p);
     });
     const message = this.message(head);
-    const keepers = this.passkeys.keepers;
     const approvals = head.approvals.map((a, i) => {
       if (!a) return null;
-      const approval = { sig: unhex(a.sig), authData: unhex(a.authData), tail: unhex(a.tail) };
-      return approvalHolds(keepers[i]!.kind, keepers[i]!.key, message, keepers[i]!.site, approval)
-        ? approval
-        : null;
+      const approval = { sig: unhex(a.sig), time: unhex(a.time), tags: unhex(a.tags) };
+      return approvalHolds(this.keepers[i]!, message, approval) ? approval : null;
     });
     let txid: string | undefined;
     let detail: string | undefined;
@@ -622,93 +545,20 @@ export class ApprovalDesk {
   }
 }
 
-/** The approvals desk's routes, below `/desk/v1/`, beside the signing desk's. */
-export async function approvalsRoute(
-  desk: ApprovalDesk,
-  method: string,
-  parts: string[],
-  body: Record<string, unknown>,
-  keeper?: string,
-): Promise<unknown> {
-  const [what, id = "", action] = parts;
-  if (method === "GET" && what === "hive") return desk.describe();
-  // The delegatee serves no browser: its keys reach the console through the desk, and the console
-  // checks the treasury they build against the hive's.
-  if (method === "GET" && what === "delegatee") return desk.conn.delegatee.info();
-  // An approval is its own authority: a passkey's signature over this payment.
-  if (method === "POST" && what === "payments" && action === "approve")
-    return { payment: shown(await desk.approve(id, body as never)) };
-  if (method === "GET") desk.verifyRead(keeper);
-  if (method === "GET" && what === "payments" && !id) return desk.overview();
-  if (method === "GET" && what === "listing") return { pending: null };
-  if (method === "GET" && what === "payments") {
-    const payment = desk.payment(id);
-    ensure(payment, "NO_PAYMENT");
-    return { payment: shown(payment) };
-  }
-  if (method === "POST" && what === "payments" && action === "start")
-    return { payment: shown(await desk.start(id, body.auth as DeskAuth)) };
-  if (method === "POST" && what === "payments" && action === "cancel")
-    return { payment: shown(await desk.cancel(id, body.auth as DeskAuth)) };
-  if (method === "POST" && what === "withdrawals" && !id)
-    return {
-      payment: shown(
-        await desk.startWithdrawal(body.auth as DeskAuth, {
-          address: body.address,
-          amountSats: body.amountSats,
-        }),
-      ),
-    };
-  throw new Fault("NOT_FOUND");
-}
-
-/** Serves a v5 hive's desk over HTTP for keepers' consoles; the host's TLS proxy puts it on HTTPS. */
-export async function startApprovalDesk(hive: string, options: DeskOptions) {
+/** Runs a v5 hive's desk on its own, a round at a time, following the channel in `options.events`. */
+export async function startApprovalDesk(hive: string, options: ApprovalDeskOptions) {
+  ensure(options.events, "USAGE", "the desk follows the hive's channel: give it the channel's events file");
   const desk = await ApprovalDesk.open(hive, options);
-  // Three keepers' consoles ask for little; anything asking for more is not one of them.
-  const limit = rateLimit(240, 120);
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (!consoleCors(req, res, options.origins)) return;
-    try {
-      ensure(limit.take(clientAddress(req)), "RATE_LIMITED", "too many requests; try again in a minute");
-      const url = new URL(req.url ?? "/", "http://desk");
-      const parts = url.pathname.split("/").filter(Boolean);
-      ensure(parts[0] === "desk" && parts[1] === "v1", "NOT_FOUND");
-      const body =
-        req.method === "POST" ? ((await readJsonBody(req, 256 * 1024)) as Record<string, unknown>) : {};
-      ensure(body && typeof body === "object" && !Array.isArray(body), "INVALID_JSON");
-      const keeper = req.headers["x-hive-keeper"];
-      sendJson(
-        res,
-        200,
-        await approvalsRoute(
-          desk,
-          req.method ?? "GET",
-          parts.slice(2),
-          body,
-          keeper ? String(keeper) : undefined,
-        ),
-      );
-    } catch (error) {
-      const { status, body } = faultStatus(error);
-      sendJson(res, status, body);
-    }
-  });
-  server.headersTimeout = 15_000;
-  server.requestTimeout = 60_000;
-  await new Promise<void>((ready, reject) => {
-    server.once("error", reject);
-    server.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => ready());
-  });
-  const address = server.address();
-  ensure(address && typeof address !== "string", "LISTEN_FAILED");
-  const timer = setInterval(() => void desk.tick().catch(() => {}), options.tickMs ?? 15_000);
+  const round = async () => {
+    await desk.tick();
+    if (options.paymentsFile) writeJson(options.paymentsFile, await desk.overview());
+  };
+  void round().catch(() => {});
+  const timer = setInterval(() => void round().catch(() => {}), options.tickMs ?? 15_000);
   return {
     desk,
-    url: `http://${options.host ?? "127.0.0.1"}:${address.port}`,
-    async close() {
+    close() {
       clearInterval(timer);
-      await new Promise<void>((done) => server.close(() => done()));
     },
   };
 }

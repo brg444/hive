@@ -1,25 +1,18 @@
-import { p256 } from "@noble/curves/nist.js";
-import { secp256k1 } from "@noble/curves/secp256k1.js";
-import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { base64urlnopad, bech32m, hex } from "@scure/base";
 
 /**
- * What the treasury contract, the Hive service and the keeper page must agree on byte for byte:
- * the message each keeper approves, the keeper key as the contract holds it, the recipient's
- * Taproot program behind the address a keeper reads, and the Bitcoin key a passkey derives with
- * WebAuthn's PRF extension. Runs in Node and in the browser.
+ * What the treasury contract, the Hive service and the Hive plugin must agree on byte for byte: the
+ * message each keeper approves, the text of the Buzz message that approves it, and the recipient's
+ * Taproot program behind the address a keeper reads. Runs in Node and in Buzz.
  */
 
 export const PAY_TAG = "hive/treasury/pay/v1";
 
-/** How every browser begins a WebAuthn assertion's clientDataJSON. */
-export const CLIENT_PREFIX = '{"type":"webauthn.get","challenge":"';
-
-/** Keeper kinds, as the contract's constructor numbers them. */
-export const PASSKEY = 1;
-export const RAW_P256 = 2;
-export type KeeperKind = typeof PASSKEY | typeof RAW_P256;
+/** The text of a keeper's approval, before the payment's code: the contract rebuilds exactly this. */
+export const APPROVE = "I approve Hive payment ";
+/** The text of a keeper's decline: any one keeper stops a payment with it. */
+export const DECLINE = "I decline Hive payment ";
 
 /** The counter asset: its issuance txid in the Emulator's internal byte order, and its group. */
 export interface Counter {
@@ -96,23 +89,39 @@ export function payMessage(counter: Pick<Counter, "txid" | "gidx">, payment: Pay
   );
 }
 
-/** The challenge as the browser writes it in clientDataJSON, and as the contract rebuilds it. */
-export const challengeOf = (message: Uint8Array): string => base64urlnopad.encode(message);
+/** A payment's code: its message in base64url, as the contract rebuilds it. */
+export const codeOf = (message: Uint8Array): string => base64urlnopad.encode(message);
 
-/** A keeper key as the contract holds it: 0x11 ‖ the compressed P-256 point. */
-export function keeperKey(point: Uint8Array): Uint8Array {
-  const compressed = p256.Point.fromBytes(point).toBytes(true);
-  return concat(Uint8Array.of(0x11), compressed);
+/** The message a keeper sends to approve a payment. */
+export const approvalText = (message: Uint8Array): string => APPROVE + codeOf(message);
+
+/** The message a keeper sends to stop a payment. */
+export const declineText = (message: Uint8Array): string => DECLINE + codeOf(message);
+
+/**
+ * What a message says about a payment: an approval or a decline, and its code, or null. Only the
+ * exact text counts, as only the exact text pays.
+ */
+export function paymentWord(text: string): { word: "approve" | "decline"; code: string } | null {
+  const m = /^I (approve|decline) Hive payment ([A-Za-z0-9_-]{43})$/.exec(String(text));
+  return m ? { word: m[1] as "approve" | "decline", code: m[2]! } : null;
 }
 
-/** The keeper key of a passkey, from the SubjectPublicKeyInfo the browser returns at creation. */
-export const keeperKeyFromSpki = (spki: Uint8Array): Uint8Array => keeperKey(spki.subarray(spki.length - 65));
+/**
+ * A keeper asks for a withdrawal: `Hive withdrawal: 5,000 sats to <Arkade address>`. Any keeper may
+ * ask; two keepers' approvals pay it, like any other payment.
+ */
+export const withdrawalText = (amountSats: number, address: string): string =>
+  `Hive withdrawal: ${amountSats.toLocaleString("en-US")} sats to ${address}`;
 
-/** The compressed P-256 point inside a keeper key. */
-export function keeperPoint(key: string | Uint8Array): Uint8Array {
-  const k = bytes(key);
-  if (k.length !== 34 || k[0] !== 0x11) throw new Error("not a keeper key");
-  return k.subarray(1);
+export function withdrawalOf(text: string): { amountSats: number; address: string } | null {
+  const plain = String(text ?? "").replace(/[`*]/g, "");
+  const m = /^\s*hive withdrawal\s*:\s*([\d,_ ]+?)\s*sats?\s+to\s+([a-z0-9]+1[a-z0-9]+)\s*$/i.exec(plain);
+  if (!m) return null;
+  const amountSats = Number(m[1]!.replace(/[,_ ]/g, ""));
+  return Number.isSafeInteger(amountSats) && amountSats > 0
+    ? { amountSats, address: m[2]!.toLowerCase() }
+    : null;
 }
 
 export interface Recipient {
@@ -138,30 +147,5 @@ export function recipientOf(address: string): Recipient {
   if (data.length !== 65) throw new Error("not an Arkade address");
   return { kind: "arkade", network: prefix, program: data.subarray(33, 65) };
 }
-
-/** The PRF input every keeper's passkey evaluates, giving the same secret each time. */
-export const KEY_SALT = sha256(utf8("hive/keeper-key/v1"));
-
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
-
-/**
- * A keeper's Bitcoin key, from the passkey's PRF output: the key on the treasury's and escrows'
- * exit leaves (through the pairs' MuSig2 keys) and the one the keeper signs Hive's records with.
- * Nothing to back up beyond the passkey, and it exists only in the page that asked the passkey.
- * A scalar in [1, n-1] from 48 bytes of HKDF, so the reduction's bias is negligible.
- */
-export function keeperSecret(prfOutput: Uint8Array): Uint8Array {
-  const okm = hkdf(sha256, prfOutput, utf8("hive"), utf8("hive/keeper-key/v1"), 48);
-  const v = BigInt(`0x${hex.encode(okm)}`) % (SECP256K1_N - 1n);
-  return hex.decode((v + 1n).toString(16).padStart(64, "0"));
-}
-
-/** The keeper's Bitcoin key, compressed, as Hive's MuSig2 pairs and record signatures take it. */
-export const bitcoinKeyOf = (prfOutput: Uint8Array): Uint8Array =>
-  secp256k1.getPublicKey(keeperSecret(prfOutput), true);
-
-/** What a keeper signs at enrollment with their Bitcoin key, proving the page derived it. */
-export const enrollmentMessage = (hive: string, p256Key: Uint8Array): Uint8Array =>
-  sha256(concat(utf8("hive/keeper-enroll/v1"), utf8(hive), Uint8Array.of(0), p256Key));
 
 export { sha256 };

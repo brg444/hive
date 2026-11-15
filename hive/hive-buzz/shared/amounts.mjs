@@ -1,7 +1,7 @@
 // How Hive shows an amount, in the unit the viewer chose: ₿ (Bitcoin's smallest unit written the way
 // Spiral proposes, so ₿1 is one sat and ₿20,000 is twenty thousand of them), sats, BTC, or US dollars
 // at the current Bitcoin price. Amounts are kept and sent in sats everywhere; only the display changes.
-// The Buzz plugin build inlines this file, and the keeper console bundles it.
+// The Buzz plugin build inlines this file.
 
 /** The units a viewer can choose, with a sample of each. */
 export const UNITS = [

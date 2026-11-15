@@ -1,6 +1,6 @@
-// The console builds no transaction and talks to no execution route.
+// The Hive plugin builds no transaction and talks to no execution route.
 const none = () => {
-    throw new Error("the keeper console does not execute spends");
+    throw new Error("the Hive plugin does not execute spends");
 };
 export const executionOrder = () => [];
 export const buildSpend = none;

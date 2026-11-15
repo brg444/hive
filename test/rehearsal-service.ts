@@ -4,16 +4,16 @@
  * to the service.
  *
  *   1. HiveBot asks the service for each hive; the service's operator approves both.
- *   2. Each hive's keepers create their keeper passkeys in the keeper console (a browser with a
- *      virtual passkey that supports PRF) and post their lines in the channel; members' plugins
- *      forward the channel, and the service builds each v5 treasury by itself once the third line is
- *      in, its counter issued by the host's issuer.
+ *   2. HiveBot's message names each hive's keepers; members' plugins forward the channel, and the
+ *      service builds each v5 treasury from the keepers' Buzz keys by itself, its counter issued by
+ *      the host's issuer.
  *   3. The first hive's agent starts on the service. For the second, a keeper names the community's
  *      own node in the channel, and the node's worker links it to the service.
  *   4. A member chips in to each treasury; a proposal is approved in each channel, and each member's
  *      node is acknowledged by HiveBot.
  *   5. Each member asks the `hive` model; each agent asks the provider for a job; two keepers of each
- *      hive approve its payment at the hive's desk on the service, and the escrows hold the cap.
+ *      hive approve its payment with a message their Hive plugin writes once it has checked the job,
+ *      and the escrows hold the cap.
  *   6. The provider claims each job before its deadline, and the rest returns to each treasury.
  *
  * Needs what `test/rehearsal.ts` needs:
@@ -32,17 +32,9 @@ import { MeshAgents } from "../tools/agents.js";
 import { opsPaths } from "../tools/ops.js";
 import { issuerWallet } from "../tools/treasury-v5.js";
 import { hiveIdFor, startService } from "../tools/service.js";
-import {
-  chromium,
-  approveFirstPayment,
-  keeperDevice,
-  openDesk,
-  type Page,
-  serveConsole,
-} from "./support/keeper-console.js";
+import { type BuzzIdentity, buzzIdentity, pluginOffers } from "./support/buzz-keepers.js";
 import { sendOffchain } from "./support/treasury-sdk.js";
 import {
-  ARKD,
   chat,
   children,
   coins,
@@ -88,8 +80,7 @@ interface Hive {
   hive: string;
   bot: Uint8Array;
   buzz: Uint8Array[]; // three keepers' Buzz keys, then the member's
-  devices: { key: string; page: Page }[];
-  keys: [string, string, string];
+  keepers: BuzzIdentity[];
   sent: unknown[];
   treasury?: { address: string; script: string };
   agentLog?: string;
@@ -101,8 +92,6 @@ interface Hive {
 
 const port = await freePort();
 const service = `http://127.0.0.1:${port}`;
-const site = await serveConsole();
-const browser = await chromium.launch();
 const agents = new MeshAgents({
   mesh: MESH,
   plugin: PLUGIN,
@@ -117,7 +106,6 @@ const server = await startService({
   network: "regtest",
   deployment: regtestDeployment(),
   publicUrl: service,
-  consoleUrl: site.url,
   discussionSeconds: 60,
   agents,
   serveInvite: true,
@@ -144,20 +132,15 @@ try {
     });
     assert.equal(asked.status, 200, JSON.stringify(asked.body));
     await server.service.approve(hiveIdFor(channel), hex(schnorr.getPublicKey(bot)));
-    const devices = [
-      await keeperDevice(browser, site.url, ARKD),
-      await keeperDevice(browser, site.url, ARKD),
-      await keeperDevice(browser, site.url, ARKD),
-    ];
+    const keepers = [buzzIdentity(), buzzIdentity(), buzzIdentity()];
     hives.push({
       name,
       own,
       channel,
       hive: hiveIdFor(channel),
       bot,
-      buzz: [0, 1, 2, 3].map(() => schnorr.utils.randomSecretKey()),
-      devices,
-      keys: devices.map((d) => d.key) as [string, string, string],
+      buzz: [...keepers.map((k) => k.secret), schnorr.utils.randomSecretKey()],
+      keepers,
       sent: [call],
     });
   }
@@ -171,7 +154,7 @@ try {
   };
   const pub = (k: Uint8Array) => hex(schnorr.getPublicKey(k));
 
-  // 2. The keepers HiveBot records, their keys in the channel, and the treasury the service builds.
+  // 2. The keepers HiveBot records, and the treasury the service builds from their Buzz keys.
   // The host's issuer, which issues each hive's counter, holds a few thousand sats of the host's own.
   const issuer = await issuerWallet(regtestDeployment());
   if ((await issuer.getBalance()).available < 5_000) {
@@ -184,9 +167,6 @@ try {
         ["hive", "plugin"],
         ...h.buzz.slice(0, 3).map((k) => ["p", pub(k)]),
       ]),
-      ...h.buzz
-        .slice(0, 3)
-        .map((k, i) => signed(k, h.channel, 9, `Hive keeper key: ${h.keys[i]}`, now() - 1000 + i)),
     ]);
     const state = await until(
       `${h.name}'s treasury`,
@@ -200,7 +180,7 @@ try {
     h.treasury = { address: record.treasuryAddress, script: record.treasuryScript };
     assert.equal((state.treasury as { address: string }).address, h.treasury.address);
   }
-  step("treasuries built from the keepers' keys", {
+  step("treasuries built from the keepers' Buzz keys", {
     treasuries: hives.map((h) => h.treasury!.address.slice(0, 20)),
   });
 
@@ -380,21 +360,28 @@ try {
         .length > 0,
     60,
   );
-  for (const h of hives) {
-    const desk = `${service}/c/${h.channel}`;
-    const [a, b] = [h.devices[0]!, h.devices[1]!];
-    await openDesk(b.page, desk, h.hive);
-    await openDesk(a.page, desk, h.hive);
-  }
-  // Both hives' keepers approve in turn, interleaved, at the same service.
+  // Both hives' keepers approve in turn, interleaved, at the same service: each keeper's plugin checks
+  // the job and writes the approval, and the keeper sends it in the channel.
   for (const [label, who] of [
     ["keeper A", 0],
     ["keeper B", 1],
   ] as const) {
-    const answers = await Promise.all(
-      hives.map((h) => approveFirstPayment(h.devices[who]!.page, "Check and approve")),
-    );
-    step(label, { consoles: answers });
+    const approvals: string[] = [];
+    for (const h of hives) {
+      const keeper = h.keepers[who]!;
+      const offer = await until(
+        `${label}'s plugin in ${h.name}`,
+        async () => {
+          const o = await pluginOffers(service, "wss://rehearsal", keeper, h.channel);
+          return o.approvals.length ? o : null;
+        },
+        60,
+      );
+      assert.deepEqual(offer.refused, []);
+      await forward(h, [keeper.message(h.channel, offer.approvals[0]!)]);
+      approvals.push(offer.approvals[0]!.slice(0, 32));
+    }
+    step(label, { approvals });
   }
   for (const h of hives) {
     await until(
@@ -463,8 +450,6 @@ try {
   await server.close();
   await agents.close();
   for (const c of children.reverse()) c.kill("SIGTERM");
-  await browser.close();
-  site.close();
   console.log(result.passed ? `PASSED (${out})` : `FAILED (${out})`);
   if (result.passed)
     for (const h of hives) rmSync(opsPaths(h.hive).secret(), { recursive: true, force: true });
