@@ -5,9 +5,11 @@
  * A v5 treasury is named by its counter asset, so the counter exists before the treasury's address
  * does. The host issues it from a small wallet of its own, the issuer, which holds only the host's
  * sats, and sends the whole supply to the treasury with a 1,000-sat carrier in the same transaction.
- * Once the treasury holds every unit, nothing outside it can stand in for its counter: the host's
- * part ends there. The issuer's key is the one key a host keeps for v5 hives, and it moves only the
- * host's own dust.
+ * The treasury's covenant never merges a coin that holds units of the counter, so nothing the issuer
+ * or anyone else holds can set the treasury's payment number: the count on the treasury coin only
+ * goes down, one unit a payment. The host still issues exactly the supply it sends, with no control
+ * asset, and anyone can ask the Operator's indexer whether it did (`pnpm ops counter`). The issuer's
+ * key is the one key a host keeps for v5 hives, and it moves only the host's own dust.
  */
 import {
   InMemoryContractRepository,
@@ -225,6 +227,43 @@ export async function issueCounter(deployment: Deployment): Promise<{ assetId: s
     );
   const { assetId } = await wallet.assetManager.issue({ amount: COUNTER_SUPPLY } as never);
   return { assetId, supply: COUNTER_SUPPLY };
+}
+
+/** The issuer's address and what it holds: every new hive's treasury takes its carrier from it. */
+export async function issuerStatus(deployment: Deployment): Promise<{ address: string; sats: number }> {
+  const wallet = await issuerWallet(deployment);
+  const [address, balance] = await Promise.all([wallet.getAddress(), wallet.getBalance()]);
+  return { address, sats: Number(balance.available) };
+}
+
+/**
+ * A counter as the Operator's indexer reports it: the supply ever issued, and the control asset
+ * that could issue more, if it has one. Read with a wallet of no funds, so anyone can ask.
+ */
+export async function counterDetails(
+  deployment: Deployment,
+  assetId: string,
+): Promise<{ assetId: string; supply: string; controlAssetId: string | null; fixed: boolean }> {
+  const wallet = await Wallet.create({
+    identity: SingleKey.fromHex(hex(secp256k1.utils.randomSecretKey())),
+    service: { operatorUrl: deployment.arkdUrl, emulatorUrl: emulatorOf(deployment) },
+    storage: {
+      walletRepository: new InMemoryWalletRepository(),
+      contractRepository: new InMemoryContractRepository(),
+    },
+    settlement: false,
+  } as never);
+  const details = (await wallet.assetManager.getAssetDetails(assetId)) as {
+    supply: bigint;
+    controlAssetId?: string;
+  };
+  const controlAssetId = details.controlAssetId || null;
+  return {
+    assetId,
+    supply: String(details.supply),
+    controlAssetId,
+    fixed: BigInt(details.supply) === COUNTER_SUPPLY && controlAssetId === null,
+  };
 }
 
 /** Sends the whole counter, with its carrier, from the issuer to the treasury. */

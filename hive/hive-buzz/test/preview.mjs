@@ -16,7 +16,9 @@ import { formatProposal } from "../shared/proposal.mjs";
 import { jobEscrow } from "../../../packages/ark/src/job-escrow.ts";
 import { MAINNET_PINS } from "../../../packages/ark/src/deployment.ts";
 import { arkAddress, parseArkAddress } from "../../../packages/ark/src/taproot.ts";
-import { approvalText, payMessage } from "../../../packages/treasury/src/message.ts";
+import { instantiate } from "../../../packages/ark/src/contract.ts";
+import { approvalText, codeOf, payMessage } from "../../../packages/treasury/src/message.ts";
+import { TREASURY_ARTIFACT, treasuryArguments } from "../../../packages/treasury/src/terms.ts";
 import { schnorr } from "@noble/curves/secp256k1";
 
 const argv = process.argv.slice(2);
@@ -27,7 +29,8 @@ const root = new URL("..", import.meta.url).pathname;
 const now = Math.floor(Date.now() / 1000);
 const H = 3600, D = 86400;
 
-const K = ["1e8e42649059b5885f4d35302f3a3a7e161c2e40d5e82f550341138741bd253f", "647c09f5295635acc82988a65283bce2caefb3b296dac5e658b0891873d803e2", "9a0c51e2" + "7".repeat(56)];
+const point = (n) => Buffer.from(schnorr.getPublicKey(new Uint8Array(32).fill(n))).toString("hex");
+const K = ["1e8e42649059b5885f4d35302f3a3a7e161c2e40d5e82f550341138741bd253f", "647c09f5295635acc82988a65283bce2caefb3b296dac5e658b0891873d803e2", point(7)];
 const ME = K[1];
 const DANA = "d4" + "5".repeat(62), KOFI = "c0" + "f".repeat(62);
 const base = { start: null, end: null, named: [], provider: "", reportPlan: "", declinedBy: [], reason: null, report: null, replies: 0 };
@@ -46,35 +49,35 @@ const proposals = [
         allowanceSats: null, purpose: "Generate a starting avatar for each new member.", state: "declined", discussionEnds: now - 18 * D, approvedAt: null, starts: null, ends: null,
         usedSats: 0, support: 2, approvals: [], reason: "Image generation is outside the hive's purpose.", replies: 5 },
 ];
-// The treasury and a job's escrow on mainnet's Operator, and a withdrawal's address, built for real.
-const TREASURY = "ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec4ucczpczsplu0846wkt7l7kvxw6z6nluvq6m3a7j7h2ewh0m4zgpxr4t3";
+// The treasury the three keepers' keys build, and a job's escrow, on mainnet's Operator, and a
+// withdrawal's address: built for real, as the plugin rebuilds them before it offers an approval.
 const operator = { network: "bitcoin", server: MAINNET_PINS.operatorKey, emulator: MAINNET_PINS.emulatorKey, exitDelay: MAINNET_PINS.exitDelaySeconds };
 const conn = { deployment: { network: "bitcoin" }, keys: { server: operator.server, emulator: operator.emulator }, operator: { unilateralExitDelay: operator.exitDelay } };
-const treasuryScript = parseArkAddress(TREASURY).pkScript;
+const counter = { assetId: `${"9f".repeat(32)}0000`, txid: "9f".repeat(32), gidx: 0 };
+const terms = { delegateKey: `02${point(9)}`, renewalWindowSeconds: 2 * D, maxFeeSats: 500, exitDelaySeconds: operator.exitDelay };
+const treasuryScript = instantiate(TREASURY_ARTIFACT, treasuryArguments({ keepers: K, counter, ...terms }), { ...conn.keys, delegate: terms.delegateKey }).pkScript;
+const TREASURY = arkAddress("bitcoin", operator.server, treasuryScript);
 const JOB = "4a2c" + "0".repeat(56) + "b7e1";
-const point = (n) => Buffer.from(schnorr.getPublicKey(new Uint8Array(32).fill(n))).toString("hex");
 const PROVIDER = point(3);
 const params = { agentPk: point(5), providerPk: PROVIDER, treasuryProgram: treasuryScript.slice(4), deadline: now + 20 * H, jobId: JOB };
 const escrow = jobEscrow(conn, params);
 const MOVE_TO = arkAddress("bitcoin", operator.server, `5120${"6e".repeat(32)}`);
-const counter = { assetId: `${"9f".repeat(32)}0000`, txid: "9f".repeat(32), gidx: 0 };
-const pay = (p) => {
-    const message = payMessage(counter, { left: BigInt(p.left), amount: BigInt(p.amountSats), validUntil: p.validUntil, program: p.program });
-    return { ...p, code: approvalText(message).slice(23) };
-};
+// One payment is open under the treasury's number; the next waits its turn with none.
+const termsOf = (p) => ({ left: BigInt(p.left), amount: BigInt(p.amountSats), validUntil: p.validUntil, program: p.program });
+const pay = (p) => (p.left === null ? p : { ...p, code: codeOf(payMessage(counter, termsOf(p))) });
 const payments = [
     pay({ id: JOB, kind: "job", request: { jobId: JOB, address: escrow.address, capSats: 20000, deadline: params.deadline, model: "qwen3-coder-30b", providerPk: PROVIDER, params },
         address: escrow.address, program: escrow.pkScript.slice(4), amountSats: 20000, left: "999962", validUntil: now + 19 * H, approvedBy: [K[0]], status: "approving",
-        startedBy: "agent", createdAt: now - 2 * H, updatedAt: now - H }),
+        remainingSats: 21760, startedBy: "agent", createdAt: now - 2 * H, updatedAt: now - H }),
     pay({ id: "77".repeat(32), kind: "withdrawal", withdrawal: { destination: `5120${"6e".repeat(32)}`, amountSats: 50000 }, address: MOVE_TO, program: "6e".repeat(32),
-        amountSats: 50000, left: "999961", validUntil: now + 22 * H, approvedBy: [], status: "approving", startedBy: K[2], createdAt: now - H, updatedAt: now - H }),
+        amountSats: 50000, left: null, validUntil: 0, approvedBy: [], status: "queued", startedBy: K[2], createdAt: now - H, updatedAt: now - H }),
 ];
 const state = {
     v: 1, name: "Buzz Builders", updatedAt: now, agent: { nodeId: "ab".repeat(32) },
     chipIn: { lightningAddress: "builders@hive.example" },
     price: { usdPerBtc: 67235, at: now - 120, source: "mempool.space" },
     treasury: { address: TREASURY, balanceSats: 1284500 },
-    payments: { v: 5, counter, keepers: K, treasuryScript, operator, units: "999962", waiting: [], payments },
+    payments: { v: 5, counter, keepers: K, treasuryScript, terms, operator, units: "999962", budget: { remainingSats: 1760 }, waiting: [], refused: [], payments },
     funding: [{ jobId: JOB, status: "awaiting_funding", model: "qwen3-coder-30b", capSats: 20000, deadline: params.deadline, minCoinExpiry: now + 4 * D,
         escrowAddress: escrow.address, providerPk: PROVIDER }],
     jobs: [
@@ -127,8 +130,7 @@ const Payment = seen.messages.find((m) => m.id === "payment").component;
 const Tool = seen.tools[0].component;
 const Status = seen.accessories.find((a) => a.id === "status").component;
 const Keeper = seen.accessories.find((a) => a.id === "keeper").component;
-const approval = { id: "ab".repeat(32), channelId: "chan-hive", authorId: K[0], createdAt: now - H, mentions: [], reactions: [], content: approvalText(payMessage(counter,
-    { left: 999962n, amount: 20000n, validUntil: payments[0].validUntil, program: payments[0].program })) };
+const approval = { id: "ab".repeat(32), channelId: "chan-hive", authorId: K[0], createdAt: now - H, mentions: [], reactions: [], content: approvalText(counter, termsOf(payments[0])) };
 const toolProps = { channelId: "chan-hive", disabled: false, insertText: () => true, focus: () => {} };
 
 const message = (who, ago, body) => `<div class="msg"><span class="av">${who.slice(0, 2)}</span><div class="mb"><div class="mh"><b>${who}</b><span>${ago}</span></div>${body}</div></div>`;

@@ -155,7 +155,9 @@ export async function pluginOffers(
       .replace(/&quot;/g, '"')
       .replace(/&amp;/g, "&");
     return {
-      approvals: [...decoded.matchAll(/I approve Hive payment [A-Za-z0-9_-]{43}/g)].map((m) => m[0]),
+      approvals: [
+        ...decoded.matchAll(/I approve Hive payment of \d+ sats to [0-9a-f]{8} [A-Za-z0-9_-]{43}/g),
+      ].map((m) => m[0]),
       refused: [...decoded.matchAll(/Don't approve this payment: ([^<]*)/g)].map((m) => m[1]!),
       html: decoded,
     };

@@ -31,15 +31,22 @@ Buzz keys, the same keys that sign every message they send, so there is nothing 
 The same key can take the treasury onchain with another keeper if the Arkade Operator ever goes
 away, so a keeper backs it up in Buzz's Settings → Identity.
 
-Payments. Approving a proposal and paying for its work are separate decisions. When a job needs
-funding, keepers are notified in Buzz, check the amount, the escrow, the provider and what is left
-of the budget on the hive's Keepers tab, and press Approve: the plugin writes the approval, "I
-approve Hive payment <code>", into the message box, and the keeper sends it. The code names exactly
-that payment, and the treasury itself checks the keeper's signature on the message. Two keepers
-approve, in any order and hours apart if they like, and the hive's desk then sends the payment.
-Decline, which sends "I decline Hive payment <code>", stops it. A keeper asks for a withdrawal with
-the Withdraw form, or a message "Hive withdrawal: <amount> sats to <Arkade address>", and two
-keepers approve it the same way.
+Payments. Approving a proposal and paying for its work are separate decisions. Payments are
+approved one at a time: the hive's desk opens the next one once the one before it is paid, declined
+or lapsed, jobs before withdrawals. When a job needs funding, keepers are notified in Buzz. The
+plugin checks the payment for them, the treasury, the escrow, the amount against the budgets the
+channel approved and the agent that signs the job's receipts, and shows the amount, the provider and
+what is left of the budget on the hive's Keepers tab and above the message box. A keeper presses
+Approve: the plugin writes the approval, "I approve Hive payment of <amount> sats to <recipient>
+<code>", into the message box, and the keeper reads it and sends it as it is. The words say the
+amount and the start of the recipient, the code names exactly that payment, and the treasury itself
+checks the keeper's signature on the message. Two keepers approve, in any order and hours apart if
+they like, and the hive's desk then sends the payment. Decline, which sends "I decline Hive payment
+of <amount> sats to <recipient> <code>", stops the desk from paying it. It does not undo approvals
+two keepers have already sent, which stay valid until they lapse, within a day. A keeper sends no
+approval the plugin did not write for them, whoever asks. A keeper asks for a withdrawal with the
+Withdraw form, or a message "Hive withdrawal: <amount> sats to <Arkade address>", one request at a
+time, and two keepers approve it the same way.
 Nobody, and nothing, approves for a keeper. Each job's
 money sits in an escrow: the provider is paid what the agent's signed receipts show, the rest goes
 back to the treasury, and an unclaimed escrow returns whole at its deadline with no one's signature.

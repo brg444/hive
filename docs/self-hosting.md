@@ -70,15 +70,21 @@ delegate key to the delegatee through systemd's encrypted credentials.
 Each hive's treasury is named by its counter, an asset the host issues for it from the issuer, a
 small wallet of the host's own whose key the service makes once in `.secrets/issuer/<network>.json`.
 The issuer sends the whole counter to the new treasury with 1,000 sats as its carrier, so it needs a
-few thousand sats before the first hive: the service names its address when it runs short. It holds
-only the host's own sats, never a treasury's. The treasury's payments go out through the Emulator,
-whose address the service takes from `BUZZ_EMULATOR_URL` on mainnet, the same one the delegatee is
-given.
+few thousand sats before the first hive. `setup.sh` ends by naming the address to fund, `pnpm ops
+issuer --network <network>` names it again with what it holds, and the host's check says when it
+runs short. It holds only the host's own sats, never a treasury's. A treasury's covenant merges no
+coin that holds units of its counter, so nothing the issuer keeps can change a treasury's payment
+number; the service still asks the Operator's indexer, when it builds a treasury, that the counter's
+supply is the one it sent and that nothing can issue more, and `pnpm ops counter <hive>` asks again
+for anyone. The treasury's payments go out through the Emulator, whose address the service takes
+from `BUZZ_EMULATOR_URL`; `setup.sh` fills it in with the delegatee's when `hive.env` leaves it empty.
 
 Mainnet stays off until you uncomment `BUZZ_MAINNET=enabled` in `hive.env` and restart the service.
 The Operator's key and exit delay and the Emulator's key are pinned in
 `packages/ark/src/deployment.ts`, so a delegatee that served another Operator or Emulator is refused,
-and hard ceilings apply: 50,000 sats per escrow, 100,000 per chip-in and 1,000,000 in a treasury.
+and hard ceilings apply: 50,000 sats per escrow, which the desk and every keeper's plugin hold a job
+to, and 100,000 per chip-in and 1,000,000 in a treasury where a hive takes chip-ins through its own
+page.
 
 ### Backups
 
@@ -111,7 +117,10 @@ commands if it has not been. Rehearse a restore before the treasury holds anythi
 
 `tools/check.sh` runs every five minutes from `hive-check.timer`. It says, one line each, whether
 the service and the delegatee answer, whether the delegatee still signs with the delegate key
-`hive.env` names, whether there is a backup from the last thirteen hours, and whether the disk has room. Each finding
+`hive.env` names, whether the issuer holds enough for the next hive's treasury, whether any hive's
+treasury could not be built or its desk could not make its round, whether there is a backup from the
+last thirteen hours, and whether the disk has room. The service tells its own troubles at
+`/statusz`, to callers on the host only, and writes each to its journal when it starts. Each finding
 goes to the journal at error priority (`journalctl -p err -u hive-check`), and with `HIVE_ALERT_URL`
 set in `hive.env` it is also posted there as plain text, to an ntfy topic or any address that takes
 a POST. The services' own logs are in `journalctl -u hive-service -u hive-delegatee`.
@@ -217,8 +226,9 @@ Members' plugins forward the channel to the service, which checks every event's 
 the keepers HiveBot recorded. A keeper's Buzz key is their treasury key, so there is nothing more for
 them to post: the service issues the hive's counter from the issuer, builds the treasury from the
 three keepers' Buzz keys in the order HiveBot confirmed them, keeps none of them, registers the
-treasury's renewal with the delegatee, sends the whole counter to the treasury and checks that it
-arrived, and starts the hive's agent node unless a keeper names the community's own. HiveBot posts
+treasury's renewal with the delegatee, sends the whole counter to the treasury, checks that it
+arrived and that the Operator's indexer shows no more of it than was sent, and starts the hive's
+agent node unless a keeper names the community's own. HiveBot posts
 the treasury's address, and the plugin shows it. HiveBot also reminds each keeper to back up their
 Buzz key in Settings → Identity, since it is now their share of the treasury: Buzz made that key at
 random for their identity, and no seed or server can make it again.
@@ -227,9 +237,17 @@ random for their identity, and no seed or server can make it again.
 
 Every hive has its approvals desk on the service. It follows the hive's channel as members' plugins
 forward it, makes each job the agent asks the keepers to fund into a payment, takes in the keepers'
-approvals and declines, and submits a payment once two keepers have approved it. What it has waiting
-is in the hive's state, which each keeper's plugin reads. The desk also folds each chip-in and each
-escrow's remainder into the treasury coin as they arrive.
+approvals and declines, and submits a payment once two keepers have approved it. One payment is open
+for approval at a time, under the treasury's current number, and the others wait their turn with no
+number: an approval names its payment's number, so a payment approved under two numbers could pay
+under both. Jobs take their turn before withdrawals, a job above the mainnet ceiling on an escrow or
+above what approved work has left is not opened, and an open withdrawal that two keepers have not
+approved steps aside after fifteen minutes when a job waits. The desk counts the approvals still in
+the channel, so one its keeper deleted no longer counts there, and it reads what became of a payment
+from the transaction that spent the treasury coin, since anyone holding two keepers' approvals may
+submit them. What it has waiting is in the hive's state, which each keeper's plugin reads. The desk
+also folds each chip-in and each escrow's remainder into the treasury coin as they arrive, and moves
+finished payments to an archive after a week.
 
 ### 4. Chip-ins and the first proposal
 
@@ -250,18 +268,26 @@ above the message box in the hive's channel and on the Keepers tab.
 
 ### 6. Two keepers approve
 
-Before it offers anything, a keeper's plugin checks the payment itself: it rebuilds the job's escrow
-from the job's terms and checks that it gives back to this treasury and that the amount is the job's
-cap, and it rebuilds the exact message the treasury's covenant will check. What approved work has
-left is the desk's count, which the plugin cannot check against the channel, so a keeper looks at
-the proposal there before approving. The keeper presses Approve, and the plugin writes
-`I approve Hive payment <code>` into the message box; the keeper sends it as it is, since the
-covenant checks every character, and the channel draws it as a card naming the payment. A second
-keeper does the same, at any time before the approvals lapse, ten minutes before the job's deadline
-at the latest. The desk then submits the payment through the Emulator, and the escrow holds exactly
-the job's cap. A keeper who presses Decline sends `I decline Hive payment <code>`, which stops the
-payment. Payments go out in the order they started; one declined or lapsed passes its number to the
-next, whose keepers approve it again.
+Before it offers anything, a keeper's plugin checks the open payment itself. It rebuilds the
+treasury from the keepers' keys and the terms the host states and checks that it is the address
+members chip in to. It rebuilds the job's escrow from the job's terms and checks that it gives back
+to that treasury, that the amount is the job's cap, within the ceiling on an escrow and within what
+the proposals it reads in the channel have left, and that the agent whose receipts pay the job is
+the hive's: the one a keeper named in the channel, or the one the plugin saw on the first job this
+keeper funded. It then rebuilds the exact message the treasury's covenant will check. The usage it
+takes off the proposals' budgets is the host's count, so a keeper still looks at the proposal in the
+channel before approving. The keeper presses Approve, and the plugin writes
+`I approve Hive payment of <amount> sats to <recipient> <code>` into the message box; the keeper
+reads it and sends it as it is, since the covenant checks every character, and the channel draws it
+as a card naming the payment. A second keeper does the same, at any time before the approvals lapse,
+ten minutes before the job's deadline at the latest. The desk then submits the payment through the
+Emulator, and the escrow holds exactly the job's cap. A keeper who presses Decline sends the same
+words after `I decline`, which stops the desk from paying it; it does not undo approvals two keepers
+have already sent, which anyone who read them in the channel can still submit until they lapse.
+Payments go out one at a time. A payment gets its number when its turn comes and is approved once
+under it; it is given another only once the treasury has passed the first, which is also when
+approvals sent under that number stop paying. A keeper's plugin offers the same amount to the same
+recipient under one number only while an earlier approval of theirs could still pay.
 
 ### 7. The work, the claim and the return
 
@@ -274,9 +300,12 @@ signing.
 Two keepers can send the treasury's Bitcoin to an Arkade address: to move the hive to a new
 treasury or a new host, or to wind it down. They agree on the address and the amount in the hive's
 channel. One presses Withdraw above the message box and enters both, which writes
-`Hive withdrawal: <amount> sats to <address>` for them to send; the desk makes it a payment, and two
-keepers' plugins work out what the address pays themselves and offer the approval. A withdrawal's
-approvals lapse after 23 hours, and the address must be on the hive's Operator. Nothing in the
+`Hive withdrawal: <amount> sats to <address>` for them to send; the desk makes it a payment, and
+when its turn comes two keepers' plugins work out what the address pays themselves, find the message
+that asked for it and offer the approval. Each keeper has one request waiting at a time, and takes
+one back by deleting the message, as long as two keepers have not approved it. A request nobody
+approves ends after 23 hours, a withdrawal's approvals lapse 23 hours after its turn comes, and the
+address must be on the hive's Operator. Nothing in the
 plugin judges the destination. That is the keepers' own decision, which is why it takes two of them.
 
 ## Trying it locally first

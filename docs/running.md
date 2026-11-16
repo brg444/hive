@@ -49,7 +49,9 @@ keys under `.secrets/`, both ignored by git.
 | --- | --- |
 | `pnpm ops init <hive> --network <regtest\|mutinynet> [--keepers <k1,k2,k3>] [--lnurl <url>]` | Builds the treasury and the Lightning address; with `--keepers`, the v5 treasury from the keepers' Buzz keys (npub or hex), keeping none |
 | `pnpm ops listing <hive> --name <name> [--purpose <text>] [--relay <url> …]` | Writes the hive's signed listing, and publishes it when relays are given; a v5 hive has no signed listing yet |
-| `pnpm ops desk <hive> --agent-log <log> --events <file> [--governance <file>] [--payments-file <file>]` | Runs a v5 hive's approvals desk on its own: it follows the keepers' approvals in the channel's events, as hive-api keeps them, submits each payment two keepers approved, and writes its payments for hive-api's `--payments` |
+| `pnpm ops desk <hive> --agent-log <log> --events <file> [--governance <file>] [--payments-file <file>]` | Runs a v5 hive's approvals desk on its own: it follows the keepers' approvals in the channel's events, as hive-api keeps them, opens one payment at a time and submits it once two keepers approved it, and writes its payments for hive-api's `--payments` |
+| `pnpm ops issuer --network <regtest\|bitcoin>` | Names the address of the host's issuer and what it holds: every new v5 treasury takes its counter and its 1,000-sat carrier from it |
+| `pnpm ops counter <hive>` or `--network <network> --asset <asset id>` | Asks the Operator's indexer for a counter's supply and whether anything can issue more |
 | `pnpm ops publish <hive> --relay <url> [--relay <url> …]` | Publishes the newest listing to Nostr relays |
 | `pnpm ops hives --network <regtest\|mutinynet> --relay <url> […]` | Lists the hives those relays carry whose keys build the treasury they name |
 | `pnpm ops provider-add <hive> <provider> --model … --input-rate … --output-rate … --relay …` | Creates a provider: payout wallet, card and solver configuration |

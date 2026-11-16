@@ -59,15 +59,38 @@ export function unitsOn(coin: Pick<TreasuryCoin, "assets">, assetId: string): bi
   return a ? BigInt(a.amount) : 0n;
 }
 
+/** The treasury coin as it was last seen: its outpoint and the counter units it held. */
+export interface KnownCoin {
+  txid: string;
+  vout: number;
+  units: string;
+}
+
 /**
  * The treasury's unspent coins: the one that holds the counter, and the others to merge into it.
- * `held` lists every coin holding counter units, which is one coin unless something is wrong.
+ * `held` lists every coin holding counter units, which is one coin unless someone sent the script a
+ * coin with units of its own. The covenant never merges such a coin, so it cannot change the
+ * treasury's count, and a desk that knows its treasury coin keeps following it: the coin it last saw,
+ * or the one that carries on from it with as many units or fewer. Without that knowledge two coins
+ * with units are ambiguous, and `treasury` is undefined.
  */
-export async function treasuryCoins(contract: TreasuryContract, assetId: string) {
+export async function treasuryCoins(contract: TreasuryContract, assetId: string, known?: KnownCoin) {
   const coins = ((await contract.getUtxos()) as TreasuryCoin[]).filter((c) => !c.isSpent && !c.isSwept);
   const held = coins.filter((c) => unitsOn(c, assetId) > 0n);
+  let treasury = held.length === 1 ? held[0] : undefined;
+  if (held.length > 1 && known) {
+    const most = BigInt(known.units);
+    treasury =
+      held.find((c) => c.txid === known.txid && c.vout === known.vout) ??
+      held
+        .filter((c) => unitsOn(c, assetId) <= most)
+        .sort((a, b) => {
+          const byUnits = unitsOn(b, assetId) - unitsOn(a, assetId);
+          return byUnits > 0n ? 1 : byUnits < 0n ? -1 : b.value - a.value;
+        })[0];
+  }
   return {
-    treasury: held.length === 1 ? held[0]! : undefined,
+    treasury,
     others: coins.filter((c) => unitsOn(c, assetId) === 0n),
     held,
   };

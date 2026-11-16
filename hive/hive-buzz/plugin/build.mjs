@@ -14,6 +14,7 @@
 // Each hive gets its own plugin, because Buzz only lets a plugin call the exact HTTPS origins its
 // manifest declares, and the community owner reviews that origin when installing.
 import { build } from "esbuild";
+import { checksBundle } from "./checks-bundle.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,31 +100,7 @@ if (docs) {
 }
 // What a keeper's plugin checks before it offers an approval: the hive's own code, bundled in, run
 // only when a keeper opens a payment, so the module stays pure until then.
-const root = join(here, "../../..");
-const shims = {
-    name: "node-shims",
-    setup(b) {
-        b.onResolve({ filter: /^node:crypto$/ }, () => ({ path: join(here, "shims/node-crypto.mjs") }));
-        b.onResolve({ filter: /^node:/ }, () => ({ path: join(here, "shims/node-none.mjs") }));
-        b.onResolve({ filter: /^@hive\/executor$|^@arkade-os\/sdk/ }, () => ({ path: join(here, "shims/no-executor.mjs") }));
-    },
-};
-const bundled = await build({
-    entryPoints: [join(here, "checks.mjs")],
-    bundle: true,
-    format: "iife",
-    globalName: "HiveChecks",
-    target: "es2022",
-    minify: true,
-    legalComments: "none",
-    write: false,
-    plugins: [shims],
-    inject: [join(here, "shims/buffer.mjs")],
-    nodePaths: [join(root, "node_modules"), join(here, "../node_modules")],
-    define: { "process.env": "{}", "import.meta.dirname": '"/"' },
-    alias: Object.fromEntries(["kit", "ark", "steward", "protocol", "hive", "agent", "provider", "treasury"].map((p) => [`@hive/${p}`, join(root, `packages/${p}/src/index.ts`)])),
-    logLevel: "warning",
-});
+const bundled = await build({ ...checksBundle(), format: "iife", globalName: "HiveChecks", minify: true, write: false });
 const checks = `function hiveChecks() {\n    if (hiveChecks.loaded) return hiveChecks.loaded;\n    ${bundled.outputFiles[0].text.trim()}\n    return (hiveChecks.loaded = HiveChecks);\n}`;
 if (install && !/^https:\/\/[^\s#]+#[A-Za-z0-9._/-]+$/.test(install)) fail("--install is <https Git repository>#<branch>");
 const js = readFileSync(join(here, "plugin.template.js"), "utf8")

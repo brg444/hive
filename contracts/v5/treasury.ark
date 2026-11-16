@@ -3,10 +3,11 @@ pragma arkade ^0.1.0;
 // A Buzz community's treasury, kept by three keepers: any two of them approve each payment, each by
 // sending a message in the hive's channel. A keeper's approval is an ordinary Buzz message, signed by
 // their Buzz identity's key like every message they send: a kind 9 event whose text is exactly
-// "I approve Hive payment " and the payment's code. The covenant rebuilds the event from the keeper's
-// key, the payment's code and the two parts of the event Buzz chooses itself, its created_at and its
-// tags, and checks the keeper's signature over its id. The two approvals are independent messages,
-// sent from any device at any time, in any order.
+// "I approve Hive payment of <amount> sats to <the recipient's first eight hex characters> " and the
+// payment's code, so a keeper reads what they approve in the message they send. The covenant rebuilds
+// the event from the keeper's key, the payment's amount, recipient and code, and the two parts of the
+// event Buzz chooses itself, its created_at and its tags, and checks the keeper's signature over its
+// id. The two approvals are independent messages, sent from any device at any time, in any order.
 //
 // Only the text binds the approval: JSON writes a quote inside a string as \", so the last unescaped
 // quote before the end of an event's serialization opens its content, and an event whose text says
@@ -16,7 +17,8 @@ pragma arkade ^0.1.0;
 // coin, one unit burned by each payment. An approval names the treasury (the counter's asset id),
 // the number of units left, the amount, the recipient and the time it lapses, so it pays once and
 // only before then, and a merge or a renewal, which keep the units, leaves every pending approval
-// valid.
+// valid. A merge takes the count of the treasury coin and of no other: the coin folded in holds no
+// unit of the counter, so nothing merged into the treasury can set its payment number.
 //
 // Payments and merges run offchain only. Renewal runs in an intent that only the host's delegatee
 // may cosign, as in the v4 treasury: whoever cosigns a batch holds its new coins together with the
@@ -41,7 +43,8 @@ contract HiveTreasury(
   int exitDelay
 ) {
   const bytes ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  const bytes APPROVE = "I approve Hive payment ";
+  const bytes DIGITS = "0123456789abcdef";
+  const bytes APPROVE = "I approve Hive payment of ";
 
   static function byteAt(bytes data, int i) int {
     return bin2num(substr(data, i, 1) + 0x00);
@@ -63,6 +66,31 @@ contract HiveTreasury(
     return out;
   }
 
+  // An amount as a keeper reads it: decimal digits, no leading zero. Below 10^12 sats.
+  static function decimal(int n) bytes {
+    bytes out = "";
+    int seen = 0;
+    for (g, power) in [100000000000, 10000000000, 1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10] {
+      int digit = n / power % 10;
+      seen = seen + digit;
+      if (seen > 0) {
+        out = out + substr(DIGITS, digit, 1);
+      }
+    }
+    return out + substr(DIGITS, n % 10, 1);
+  }
+
+  // The first four bytes of a program in hex: enough for a keeper, or their plugin, to tell one
+  // recipient from another in the approval's text. The code binds all 32 bytes.
+  static function hex4(bytes data) bytes {
+    bytes out = "";
+    for (g, at) in [0, 1, 2, 3] {
+      int v = byteAt(data, at);
+      out = out + substr(DIGITS, v / 16, 1) + substr(DIGITS, v % 16, 1);
+    }
+    return out;
+  }
+
   // Two keepers approve this: the treasury, the payment's number, its amount and recipient, and the
   // time the approval lapses. Each passes their message's signature, created_at (as its digits) and
   // tags (as JSON); a keeper who did not approve passes an empty signature.
@@ -74,10 +102,12 @@ contract HiveTreasury(
     // Change and payment, then the packets and the anchor every Arkade transaction carries.
     require(tx.numOutputs == 4, "payment and change");
     require(amount >= 330, "dust");
+    require(amount < 1000000000000, "amount");
     int left = tx.inputs[0].assets.lookup(counterTxid, counterGidx);
     require(left > 1, "counter");
     bytes32 message = sha256("hive/treasury/pay/v1" + counterTxid + num2bin(counterGidx, 2) + num2bin(left, 8) + num2bin(amount, 8) + num2bin(validUntil, 8) + to.program + num2bin(to.version, 1));
-    bytes code = b64url(message);
+    // What each keeper's message says: the amount and the recipient in words, then the code.
+    bytes text = APPROVE + decimal(amount) + " sats to " + hex4(to.program) + " " + b64url(message);
     bytes[3] keys = [keeperA, keeperB, keeperC];
     bytes[3] names = [hexA, hexB, hexC];
     int valid = 0;
@@ -85,7 +115,7 @@ contract HiveTreasury(
       if (size(sig) > 0) {
         require(size(times[i]) <= 10, "created_at");
         // NIP-01: the event's id is sha256 of [0, pubkey, created_at, kind, tags, content].
-        bytes32 id = sha256("[0,\"" + names[i] + "\"," + times[i] + ",9," + tags[i] + ",\"" + APPROVE + code + "\"]");
+        bytes32 id = sha256("[0,\"" + names[i] + "\"," + times[i] + ",9," + tags[i] + ",\"" + text + "\"]");
         signature keeperSig = signature(sig);
         require(checkSigFromStack(keeperSig, keys[i], id), "keeper's message");
         valid = valid + 1;
@@ -101,7 +131,9 @@ contract HiveTreasury(
     require(!tx.outputs[1].assets.has(counterTxid, counterGidx), "counter stays home");
   }
 
-  // Anyone folds a chip-in or a returned escrow (input 1) into the treasury coin (input 0).
+  // Anyone folds a chip-in or a returned escrow (input 1) into the treasury coin (input 0). The
+  // order of the inputs is the submitter's, so the covenant holds them to it: the coin folded in
+  // carries no unit of the counter, and the merged coin carries the treasury coin's count.
   @allow(unsigned-spend-path, "value only grows and the counter stays on this script")
   function merge() {
     require(!tx.intent.has("type"), "offchain");
@@ -112,6 +144,7 @@ contract HiveTreasury(
     require(tx.numOutputs == 3, "one coin, packets and anchor");
     require(tx.outputs[0].script == me, "stays");
     require(tx.outputs[0].value >= tx.inputs[0].value + tx.inputs[1].value, "all of it");
+    require(!tx.inputs[1].assets.has(counterTxid, counterGidx), "the coin folded in holds no counter");
     int units = tx.inputs[0].assets.lookup(counterTxid, counterGidx);
     require(tx.outputs[0].assets.lookup(counterTxid, counterGidx) == units, "counter kept");
   }

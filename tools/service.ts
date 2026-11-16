@@ -9,6 +9,7 @@
  *   GET  /c/<channel>/hive/v1/invite      the agent's mesh invite, with --serve-invite
  *   POST /c/<channel>/agent/v1/events     a community's own agent node reports its activity
  *   GET  /c/<channel>/agent/v1/members    and fetches the members it may serve
+ *   GET  /statusz                         the host's own troubles, to this machine only
  *
  * A hive HiveBot asks for waits until the service's operator approves it
  * (`pnpm ops service-approve <hive> --bot <HiveBot's key>`), so a host carries only the communities
@@ -27,7 +28,7 @@ import { appendFileSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Deployment } from "@hive/ark";
+import { type Deployment, deploymentFor } from "@hive/ark";
 import {
   clientAddress,
   ensure,
@@ -49,6 +50,7 @@ import { ApprovalDesk } from "./approvals-desk.js";
 import { type DeskOptions, faultStatus } from "./desk.js";
 import { type HiveRecord, initHive, type OpsContext } from "./ops.js";
 import { currentPrice } from "./price.js";
+import { issuerStatus } from "./treasury-v5.js";
 
 /** The Buzz plugin's own modules, which the service runs exactly as a single hive's host does. */
 interface HiveBuzz {
@@ -123,6 +125,8 @@ export interface ServiceOptions {
   serveInvite?: boolean;
   /** Builds a hive's v5 treasury from its keepers' Buzz keys: initHive, unless a test stands in. */
   build?: (hive: string, keepers: [string, string, string]) => Promise<unknown>;
+  /** The issuer's address and funds, for the host's status: the issuer wallet's own, unless a test stands in. */
+  issuer?: () => Promise<{ address: string; sats: number }>;
   /** The desks' timing, shortened for a rehearsal whose jobs last minutes. */
   desk?: Pick<DeskOptions, "deadlineMarginSeconds" | "minimumValiditySeconds">;
   root?: string;
@@ -172,6 +176,9 @@ export class HiveService {
   #building = new Set<string>();
   /** Each hive's writes, one after another: two forwards never both start from the same stored events. */
   #tails = new Map<string, { tail: Promise<unknown>; waiting: number }>();
+  /** What keeps a hive from its treasury or its desk from its round, as last seen: said once, then kept. */
+  #troubles = new Map<string, { message: string; at: number }>();
+  #issuer: { at: number; line: string } | null = null;
 
   private constructor(
     readonly options: ServiceOptions,
@@ -392,15 +399,62 @@ export class HiveService {
     });
   }
 
+  /**
+   * A hive's trouble, for the operator: written to the journal when it is new or has lasted ten
+   * minutes more, and kept for `/statusz` until the same thing works again.
+   */
+  private trouble(hive: string, what: "treasury" | "desk", error: unknown) {
+    // A fault's message opens with its code.
+    const message = `${what}: ${error instanceof Error ? error.message : String(error)}`;
+    const key = `${hive} ${what}`;
+    const last = this.#troubles.get(key);
+    if (last?.message !== message || Date.now() - last.at > 600_000) {
+      process.stderr.write(`hive-service: ${hive}: ${message}\n`);
+      this.#troubles.set(key, { message, at: Date.now() });
+    }
+  }
+
+  private settled(hive: string, what: "treasury" | "desk") {
+    this.#troubles.delete(`${hive} ${what}`);
+  }
+
+  /**
+   * What the operator should know, one line each: the issuer's address and what it holds, since
+   * every new treasury takes its carrier from it, and each hive whose treasury cannot be built or
+   * whose desk cannot make its round.
+   */
+  async status(): Promise<string> {
+    if (!this.#issuer || Date.now() - this.#issuer.at > 300_000) {
+      const ask =
+        this.options.issuer ??
+        (() => issuerStatus(this.options.deployment ?? deploymentFor(this.options.network)));
+      const line = await ask().then(
+        (i) => `issuer ${i.address} ${i.sats}`,
+        (error) => `trouble issuer ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.#issuer = { at: Date.now(), line };
+    }
+    return [
+      this.#issuer.line,
+      ...[...this.#troubles].map(([key, t]) => `trouble ${key.split(" ")[0]} ${t.message}`),
+    ]
+      .map((line) => `${line.replace(/\s+/g, " ")}\n`)
+      .join("");
+  }
+
   /** Every open hive worked out again, one at a time: time alone closes discussions and starts budgets. */
   async sweep(): Promise<void> {
     for (const r of this.list()) {
       if (r.status !== "approved") continue;
+      // What fails here is said: a treasury that cannot be built has nobody else to tell.
       await this.serial(r.hive, () => this.coordinate(r)).catch(() => {});
       if (this.record(r.hive))
         await this.desk(r)
           .then((d) => d.tick())
-          .catch(() => {});
+          .then(
+            () => this.settled(r.hive, "desk"),
+            (error) => this.trouble(r.hive, "desk", error),
+          );
     }
   }
 
@@ -437,7 +491,14 @@ export class HiveService {
     writeJson(files.governance, governance);
     writeJson(files.members, members);
     this.#cache.delete(registration.hive);
-    if (registration.status === "approved") await this.buildTreasury(registration, governance);
+    if (registration.status === "approved")
+      await this.buildTreasury(registration, governance).then(
+        () => this.settled(registration.hive, "treasury"),
+        (error) => {
+          this.trouble(registration.hive, "treasury", error);
+          throw error;
+        },
+      );
     const record = this.record(registration.hive);
     if (record && this.options.agents) {
       if (governance.agentKey) await this.options.agents.stop(registration.hive);
@@ -643,6 +704,14 @@ export async function startService(
       const parts = url.pathname.split("/").filter(Boolean);
       const method = req.method ?? "GET";
       if (parts[0] === "healthz") return res.writeHead(200).end("ok");
+      // The host's own troubles, for its check: only to a caller on this machine, and not through
+      // the proxy, which says whom it speaks for.
+      if (parts[0] === "statusz") {
+        const peer = req.socket.remoteAddress ?? "";
+        const local = peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1";
+        if (!local || req.headers["x-forwarded-for"]) throw new Fault("NOT_FOUND");
+        return res.writeHead(200, { "content-type": "text/plain" }).end(await service.status());
+      }
       const kind = parts[0] === "hives" ? "hives" : parts[0] === "c" ? parts[2] : undefined;
       const limit =
         kind === "agent"

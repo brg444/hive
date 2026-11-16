@@ -14,6 +14,7 @@ import {
   declineText,
   payMessage,
   paymentWord,
+  paymentWords,
   recipientOf,
   sha256,
   TREASURY_ARTIFACT,
@@ -58,7 +59,9 @@ function buzzKey() {
 const counter = counterOf(`${"ab".repeat(30)}cdef0100`);
 const program = schnorr.getPublicKey(schnorr.utils.randomSecretKey());
 const validUntil = 1_900_000_000;
-const message = payMessage(counter, { left: 999n, amount: 20_000n, validUntil, program });
+const payment = { left: 999n, amount: 20_000n, validUntil, program };
+const message = payMessage(counter, payment);
+const words = `20000 sats to ${hex.encode(program.subarray(0, 4))}`;
 
 test("the counter's txid is the asset id's, reversed, and its group is little-endian", () => {
   assert.equal(counter.txid, `efcd${"ab".repeat(30)}`);
@@ -97,36 +100,39 @@ test("the message is the tag, the counter, units left, amount and program, as th
 
 test("a keeper's Buzz message approving this payment is accepted in the form pay takes", () => {
   const k = buzzKey();
-  const event = k.send(approvalText(message));
-  assert.equal(event.content, `I approve Hive payment ${codeOf(message)}`);
-  const a = buzzApproval(k.key, message, event);
+  const event = k.send(approvalText(counter, payment));
+  assert.equal(event.content, `I approve Hive payment of ${words} ${codeOf(message)}`);
+  const a = buzzApproval(k.key, counter, payment, event);
   assert.equal(a.sig.length, 64);
   assert.equal(new TextDecoder().decode(a.time), "1800000000");
   assert.equal(new TextDecoder().decode(a.tags), JSON.stringify(event.tags));
-  assert.ok(approvalHolds(k.key, message, a));
-  assert.ok(
-    !approvalHolds(k.key, payMessage(counter, { left: 998n, amount: 20_000n, validUntil, program }), a),
-  );
-  assert.ok(!approvalHolds(buzzKey().key, message, a), "filed under another keeper");
+  assert.ok(approvalHolds(k.key, counter, payment, a));
+  assert.ok(!approvalHolds(k.key, counter, { ...payment, left: 998n }, a));
+  assert.ok(!approvalHolds(buzzKey().key, counter, payment, a), "filed under another keeper");
 });
 
 test("a message that says more, approves another payment, or is not the keeper's is refused", () => {
   const k = buzzKey();
   const refused = (fn: () => unknown, reason: string) =>
     assert.throws(fn, (e: unknown) => e instanceof ApprovalRefused && e.reason === reason);
-  const other = payMessage(counter, { left: 999n, amount: 20_001n, validUntil, program });
-  refused(() => buzzApproval(k.key, message, k.send(approvalText(other))), "ANOTHER_PAYMENT");
-  refused(() => buzzApproval(k.key, message, k.send(`${approvalText(message)} 👍`)), "ANOTHER_PAYMENT");
-  refused(() => buzzApproval(k.key, message, k.send(declineText(message))), "ANOTHER_PAYMENT");
-  refused(() => buzzApproval(k.key, message, k.send(approvalText(message), { kind: 1 })), "NOT_A_MESSAGE");
-  refused(() => buzzApproval(buzzKey().key, message, k.send(approvalText(message))), "NOT_THIS_KEEPER");
-  const event = k.send(approvalText(message));
-  refused(() => buzzApproval(k.key, message, { ...event, tags: [["h", "elsewhere"]] }), "NOT_A_MESSAGE");
+  const approve = approvalText(counter, payment);
+  const approves = (event: ReturnType<typeof k.send>, keeper = k.key) =>
+    buzzApproval(keeper, counter, payment, event);
+  refused(() => approves(k.send(approvalText(counter, { ...payment, amount: 20_001n }))), "ANOTHER_PAYMENT");
+  refused(() => approves(k.send(`${approve} 👍`)), "ANOTHER_PAYMENT");
+  refused(() => approves(k.send(declineText(counter, payment))), "ANOTHER_PAYMENT");
+  // The words a keeper reads are part of what they sign: the code alone, or other words, approve nothing.
+  refused(() => approves(k.send(`I approve Hive payment ${codeOf(message)}`)), "ANOTHER_PAYMENT");
+  refused(() => approves(k.send(approve.replace("of 20000 sats", "of 200 sats"))), "ANOTHER_PAYMENT");
+  refused(() => approves(k.send(approve, { kind: 1 })), "NOT_A_MESSAGE");
+  refused(() => approves(k.send(approve), buzzKey().key), "NOT_THIS_KEEPER");
+  const event = k.send(approve);
+  refused(() => approves({ ...event, tags: [["h", "elsewhere"]] }), "NOT_A_MESSAGE");
   const forged = {
     ...event,
     sig: hex.encode(schnorr.sign(hex.decode(event.id), schnorr.utils.randomSecretKey())),
   };
-  refused(() => buzzApproval(k.key, message, forged), "BAD_SIGNATURE");
+  refused(() => approves(forged), "BAD_SIGNATURE");
 });
 
 test("a real message carrying the approval's words in a tag does not pass for one", () => {
@@ -134,7 +140,7 @@ test("a real message carrying the approval's words in a tag does not pass for on
   const event = k.send("hello", {
     tags: [
       ["h", "c"],
-      ["t", `","${approvalText(message)}"]`],
+      ["t", `","${approvalText(counter, payment)}"]`],
     ],
   });
   // What the covenant would hash for this keeper's approval, from this event's own parts.
@@ -143,15 +149,22 @@ test("a real message carrying the approval's words in a tag does not pass for on
     time: utf8(String(event.created_at)),
     tags: utf8(JSON.stringify(event.tags)),
   };
-  assert.ok(!approvalHolds(k.key, message, a));
+  assert.ok(!approvalHolds(k.key, counter, payment, a));
 });
 
 test("approvals, declines and withdrawals read only from their exact text", () => {
   const code = codeOf(message);
-  assert.deepEqual(paymentWord(approvalText(message)), { word: "approve", code });
-  assert.deepEqual(paymentWord(declineText(message)), { word: "decline", code });
-  assert.equal(paymentWord(`${approvalText(message)} please`), null);
-  assert.equal(paymentWord(`i approve hive payment ${code}`), null);
+  const named = { code, amountSats: 20_000, recipient: hex.encode(program.subarray(0, 4)) };
+  assert.deepEqual(paymentWord(approvalText(counter, payment)), { word: "approve", ...named });
+  assert.deepEqual(paymentWord(declineText(counter, payment)), { word: "decline", ...named });
+  assert.equal(paymentWord(`${approvalText(counter, payment)} please`), null);
+  assert.equal(paymentWord(`i approve hive payment of ${words} ${code}`), null);
+  assert.equal(paymentWord(`I approve Hive payment ${code}`), null, "the code without the words");
+  assert.equal(paymentWord(`I approve Hive payment of 020000 sats to ${named.recipient} ${code}`), null);
+  // The amount is written as the contract writes it: plain digits, up to twelve of them.
+  assert.equal(paymentWords({ amount: 330n, program }), `330 sats to ${named.recipient}`);
+  assert.equal(paymentWords({ amount: 999_999_999_999n, program }).split(" ")[0], "999999999999");
+  assert.throws(() => paymentWords({ amount: 1_000_000_000_000n, program }));
   const address = "tark1qexampleaddress0000";
   assert.equal(withdrawalText(5000, address), `Hive withdrawal: 5,000 sats to ${address}`);
   assert.deepEqual(withdrawalOf(withdrawalText(5000, address)), { amountSats: 5000, address });

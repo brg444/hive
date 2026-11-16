@@ -21,6 +21,8 @@
  *   pnpm ops service-list --network <regtest|bitcoin>
  *   pnpm ops service-approve <hive> --bot <HiveBot's key, npub or hex> --network <regtest|bitcoin>
  *   pnpm ops service-reject <hive> --network <regtest|bitcoin>
+ *   pnpm ops issuer --network <regtest|bitcoin>
+ *   pnpm ops counter <hive> | pnpm ops counter --network <regtest|bitcoin> --asset <counter's asset id>
  *   pnpm ops status <hive>
  *   pnpm ops withdraw <hive> <label> --to <ark address> --amount <sats|all> [--hours <n>] [--pair <01|02|12>]
  *   pnpm ops payout <hive> <provider> <label> --to <ark address> --amount <sats|all>
@@ -148,10 +150,14 @@ import { type HiveRoutes, type HostedHive, startHiveHost, startHivePage } from "
 import { handleStewardRequest } from "../packages/steward/src/service.js";
 import { freePort, type Service, startService } from "./services.js";
 import {
+  CARRIER_SATS,
+  COUNTER_SUPPLY,
   checkEmulator,
+  counterDetails,
   counterHome,
   fundWithCounter,
   issueCounter,
+  issuerStatus,
   type KeeperTreasury,
   v5Account,
   v5Contract,
@@ -207,15 +213,18 @@ export async function parseBuzzKeys(value: string): Promise<[string, string, str
   return keys as [string, string, string];
 }
 
-export function parseKeeperKeys(value: string): [string, string, string] {
-  const keys = value.split(",").map((k) => k.trim().toLowerCase());
+/**
+ * `--keepers` as the command line takes it: three Buzz keys, for a v5 treasury. Three compressed keys
+ * once built the v4 treasury of keepers who made their keys in the keeper console; nothing signs for
+ * such a treasury any more, so none is built.
+ */
+export async function keepersOption(value: string): Promise<[string, string, string]> {
   ensure(
-    keys.length === 3 && keys.every((k) => /^0[23][0-9a-f]{64}$/.test(k)) && new Set(keys).size === 3,
-    "INVALID",
-    "--keepers takes three distinct compressed keys, comma-separated, in the hive's order",
+    !/(^|,)\s*0[23][0-9a-f]{64}/i.test(value),
+    "V4_KEEPERS",
+    "compressed keys built the v4 treasury that keepers signed for in the keeper console, which is gone: give the keepers' Buzz keys, npub or hex. A hive built that way withdraws with the console and desk of commit ffb0839",
   );
-  for (const k of keys) secp256k1.Point.fromHex(k);
-  return keys as [string, string, string];
+  return parseBuzzKeys(value);
 }
 
 /** The seed's steward keys, for the commands that sign with them here; a keepers' hive has none. */
@@ -356,8 +365,6 @@ export async function initHive(
     deployment?: Deployment;
     renewalWindowSeconds?: number;
     renewalMaxFeeSats?: number;
-    /** The keepers' own keys: the treasury is theirs, and no steward key is made or kept here. */
-    keepers?: [string, string, string];
     /** The keepers' Buzz keys, x-only hex: the hive gets a v5 treasury they approve from Buzz. */
     buzzKeepers?: [string, string, string];
   },
@@ -371,9 +378,9 @@ export async function initHive(
   const deployment = options.deployment ?? deploymentFor(options.network);
   // Real funds are only ever the keepers' own: no steward key for mainnet is made or kept here.
   ensure(
-    deployment.network !== "bitcoin" || options.keepers,
+    deployment.network !== "bitcoin",
     "KEEPERS_SIGN",
-    "a mainnet hive is built from its keepers' own keys: pass --keepers",
+    "a mainnet hive is built from its keepers' own Buzz keys: pass --keepers",
   );
   const conn = await connect(deployment, ctx.fetch);
   const defaults = RENEWAL_DEFAULTS[deployment.network];
@@ -381,15 +388,11 @@ export async function initHive(
     ? readPrivateJson<HiveSeed>(paths.secret("seed.json"))
     : writePrivateOnce<HiveSeed>(paths.secret("seed.json"), {
         schema: "hive-ops-seed/v4",
-        stewards: options.keepers ? null : [key(), key(), key()],
+        stewards: [key(), key(), key()],
         payer: key(),
       });
-  ensure(
-    Boolean(options.keepers) === !seed.stewards,
-    "INVALID",
-    "this hive's seed was made for the other kind of keys; start a new hive",
-  );
-  const stewardKeys = options.keepers ?? (seed.stewards!.map(compressed) as [string, string, string]);
+  ensure(seed.stewards, "INVALID", "this hive's seed was made for keepers' own keys; start a new hive");
+  const stewardKeys = seed.stewards.map(compressed) as [string, string, string];
   const treasury: TreasuryTerms = {
     pairs: pairKeys(stewardKeys),
     exitDelaySeconds: conn.operator.unilateralExitDelay,
@@ -397,7 +400,7 @@ export async function initHive(
     maxFeeSats: options.renewalMaxFeeSats ?? defaults.maxFeeSats,
   };
   const account = await treasuryAccount(conn, treasury);
-  for (const [i, secret] of (seed.stewards ?? []).entries()) {
+  for (const [i, secret] of seed.stewards.entries()) {
     writeStewardConfig(paths.secret(`steward-${i}.json`), {
       schema: "hive-steward/v4",
       secretKey: secret,
@@ -438,7 +441,6 @@ export async function initHive(
     network: deployment.network,
     deployment,
     stewardKeys,
-    ...(options.keepers ? { keepersHold: true } : {}),
     treasury,
     treasuryScript: account.pkScript,
     treasuryAddress: account.address,
@@ -514,6 +516,18 @@ async function initKeepersHive(
     "the SDK derives another treasury",
   );
   await counterHome(contract, terms.counter);
+  // What the Operator's indexer says of the counter: the supply sent, and nothing that could issue
+  // more. An answer that says otherwise stops here; no answer is said and does not, since the
+  // covenant itself never lets another coin's units reach the treasury's count.
+  const details = await counterDetails(deployment, terms.counter.assetId).catch((error) => {
+    process.stderr.write(`ops: ${hive}: the counter's supply could not be read: ${String(error)}\n`);
+    return null;
+  });
+  ensure(
+    !details || details.fixed,
+    "COUNTER_NOT_FIXED",
+    `the counter has a supply of ${details?.supply} and ${details?.controlAssetId ? "a control asset" : "no control asset"}; start a new hive`,
+  );
   const stewardKeys = options.buzzKeepers.map(compressedOf) as [string, string, string];
   writeAgentConfig(paths.secret("agent.json"), {
     schema: "hive-agent/v4",
@@ -1014,73 +1028,6 @@ export function writeListing(
   return listing;
 }
 
-/** A keepers' hive's listing while its keepers sign it in their consoles, one signature at a time. */
-export interface PendingListing {
-  body: HiveListingBody;
-  listingId: string;
-  signatures: [string, string, string];
-}
-
-/**
- * The listing a keepers' hive asks its keepers to sign: the same text a stewards' hive signs here,
- * left for each keeper to sign with their own key through the desk. A new one replaces any still
- * waiting.
- */
-export function proposeListing(
-  hive: string,
-  text: { name: string; purpose?: string },
-  now = unixNow(),
-): PendingListing {
-  const record = loadHive(hive);
-  ensure(record.keepersHold, "INVALID", `${hive}'s listing is signed here: use writeListing`);
-  const body: HiveListingBody = {
-    profile: HIVE_PROFILE,
-    network: record.network,
-    hive,
-    name: text.name,
-    purpose: text.purpose ?? "",
-    stewardKeys: record.stewardKeys,
-    treasuryScript: record.treasuryScript,
-    lightningAddress: record.registration?.lightningAddress ?? null,
-    createdAt: String(now),
-  };
-  const pending: PendingListing = { body, listingId: hiveListingId(body), signatures: ["", "", ""] };
-  writeJson(opsPaths(hive).local("listings", "pending.json"), pending);
-  return pending;
-}
-
-/** Adds one keeper's signature to the pending listing; with the third, the listing is kept like any other. */
-export function signPendingListing(
-  hive: string,
-  keeper: string,
-  signature: string,
-): { pending: PendingListing; listing?: SignedHiveListing } {
-  const paths = opsPaths(hive);
-  const pending = readJsonIfPresent<PendingListing>(paths.local("listings", "pending.json"));
-  ensure(pending, "NO_LISTING", "no listing is waiting for its keepers");
-  const index = pending.body.stewardKeys.indexOf(keeper);
-  ensure(index >= 0, "NOT_A_KEEPER");
-  ensure(
-    /^[0-9a-f]{128}$/.test(signature) &&
-      schnorr.verify(unhex(signature), unhex(pending.listingId), unhex(keeper.slice(2))),
-    "LISTING_SIGNATURE",
-  );
-  pending.signatures[index] = signature;
-  writeJson(paths.local("listings", "pending.json"), pending);
-  if (pending.signatures.some((s) => !s)) return { pending };
-  const listing = validateHiveListing({
-    body: pending.body,
-    listingId: pending.listingId,
-    signatures: pending.signatures,
-  });
-  writeOnce(
-    paths.local("listings", `${pending.body.createdAt}-${listing.listingId.slice(0, 16)}.json`),
-    listing,
-  );
-  rmSync(paths.local("listings", "pending.json"), { force: true });
-  return { pending, listing };
-}
-
 /**
  * Publishes the hive's newest listing to Nostr relays, the way a provider
  * advertises its card. The event is signed with this hive's own publishing
@@ -1529,12 +1476,8 @@ async function main(argv: string[]): Promise<void> {
       const maxFee = option(rest, "renewal-max-fee");
       const record = await initHive(hive!, {
         network: required(rest, "network"),
-        // Keepers' Buzz keys build the v5 treasury; three compressed keys, a v4 treasury of earlier hives.
-        ...(option(rest, "keepers")
-          ? /(^|,)\s*0[23][0-9a-f]{64}/i.test(option(rest, "keepers")!)
-            ? { keepers: parseKeeperKeys(option(rest, "keepers")!) }
-            : { buzzKeepers: await parseBuzzKeys(option(rest, "keepers")!) }
-          : {}),
+        // The keepers' Buzz keys build the v5 treasury, which they approve from Buzz.
+        ...(option(rest, "keepers") ? { buzzKeepers: await keepersOption(option(rest, "keepers")!) } : {}),
         ...(option(rest, "lnurl") ? { lnurl: option(rest, "lnurl")! } : {}),
         ...(option(rest, "per-request-max") ? { perRequestMaxSats: option(rest, "per-request-max")! } : {}),
         ...(hours ? { renewalWindowSeconds: Math.round(Number(hours) * 3600) } : {}),
@@ -1581,6 +1524,37 @@ async function main(argv: string[]): Promise<void> {
       await new Promise(() => {});
       return;
     }
+    case "issuer": {
+      // The wallet every new v5 treasury's counter and carrier come from: its address, to fund it.
+      const deployment = deploymentFor(required(argv.slice(1), "network"));
+      const issuer = await issuerStatus(deployment);
+      print({
+        ...issuer,
+        perTreasurySats: CARRIER_SATS,
+        note:
+          issuer.sats < 2 * CARRIER_SATS
+            ? `send a few thousand sats to ${issuer.address}: a new hive's treasury cannot be built until then`
+            : "enough for the next treasury",
+      });
+      return;
+    }
+    case "counter": {
+      // What the Operator's indexer says of a hive's counter: anyone who knows the asset id can ask.
+      const args = argv.slice(1);
+      const asset = option(args, "asset");
+      const record = asset ? null : loadHive(hive!);
+      ensure(asset || record?.v5, "INVALID", "a v5 hive, or --network and --asset");
+      const deployment = record?.deployment ?? deploymentFor(required(args, "network"));
+      const details = await counterDetails(deployment, asset ?? record!.v5!.counter.assetId);
+      print({
+        ...details,
+        expected: String(COUNTER_SUPPLY),
+        verdict: details.fixed
+          ? "the supply is the one a treasury is sent whole, and nothing can issue more"
+          : "not a fixed counter of the expected supply",
+      });
+      return;
+    }
     case "service-list": {
       const { HiveService } = await import("./service.js");
       const args = [hive!, ...rest];
@@ -1619,29 +1593,21 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case "desk": {
-      const { startDesk } = await import("./desk.js");
       const { startApprovalDesk } = await import("./approvals-desk.js");
-      // A v5 treasury's keepers approve in the hive's channel, and its desk follows the channel.
-      if (loadHive(hive!).v5) {
-        const desk = await startApprovalDesk(hive!, {
-          agentLog: required(rest, "agent-log"),
-          events: required(rest, "events"),
-          ...(option(rest, "governance") ? { governance: option(rest, "governance")! } : {}),
-          ...(option(rest, "payments-file") ? { paymentsFile: option(rest, "payments-file")! } : {}),
-        });
-        print({ hive, keepers: desk.desk.keepers, following: option(rest, "events") });
-        await new Promise(() => {});
-        return;
-      }
-      const port = option(rest, "port");
-      const desk = await startDesk(hive!, {
+      // A v5 treasury's keepers approve in the hive's channel, and its desk follows the channel. The
+      // signing desk of a v4 keepers' treasury went with the keeper console.
+      ensure(
+        loadHive(hive!).v5,
+        "V4_KEEPERS",
+        `${hive}'s keepers signed in the keeper console, which is gone: its desk and console are those of commit ffb0839`,
+      );
+      const desk = await startApprovalDesk(hive!, {
         agentLog: required(rest, "agent-log"),
+        events: required(rest, "events"),
         ...(option(rest, "governance") ? { governance: option(rest, "governance")! } : {}),
-        ...(port ? { port: Number(port) } : {}),
-        ...(option(rest, "host") ? { host: option(rest, "host")! } : {}),
-        origins: every(rest, "origin"),
+        ...(option(rest, "payments-file") ? { paymentsFile: option(rest, "payments-file")! } : {}),
       });
-      print({ hive, desk: `${desk.url}/desk/v1`, keepers: desk.desk.keepers });
+      print({ hive, keepers: desk.desk.keepers, following: option(rest, "events") });
       await new Promise(() => {});
       return;
     }
@@ -1787,10 +1753,12 @@ async function main(argv: string[]): Promise<void> {
     case "listing": {
       const purpose = option(rest, "purpose");
       const text = { name: required(rest, "name"), ...(purpose ? { purpose } : {}) };
-      if (loadHive(hive!).keepersHold) {
-        print({ pending: proposeListing(hive!, text), next: "each keeper signs it with their own key" });
-        return;
-      }
+      // A listing carries the keepers' signatures, and a v5 treasury's keepers sign none yet.
+      ensure(
+        !loadHive(hive!).keepersHold,
+        "NO_LISTING",
+        `${hive}'s keepers hold its keys, and a v5 treasury does not sign the hive's directory listing yet`,
+      );
       const listing = writeListing(hive!, text);
       const relays = every(rest, "relay");
       print(relays.length > 0 ? { listing, published: await publishListing(hive!, relays) } : listing);

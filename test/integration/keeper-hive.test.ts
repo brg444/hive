@@ -1,81 +1,45 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { type TestContext, test } from "node:test";
-import { pairKeys, parseArkAddress } from "@hive/ark";
+import { test } from "node:test";
 import { faultCode, hex } from "@hive/kit";
-import { secp256k1 } from "@noble/curves/secp256k1.js";
-import {
-  approvePurchase,
-  initHive,
-  opsPaths,
-  parseKeeperKeys,
-  withdrawTreasury,
-  writeListing,
-} from "../../tools/ops.js";
-import { startFakeNetwork } from "../support/fake-network.js";
+import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
+import { nip19 } from "nostr-tools";
+import { keepersOption } from "../../tools/ops.js";
 
-/** A hive whose keepers hold their own keys: built from the three keys they posted, keeping none of them. */
-const code = async (p: Promise<unknown> | (() => unknown)) => {
+/**
+ * `--keepers`, as `pnpm ops init` takes it: the three keepers' Buzz keys, from which the v5 treasury
+ * is built. The compressed keys keepers once made in the keeper console build nothing any more.
+ */
+const buzzKey = () => hex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()));
+const refused = async (value: string) => {
   try {
-    await (typeof p === "function" ? p() : p);
+    await keepersOption(value);
     return "ok";
   } catch (error) {
-    return faultCode(error);
+    return faultCode(error) ?? (error instanceof Error ? error.message : String(error));
   }
 };
 
-async function setup(t: TestContext) {
-  const fake = await startFakeNetwork({ batchLifetimeSeconds: 2 * 86_400 });
-  t.after(() => fake.close());
-  const hive = `keepers-${randomUUID().slice(0, 8)}`;
-  t.after(async () => {
-    const { rmSync } = await import("node:fs");
-    rmSync(opsPaths(hive).local(), { recursive: true, force: true });
-    rmSync(opsPaths(hive).secret(), { recursive: true, force: true });
-  });
-  const keys = [0, 1, 2].map(() => hex(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)));
-  return { fake, hive, keys };
-}
-
-test("a keepers' hive builds its treasury from their posted keys and keeps no steward key", async (t) => {
-  const { fake, hive, keys } = await setup(t);
-  const keepers = parseKeeperKeys(keys.map((k) => k.toUpperCase()).join(", "));
-  const record = await initHive(hive, { network: "regtest", deployment: fake.deployment(), keepers }, {});
-  assert.equal(record.keepersHold, true);
-  assert.deepEqual(record.stewardKeys, keys);
-  assert.deepEqual(record.treasury.pairs, pairKeys(keepers));
-  assert.equal(parseArkAddress(record.treasuryAddress).pkScript, record.treasuryScript);
-  assert.equal(fake.watchesOf(record.treasuryAddress).length, 1, "renewals need no keeper");
-  for (const i of [0, 1, 2]) assert.equal(existsSync(opsPaths(hive).secret(`steward-${i}.json`)), false);
-  // Signing here is refused with a pointer to the console, never attempted.
-  assert.equal(await code(() => writeListing(hive, { name: "Keepers" })), "KEEPERS_SIGN");
-  assert.equal(
-    await code(approvePurchase(hive, "job", { provider: "p", capSats: "1000", timeoutSeconds: 600 })),
-    "KEEPERS_SIGN",
-  );
-  assert.equal(
-    await code(withdrawTreasury(hive, "out", { to: record.treasuryAddress, amount: "1000" })),
-    "KEEPERS_SIGN",
-  );
-  // The same keys again give the same hive; another kind of hive under its name is refused.
+test("a keepers' hive is built from three Buzz keys, npub or hex, in the hive's order", async () => {
+  const keys = [buzzKey(), buzzKey(), buzzKey()];
+  assert.deepEqual(await keepersOption(keys.join(",")), keys);
+  assert.deepEqual(await keepersOption(keys.map((k) => nip19.npubEncode(k)).join(", ")), keys);
   assert.deepEqual(
-    await initHive(hive, { network: "regtest", deployment: fake.deployment(), keepers }, {}),
-    record,
+    await keepersOption(` ${keys[0]!.toUpperCase()} ,${nip19.npubEncode(keys[1]!)},${keys[2]}`),
+    keys,
   );
+  for (const bad of [
+    `${keys[0]},${keys[1]}`,
+    `${keys[0]},${keys[0]},${keys[1]}`,
+    `${keys[0]},${keys[1]},${"00".repeat(32)}`,
+    `${keys[0]},${keys[1]},nsec1notakey`,
+  ])
+    assert.notEqual(await refused(bad), "ok", bad);
 });
 
-test("keeper keys must be three distinct compressed points", () => {
-  const key = hex(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true));
-  const other = hex(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true));
-  for (const bad of [
-    `${key},${other}`,
-    `${key},${key},${other}`,
-    `${key},${other},${key.slice(2)}`,
-    `${key},${other},02${"00".repeat(32)}`,
-  ])
-    assert.throws(
-      () => parseKeeperKeys(bad),
-      (e: unknown) => faultCode(e) !== undefined || e instanceof Error,
-    );
+test("compressed keys, which built the treasury keepers signed for in the keeper console, build nothing now", async () => {
+  const keys = [0, 1, 2].map(() => hex(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)));
+  assert.equal(await refused(keys.join(",")), "V4_KEEPERS");
+  await assert.rejects(keepersOption(keys.join(", ")), /console and desk of commit ffb0839/);
+  // One compressed key among Buzz keys is the same mistake.
+  assert.equal(await refused(`${buzzKey()},${keys[0]},${buzzKey()}`), "V4_KEEPERS");
 });

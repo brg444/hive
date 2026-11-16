@@ -634,52 +634,83 @@ test("on the shared Hive service, one plugin finds its community's hive by its c
     }
 });
 
-test("a keeper checks a payment the desk has waiting and gets the exact approval to send; a payment that does not check out is refused", async () => {
+test("a keeper checks the payment whose turn it is and gets the exact approval to send; a payment that does not check out is refused", async () => {
     const { schnorr } = await import("@noble/curves/secp256k1");
     const { sha256 } = await import("@noble/hashes/sha2");
     const { bytesToHex, hexToBytes } = await import("@noble/hashes/utils");
     const { bech32m } = await import("@scure/base");
+    const { build: bundle } = await import("esbuild");
+    const { checksBundle } = await import("../plugin/checks-bundle.mjs");
+    // The plugin's own checks, as a module: the treasury is the one the keepers' keys build.
+    const checksFile = join(work, `checks-${Math.random()}.mjs`);
+    await bundle({ ...checksBundle(), format: "esm", outfile: checksFile });
+    const checks = await import(pathToFileURL(checksFile).href);
     const channel = "7c2e3f40-0000-4000-8000-0000000000bb";
     const key = () => bytesToHex(schnorr.getPublicKey(schnorr.utils.randomPrivateKey()));
-    const [K0, K1, server, program, home] = [key(), key(), key(), key(), key()];
+    const [K0, K1, K2, server, program] = [key(), key(), key(), key(), key()];
+    const keepers = [K0, K1, K2];
     const address = (p) => bech32m.encode("tark", bech32m.toWords(new Uint8Array([0, ...hexToBytes(server), ...hexToBytes(p)])), 1023);
     const now = Math.floor(Date.now() / 1000);
     const counter = { assetId: `${"ab".repeat(32)}0000`, txid: "ba".repeat(32), gidx: 0 };
+    const base = { v: 5, counter, keepers, units: "1000000", waiting: [], refused: [],
+        terms: { delegateKey: `02${key()}`, renewalWindowSeconds: 600, maxFeeSats: 2000, exitDelaySeconds: 512 },
+        operator: { network: "regtest", server: `02${server}`, emulator: `03${key()}`, exitDelay: 512 } };
+    const home = checks.treasuryScript(base, keepers).slice(4);
     // The message the treasury's covenant rebuilds, worked out here byte for byte.
     const le = (n, w) => Uint8Array.from({ length: w }, (_, i) => Number((BigInt(n) >> BigInt(8 * i)) & 0xffn));
     const payment = { id: "11".repeat(32), kind: "withdrawal", withdrawal: { destination: `5120${program}`, amountSats: 5000 }, address: address(program), program,
         amountSats: 5000, left: "1000000", validUntil: now + 3600, approvedBy: [K1], status: "approving", startedBy: K1, createdAt: now, updatedAt: now };
     const message = sha256(new Uint8Array([...new TextEncoder().encode("hive/treasury/pay/v1"), ...hexToBytes(counter.txid), ...le(0, 2), ...le(1_000_000, 8),
         ...le(5000, 8), ...le(payment.validUntil, 8), ...hexToBytes(program), 1]));
-    const approval = `I approve Hive payment ${Buffer.from(message).toString("base64url")}`;
-    const payments = { v: 5, counter, keepers: [K0, K1], treasuryScript: `5120${home}`, units: "1000000", waiting: [],
-        operator: { network: "regtest", server: `02${server}`, emulator: `03${key()}`, exitDelay: 512 },
-        payments: [{ ...payment, code: approval.slice(23) }, { ...payment, id: "22".repeat(32), left: "999999", program: home, code: "x".repeat(43) }] };
+    const code = Buffer.from(message).toString("base64url");
+    const approval = `I approve Hive payment of 5000 sats to ${program.slice(0, 8)} ${code}`;
+    const waiting = { ...payment, id: "44".repeat(32), left: null, validUntil: 0, approvedBy: [], status: "queued" };
+    const payments = { ...base, treasuryScript: `5120${home}`,
+        payments: [{ ...payment, code }, { ...payment, id: "22".repeat(32), left: "999999", program: home, code: "x".repeat(43) }, waiting] };
     const file = join(work, `payments-${Math.random()}.json`);
     writeFileSync(file, JSON.stringify(payments));
     const api = await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", address(home), "--operator", "http://127.0.0.1:9", "--payments", file]);
-    const { seen } = await activate(api, K0, null, ["--channel", channel, "--keepers", `${K0},${K1}`]);
+    const built = ["--channel", channel, "--keepers", keepers.join(",")];
+    const { seen } = await activate(api, K0, null, built);
     assert.match(await seen.tools[0].call(), /Payment of 5,000 sats withdrawn to /);
     const bar = seen.accessories.find((a) => a.id === "keeper");
     const html = renderToString(React.createElement(bar.component, { channelId: channel }));
-    assert.match(html, /2 payments waiting for your approval/);
+    assert.match(html, /A payment waits for your approval; 1 more waits its turn/);
     assert.ok(html.includes(approval), "the approval the keeper sends, as the covenant will rebuild it");
+    assert.equal(html.split("Approve writes").length - 1, 1, "one payment is offered: the one whose turn it is");
     assert.match(html, /Don&#x27;t approve this payment: .*The desk would pay another script than the one checked here\./, "a payment whose script the plugin cannot rebuild is refused");
+    assert.match(html, /It is not this payment&#x27;s turn: the treasury stands at another number\./, "and so is one under another number than the treasury's");
     assert.equal(renderToString(React.createElement(bar.component, { channelId: "elsewhere" })), "", "only in the hive's channel");
     // Another member sees nothing to approve.
-    const member = await activate(api, key(), null, ["--channel", channel, "--keepers", `${K0},${K1}`]);
+    const member = await activate(api, key(), null, built);
     await member.seen.tools[0].call();
     assert.equal(renderToString(React.createElement(member.seen.accessories.find((a) => a.id === "keeper").component, { channelId: channel })), "");
+
+    // A host that names a treasury of its own, for members' chip-ins and for the payments, is refused.
+    const elsewhere = key();
+    const other = join(work, `payments-${Math.random()}.json`);
+    writeFileSync(other, JSON.stringify({ ...payments, treasuryScript: `5120${elsewhere}` }));
+    const lying = await activate(await startApi(join(root, "test/fixtures/gateway-agent.jsonl"), ["--treasury", address(elsewhere), "--operator", "http://127.0.0.1:9", "--payments", other]), K0, null, built);
+    await lying.seen.tools[0].call();
+    const refused = renderToString(React.createElement(lying.seen.accessories.find((a) => a.id === "keeper").component, { channelId: channel }));
+    assert.match(refused, /The treasury the host pays from is not the one the keepers&#x27; keys and its terms build\./);
+    assert.match(refused, /The address members chip in to is not this hive&#x27;s treasury\./);
+    assert.ok(!refused.includes("Approve writes"));
 
     // The approval as a message in the channel draws with the payment it names, and counts only from a keeper.
     const card = seen.messages.find((m) => m.id === "payment");
     const sent = { id: "33".repeat(32), channelId: channel, authorId: K1, createdAt: now, content: approval, mentions: [], reactions: [] };
     assert.ok(card.matches(sent));
     assert.ok(!card.matches({ ...sent, content: `${approval} 👍` }), "only the exact text");
+    assert.ok(!card.matches({ ...sent, content: `I approve Hive payment ${code}` }), "the code without the words a keeper reads is no approval");
     const drawn = renderToString(React.createElement(card.component, { message: sent }));
     assert.match(drawn, /Approved/);
-    assert.match(drawn, /1 of 2 keepers approved/);
+    assert.match(drawn, /1 of 3 keepers approved|1 of 2 keepers approved/);
     assert.match(renderToString(React.createElement(card.component, { message: { ...sent, authorId: key() } })), /counts for nothing/);
-    seen.cleanups.forEach((stop) => stop());
-    member.seen.cleanups.forEach((stop) => stop());
+    // An approval for a payment the desk does not have open is named by its own words, and flagged.
+    const stray = { ...sent, content: `I approve Hive payment of 900000 sats to deadbeef ${"A".repeat(43)}` };
+    const flagged = renderToString(React.createElement(card.component, { message: stray }));
+    assert.match(flagged, /deadbeef/);
+    assert.match(flagged, /Not the payment the hive&#x27;s desk has open/);
+    for (const each of [seen, member.seen, lying.seen]) each.cleanups.forEach((stop) => stop());
 });

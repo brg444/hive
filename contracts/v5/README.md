@@ -12,15 +12,27 @@ An approval names the treasury by its counter, the number of units the treasury 
 pays, the amount, the time it lapses and the recipient's Taproot program. It therefore pays once:
 after the payment the coin holds one unit less, and the same approval no longer matches. It pays only
 before it lapses, so an approval the keepers stopped waiting for cannot surface later. It names no
-coin, so a merge or a renewal, which keep the units, leaves every pending approval valid.
+coin, so a merge or a renewal, which keep the units, leaves every pending approval valid. It names
+the number and not the payment, so the same payment approved under two numbers pays under both: the
+hive's desk opens one payment at a time, under the treasury's current number, and a keeper's plugin
+offers no second approval of a payment whose first could still pay.
 
 A chip-in, a member's direct send to the treasury's address, is a second coin on the same script
 beside the treasury coin, and so is an escrow's remainder or refund. `pay` spends only the coin that
-holds the counter. `HiveTreasury.merge` folds the other coin into it, and anyone may submit it. The
+holds the counter. `HiveTreasury.merge` folds the other coin into it, and anyone may submit it. The order of a
+merge's inputs is the submitter's, so `merge` holds them to it: the coin folded in carries no unit
+of the counter, and the merged coin carries the treasury coin's count, so nothing sent to the
+treasury's address can set its payment number. The
 host's delegatee renews the treasury coin into a new batch near its expiry with
 `HiveTreasury.renew`, and the treasury pays the operator's fee, up to `maxFee`. When the operator is
 gone, any two keepers take the coin onchain through `exit01`, `exit02` or `exit12` after
 `exitDelay`.
+
+The covenant cannot count the units that exist. That the host issued exactly the supply it sent,
+with nothing that can issue more, is what keeps a second coin with units of its own off the
+treasury's script, where the same approvals would pay once more from whatever that coin held. The
+Operator's indexer reports both facts to anyone who asks (`pnpm ops counter`), and the first
+payment's number, which `pay` checks against the coin, shows the treasury was sent the whole supply.
 
 The message each keeper approves is the one `pay` rebuilds:
 
@@ -29,13 +41,16 @@ sha256("hive/treasury/pay/v1" ‖ counterTxid ‖ counterGidx (2 bytes) ‖ left
 ```
 
 The keeper's approval is a Buzz channel message, a Nostr kind 9 event whose text is exactly
-`I approve Hive payment ` followed by the message in base64url, the payment's code. `pay` rebuilds
-the event's NIP-01 serialization from the keeper's key, the code and the two parts Buzz chooses
-itself, the event's `created_at` and its tags, which the keeper's approval carries with the
-signature:
+`I approve Hive payment of <amount> sats to <recipient> <code>`: the amount in decimal with no
+leading zero, the first eight hex characters of the recipient's program, and the message in
+base64url, the payment's code. The words are for the keeper, who reads what they send; the code
+binds every byte. `pay` rebuilds the event's NIP-01 serialization from the keeper's key, the amount,
+the recipient, the code and the two parts Buzz chooses itself, the event's `created_at` and its
+tags, which the keeper's approval carries with the signature:
 
 ```
-id = sha256('[0,"' ‖ keeper's key in hex ‖ '",' ‖ created_at ‖ ',9,' ‖ tags as JSON ‖ ',"I approve Hive payment ' ‖ code ‖ '"]')
+text = "I approve Hive payment of " ‖ amount in decimal ‖ " sats to " ‖ to.program's first 4 bytes in hex ‖ " " ‖ code
+id = sha256('[0,"' ‖ keeper's key in hex ‖ '",' ‖ created_at ‖ ',9,' ‖ tags as JSON ‖ ',"' ‖ text ‖ '"]')
 ```
 
 and checks the keeper's BIP340 signature over `id`. Only the text binds the approval. JSON writes a
@@ -86,10 +101,11 @@ so anyone holding two keepers' approvals can submit it, and those approvals, che
 - `!tx.intent.has("type")`: offchain, not in an intent.
 - `!checkTime(validUntil)`: the approvals have not lapsed.
 - `tx.numInputs == 1` and `tx.numOutputs == 4`: the treasury coin; change, payment, the extension and the anchor.
-- `amount >= 330`.
+- `amount >= 330` and `amount < 1000000000000`, so the text names it in at most twelve digits.
 - `left = tx.inputs[0].assets.lookup(counterTxid, counterGidx)` and `left > 1`.
 - For each keeper with a signature: `created_at` is at most ten characters, and `checkSigFromStack`
-  on that keeper's key over the id of their kind 9 message `I approve Hive payment <code>`.
+  on that keeper's key over the id of their kind 9 message
+  `I approve Hive payment of <amount> sats to <recipient> <code>`.
 - At least two keepers' signatures verify.
 - `tx.outputs[0].script == tx.input.current.script`.
 - `tx.outputs[0].value >= tx.input.current.value - amount`.
@@ -107,7 +123,9 @@ anyone can build it, and no person signs.
 - `tx.numOutputs == 3`: the merged coin, the extension and the anchor.
 - `tx.outputs[0].script == tx.input.current.script`.
 - `tx.outputs[0].value >= tx.inputs[0].value + tx.inputs[1].value`.
-- `tx.outputs[0].assets.lookup(counterTxid, counterGidx) == tx.inputs[0].assets.lookup(counterTxid, counterGidx)`.
+- `!tx.inputs[1].assets.has(counterTxid, counterGidx)`: the coin folded in holds no unit of the counter.
+- `tx.outputs[0].assets.lookup(counterTxid, counterGidx) == tx.inputs[0].assets.lookup(counterTxid, counterGidx)`,
+  which fails when input 0 holds none: the treasury coin is input 0, whoever submits.
 
 **renew**() `covenant`
 
@@ -129,12 +147,18 @@ other two pairs. The two signatures are independent: each keeper signs the trans
 any time, with no rounds between them, as they approve payments.
 
 Enforced: two keepers approve each payment, its amount, its recipient, its number and its lapse
-time; an approval pays once, and only before it lapses; the change and the counter stay on the treasury script; a merge keeps every sat and the
-counter; a renewal keeps the script and the counter and pays at most `maxFee`; only the delegatee
-cosigns a renewal; payments and merges never run in an intent.
+time, in a message that says the amount and the start of the recipient; an approval pays once under
+the number it names, and only before it lapses; the change and the counter stay on the treasury
+script; a merge keeps every sat and the treasury coin's count, whatever the order of its inputs, and
+folds in no coin that holds the counter; a renewal keeps the script and the counter and pays at most
+`maxFee`; only the delegatee cosigns a renewal; payments and merges never run in an intent.
 
-Not claimed: that the keepers approve the right payment, that the delegatee renews in time, that
-the operator stays online, and where the recipient's program sends the coins afterwards.
+Not claimed: that the keepers approve the right payment, or the same payment under one number only,
+which the desk and the plugin see to; that the counter's supply is the one the treasury was sent,
+which the issuance decides and the indexer reports; that the delegatee renews in time, that the
+operator stays online, and where the recipient's program sends the coins afterwards. The Emulator
+runs these checks before it signs, and reads the lapse time from its own clock: Bitcoin's rules see
+the Operator's and the Emulator's signatures only.
 
 ## Transactions
 
@@ -172,8 +196,8 @@ flowchart LR
 ### Merge a chip-in
 
 Input 0 is the treasury coin and input 1 a chip-in or an escrow's remainder, both on `HiveTreasury`,
-and `HiveTreasury.merge` runs on each. All the sats and the whole counter land in one coin on the
-same script.
+and `HiveTreasury.merge` runs on each. Input 1 holds no unit of the counter. All the sats and the
+treasury coin's count land in one coin on the same script.
 
 ```mermaid
 flowchart LR
@@ -190,7 +214,7 @@ flowchart LR
   I0 --> TX
   I1 --> TX
   TX --> O0
-  I0 -. "merge checks<br/>same script, counter kept" .-> O0
+  I0 -. "merge checks<br/>same script, in 1 holds no counter,<br/>in 0's count kept" .-> O0
 
   classDef default fill:#ffffff,stroke:#d4d4d4,color:#171717,stroke-width:1px
   classDef entry fill:#f45d3c,stroke:#f45d3c,color:#ffffff,stroke-width:1px
@@ -323,5 +347,38 @@ flowchart LR
   class I0 entry
   class O0 muted
   class O1 accent
+  linkStyle default stroke:#737373,stroke-width:1px
+```
+
+### Refused: a merge that would set the count
+
+A coin on the treasury's script that holds units of the counter itself, merged in front of the
+treasury coin so that its count would become the treasury's: a count set back to a number already
+paid would let that payment's approvals pay again. `merge` refuses it with the coins in either
+order, since the coin at input 1 may hold no unit. The picture may not balance: the spend never
+happens.
+
+```mermaid
+flowchart LR
+  subgraph IN["Inputs"]
+    direction TB
+    I0(["in 0 · a coin with units of its own<br/>HiveTreasury.merge"])
+    I1(["in 1 · treasury coin<br/>HiveTreasury.merge · left units"])
+  end
+  TX(("rejected<br/>in 1 holds the counter"))
+  subgraph OUT["Outputs"]
+    direction TB
+    O0(["out 0 · treasury coin<br/>in 0's count"])
+  end
+  I0 --> TX
+  I1 --> TX
+  TX --> O0
+
+  classDef default fill:#ffffff,stroke:#d4d4d4,color:#171717,stroke-width:1px
+  classDef entry fill:#f45d3c,stroke:#f45d3c,color:#ffffff,stroke-width:1px
+  classDef muted fill:#f5f5f4,stroke:#a8a29e,color:#171717,stroke-width:1px
+  classDef accent fill:#3d1a9b,stroke:#3d1a9b,color:#ffffff,stroke-width:1px
+  class I0 entry
+  class I1,O0 muted
   linkStyle default stroke:#737373,stroke-width:1px
 ```

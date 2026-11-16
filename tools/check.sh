@@ -1,7 +1,8 @@
 #!/bin/sh
 # Checks a Hive host and says what is wrong, one line each: whether the service and the delegatee
-# answer, whether the last backup is recent, and whether the disk has room. Run it from a timer (deploy/systemd/hive-check.timer
-# runs it every five minutes) or by hand.
+# answer, whether the issuer can fund a new hive's treasury, whether any hive's treasury or desk is
+# in trouble, whether the last backup is recent, and whether the disk has room. Run it from a timer
+# (deploy/systemd/hive-check.timer runs it every five minutes) or by hand.
 #
 #   tools/check.sh            exits 0 when all is well, 1 when anything is not
 #
@@ -13,6 +14,7 @@ SERVICE="${HIVE_SERVICE_URL:-http://127.0.0.1:8080}"
 DELEGATEE="${HIVE_DELEGATEE_URL:-http://127.0.0.1:7090}"
 BACKUPS="${HIVE_BACKUP_DIR:-}"
 MAX_BACKUP_HOURS="${HIVE_MAX_BACKUP_HOURS:-13}"
+MIN_ISSUER_SATS="${HIVE_MIN_ISSUER_SATS:-2000}"
 found=""
 trouble() {
   found="${found}${found:+
@@ -21,6 +23,23 @@ trouble() {
 }
 
 curl -fsS -m 10 "$SERVICE/healthz" >/dev/null 2>&1 || trouble "the Hive service does not answer at $SERVICE/healthz"
+# What the service says of itself, to this machine only: the issuer every new treasury takes its
+# counter and carrier from, and each hive whose treasury it cannot build or whose desk cannot make
+# its round. Those reach no member's screen and nobody else's log.
+status=$(curl -fsS -m 30 "$SERVICE/statusz" 2>/dev/null) || status=""
+issuer=$(printf '%s\n' "$status" | sed -n 's/^issuer \([^ ]*\) \([0-9][0-9]*\)$/\2 \1/p')
+if [ -n "$issuer" ]; then
+  [ "${issuer%% *}" -ge "$MIN_ISSUER_SATS" ] \
+    || trouble "the issuer holds ${issuer%% *} sats: send a few thousand to ${issuer#* }, or no new hive gets its treasury"
+fi
+troubles=$(printf '%s\n' "$status" | sed -n 's/^trouble //p')
+if [ -n "$troubles" ]; then
+  saved_ifs=$IFS
+  IFS='
+'
+  for line in $troubles; do trouble "the service reports: $line"; done
+  IFS=$saved_ifs
+fi
 info=$(curl -fsS -m 10 "$DELEGATEE/v1/info" 2>/dev/null) || trouble "the delegatee does not answer at $DELEGATEE/v1/info"
 # The delegate key the hive's tools pin must be the one the delegatee signs with.
 if [ -n "${info:-}" ] && [ -n "${BUZZ_DELEGATE_KEY:-}" ]; then

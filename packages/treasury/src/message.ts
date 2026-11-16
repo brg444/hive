@@ -9,10 +9,12 @@ import { base64urlnopad, bech32m, hex } from "@scure/base";
 
 export const PAY_TAG = "hive/treasury/pay/v1";
 
-/** The text of a keeper's approval, before the payment's code: the contract rebuilds exactly this. */
-export const APPROVE = "I approve Hive payment ";
-/** The text of a keeper's decline: any one keeper stops a payment with it. */
-export const DECLINE = "I decline Hive payment ";
+/** How a keeper's approval opens, before the amount: the contract rebuilds exactly this. */
+export const APPROVE = "I approve Hive payment of ";
+/** How a keeper's decline opens: any one keeper stops the desk from paying with it. */
+export const DECLINE = "I decline Hive payment of ";
+/** The largest amount an approval can name: the contract writes it in at most twelve digits. */
+export const MAX_AMOUNT_SATS = 10n ** 12n - 1n;
 
 /** The counter asset: its issuance txid in the Emulator's internal byte order, and its group. */
 export interface Counter {
@@ -92,19 +94,50 @@ export function payMessage(counter: Pick<Counter, "txid" | "gidx">, payment: Pay
 /** A payment's code: its message in base64url, as the contract rebuilds it. */
 export const codeOf = (message: Uint8Array): string => base64urlnopad.encode(message);
 
-/** The message a keeper sends to approve a payment. */
-export const approvalText = (message: Uint8Array): string => APPROVE + codeOf(message);
+/**
+ * The part of an approval a keeper reads: the amount in sats and the first eight hex characters of
+ * the recipient's program, as the contract writes them. The code after them binds every byte.
+ */
+export function paymentWords(payment: Pick<Payment, "amount" | "program">): string {
+  const amount = BigInt(payment.amount);
+  if (amount < 0n || amount > MAX_AMOUNT_SATS) throw new Error("amount out of range");
+  const p = bytes(payment.program);
+  if (p.length !== 32) throw new Error("a Taproot program is 32 bytes");
+  return `${amount} sats to ${hex.encode(p.subarray(0, 4))}`;
+}
 
-/** The message a keeper sends to stop a payment. */
-export const declineText = (message: Uint8Array): string => DECLINE + codeOf(message);
+const said = (counter: Pick<Counter, "txid" | "gidx">, payment: Payment): string =>
+  `${paymentWords(payment)} ${codeOf(payMessage(counter, payment))}`;
+
+/** The message a keeper sends to approve a payment: `I approve Hive payment of 20000 sats to 3fa9c1d2 <code>`. */
+export const approvalText = (counter: Pick<Counter, "txid" | "gidx">, payment: Payment): string =>
+  APPROVE + said(counter, payment);
+
+/** The message a keeper sends to stop the desk from paying it. */
+export const declineText = (counter: Pick<Counter, "txid" | "gidx">, payment: Payment): string =>
+  DECLINE + said(counter, payment);
+
+/** What a message says about a payment: the word, and the amount, recipient and code it names. */
+export interface PaymentWord {
+  word: "approve" | "decline";
+  code: string;
+  amountSats: number;
+  /** The first eight hex characters of the recipient's program. */
+  recipient: string;
+}
 
 /**
- * What a message says about a payment: an approval or a decline, and its code, or null. Only the
- * exact text counts, as only the exact text pays.
+ * What a message says about a payment: an approval or a decline, or null. Only the exact text
+ * counts, as only the exact text pays.
  */
-export function paymentWord(text: string): { word: "approve" | "decline"; code: string } | null {
-  const m = /^I (approve|decline) Hive payment ([A-Za-z0-9_-]{43})$/.exec(String(text));
-  return m ? { word: m[1] as "approve" | "decline", code: m[2]! } : null;
+export function paymentWord(text: string): PaymentWord | null {
+  const m =
+    /^I (approve|decline) Hive payment of (0|[1-9]\d{0,11}) sats to ([0-9a-f]{8}) ([A-Za-z0-9_-]{43})$/.exec(
+      String(text),
+    );
+  return m
+    ? { word: m[1] as "approve" | "decline", amountSats: Number(m[2]), recipient: m[3]!, code: m[4]! }
+    : null;
 }
 
 /**

@@ -185,11 +185,14 @@ sample data, marked as such, with addresses that no wallet accepts.
 ## Keepers' approvals
 
 A keeper's key is their Buzz account's own: the treasury is built from the three keepers' Buzz keys,
-and a keeper approves a payment by sending `I approve Hive payment <code>` in the hive's channel,
-whose code names the treasury, the payment's number, amount and recipient and the time the approval
-lapses. Buzz signs it as it signs any message, and the treasury's covenant rebuilds the message and
-checks the signature itself. `I decline Hive payment <code>` stops a payment, and
-`Hive withdrawal: <amount> sats to <Arkade address>`, from a keeper, asks for one.
+and a keeper approves a payment by sending `I approve Hive payment of <amount> sats to <recipient>
+<code>` in the hive's channel. The words say the amount and the first eight hex characters of the
+recipient, so a keeper reads what they send, and the code names the treasury, the payment's number,
+amount and whole recipient and the time the approval lapses. Buzz signs it as it signs any message,
+and the treasury's covenant rebuilds the message and checks the signature itself. The same words
+after `I decline` stop the hive's desk from paying it, without undoing approvals two keepers have
+already sent, and `Hive withdrawal: <amount> sats to <Arkade address>`, from a keeper, asks for a
+withdrawal, one request at a time.
 
 Nothing in this folder makes or reads a key. A keeper's key is the secp256k1 secret Buzz created at
 random for their identity, or the `nsec` they imported, kept in the system's secure storage; its
@@ -201,14 +204,25 @@ from them: the same keys check the approvals and, for the exit, two keepers' pla
 step. A keeper keeps a copy of their private key, from Settings → Identity or Buzz's key backup,
 because no other copy of their share exists.
 
-The plugin does the checking and the writing. For each payment the hive's approvals desk has waiting
-(on the Hive service, or from `pnpm ops desk` beside hive-api), it rebuilds the job's escrow from its
-terms with the hive's own code, checks that it gives back to this treasury and that the amount is
-the job's cap, or works out what a withdrawal's address pays, and rebuilds the exact message the
-covenant will check. Only then does it offer Approve, which writes that message into the message
-box for the keeper to send as it is. On mainnet it also holds the host to the Arkade Operator's and
-Emulator's keys it was built with. What approved work has left is the desk's count: the plugin
-cannot check it against the channel, so a keeper reads the proposal there before approving.
+The plugin does the checking and the writing. The hive's approvals desk (on the Hive service, or
+from `pnpm ops desk` beside hive-api) opens one payment at a time, under the treasury's current
+number, and the plugin offers an approval for that one only: an approval names its payment's number,
+so the same payment approved under two numbers could pay under both. With the hive's own code,
+bundled in ([`plugin/checks.mjs`](plugin/checks.mjs)), the plugin first rebuilds the treasury from
+the keepers' keys and the terms the host states, and checks that it is the address members chip in
+to. For a job it rebuilds the escrow from its terms and checks that it gives back to that treasury,
+that the amount is the job's cap, within the mainnet ceiling on an escrow and within what the
+proposals it reads in the channel have left, and that the agent whose receipts pay the job is the
+one a keeper named in the channel or the one this plugin first saw. For a withdrawal it works out
+what the address pays and finds the keeper's message that asked for it. It then rebuilds the exact
+message the covenant will check, and refuses to offer the same amount to the same recipient under a
+second number while an earlier approval of this keeper's could still pay. Only then does it offer
+Approve, which writes that message into the message box for the keeper to read and send as it is.
+On mainnet it also holds the host to the Arkade Operator's and Emulator's keys it was built with.
+The usage it takes off the proposals' budgets is the host's count, so a keeper still reads the
+proposal in the channel before approving. A plugin built once for a whole service, with
+`--service`, takes the hive's keepers from the host as well; the one HiveBot posts for a hive
+carries them.
 
 `plugin/checks.mjs` is that code: `packages/ark` and `packages/treasury`, which `plugin/build.mjs`
 bundles into `plugin.js` with esbuild, so the build needs the repository's `pnpm install` and this

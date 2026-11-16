@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { type TestContext, test } from "node:test";
-import { hex, localPath, sha256Hex, unhex } from "@hive/kit";
+import { Fault, hex, localPath, sha256Hex, unhex } from "@hive/kit";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { opsPaths } from "../../tools/ops.js";
 import { agentDigest, hiveIdFor, startService } from "../../tools/service.js";
@@ -131,6 +131,93 @@ test("a hive is asked for by HiveBot, approved, and gets its treasury from its k
   // The desk's routes for keepers' consoles are gone: keepers approve in the channel.
   assert.equal((await call(`/c/${channel}/desk/v1/hive`)).status, 404);
   assert.equal((await call(`/c/${randomUUID()}/hive/v1/state`)).status, 404);
+});
+
+test("a treasury that cannot be built is said in the journal and at /statusz, to this machine only", async (t) => {
+  const fake = await startFakeNetwork({ batchLifetimeSeconds: 4 * 86_400 });
+  t.after(() => fake.close());
+  const root = localPath("service-test", randomUUID().slice(0, 8));
+  let funded = false;
+  const server = await startService(
+    {
+      network: "regtest",
+      deployment: fake.deployment(),
+      publicUrl: "https://hive.example.org",
+      discussionSeconds: 600,
+      build: async () => {
+        if (!funded)
+          throw new Fault(
+            "ISSUER_UNFUNDED",
+            "the host's issuer has 0 sats; send it a few thousand at tark1qissuer",
+          );
+      },
+      issuer: async () => ({ address: "tark1qissuer", sats: funded ? 5_000 : 0 }),
+      root,
+    },
+    {},
+  );
+  const channel = randomUUID();
+  const hive = hiveIdFor(channel);
+  const written: string[] = [];
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    written.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  t.after(async () => {
+    process.stderr.write = write;
+    await server.close();
+    for (const p of [root, opsPaths(hive).local(), opsPaths(hive).secret()])
+      rmSync(p, { recursive: true, force: true });
+  });
+  const [bot, k0, k1, k2] = [0, 1, 2, 3].map(() => schnorr.utils.randomSecretKey());
+  const pub = (k: Uint8Array) => hex(schnorr.getPublicKey(k));
+  const first = sign(bot!, channel, 9, "Hi, I'm Hive bot.", now() - 900, [["hive", "call"]]);
+  const post = (path: string, body: unknown) =>
+    fetch(`${server.url}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  await post("/hives", {
+    channelId: channel,
+    community: "wss://open.example",
+    name: "Open Lab",
+    call: first,
+  });
+  await server.service.approve(hive, pub(bot!));
+  const events = [
+    first,
+    sign(bot!, channel, 9, "Keepers are set.", now() - 800, [
+      ["hive", "plugin"],
+      ...[k0, k1, k2].map((k) => ["p", pub(k!)]),
+    ]),
+  ];
+  // The member whose plugin forwarded the channel is told, and so is the operator, once.
+  const refused = await post(`/c/${channel}/hive/v1/channel`, { events });
+  assert.equal(((await refused.json()) as { error: string }).error, "ISSUER_UNFUNDED");
+  await server.service.sweep();
+  const said = written.filter((line) => line.includes(hive));
+  assert.equal(said.length, 1, "not once a minute");
+  assert.match(
+    said[0]!,
+    /^hive-service: hive-[0-9a-f]+: treasury: ISSUER_UNFUNDED: the host's issuer has 0 sats/,
+  );
+
+  const status = await fetch(`${server.url}/statusz`);
+  assert.equal(status.status, 200);
+  assert.deepEqual((await status.text()).trim().split("\n"), [
+    "issuer tark1qissuer 0",
+    `trouble ${hive} treasury: ISSUER_UNFUNDED: the host's issuer has 0 sats; send it a few thousand at tark1qissuer`,
+  ]);
+  // Through the proxy, which names whom it speaks for, there is no such page.
+  const outside = await fetch(`${server.url}/statusz`, { headers: { "x-forwarded-for": "203.0.113.9" } });
+  assert.equal(outside.status, 404);
+
+  // Once it works, the trouble is gone.
+  funded = true;
+  await server.service.sweep();
+  assert.doesNotMatch(await (await fetch(`${server.url}/statusz`)).text(), /trouble/);
 });
 
 test("a community's own agent node reports to the service once a keeper names it", async (t) => {

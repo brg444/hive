@@ -22,9 +22,13 @@ I built this to show that a community treasury paying for AI can be done with Bu
 it works: the whole flow, from HiveBot setting a hive up in its channel to a provider paid and the
 remainder back in the treasury, has run end to end on a local regtest stack, for a hive whose agent
 runs on the host as well as for one that brings its own node. The v5 treasury, which keepers approve
-from Buzz itself, is new: its contract, the host's approvals desk and the Hive plugin have run end to
-end on regtest, from the keepers' Buzz keys to a funded escrow and a withdrawal, while the full
-rehearsal with MeshLLM nodes has not been run again since keepers began approving from Buzz. The
+from Buzz itself, is new: its contract, the host's approvals desk and the Hive plugin ran end to end
+on regtest, from the keepers' Buzz keys to a funded escrow and a withdrawal. The contract and the
+desk changed after that run: a merge folds in no coin that holds the counter, an approval says its
+amount in words, and one payment is open for approval at a time. The revised contract has run in
+the Emulator's own interpreter and the desk against a stand-in for the treasury; neither has run on
+regtest again yet, and the full rehearsal with MeshLLM nodes has not been run since keepers began
+approving from Buzz. The
 escrow behind each job has claimed and returned on mainnet with small amounts. The rest has never
 run end to end on mainnet.
 
@@ -38,18 +42,20 @@ Lightning address yet, so its members chip in from an Arkade wallet until the se
 the way `pnpm ops init --lnurl` does for a hive on its own host. Keepers can fund jobs and withdraw
 to an Arkade address two of them agree on, which is how a hive moves or winds down, and that is
 all: there is no tooling for the exit path or for replacing a keeper, and a v5 treasury does not
-sign the hive's directory listing yet. A keeper's Hive plugin checks every payment's escrow,
-recipient and amount itself, yet it takes what approved work has left from the desk, which it cannot
-check against the channel. A keeper's key is the software key Buzz keeps for their account, not one
+sign the hive's directory listing yet. A keeper's Hive plugin checks every payment's treasury,
+escrow, recipient and amount itself, and holds a job to the budgets of the proposals it reads in
+the channel, yet the usage it takes off them is the host's count. A keeper's key is the software key Buzz keeps for their account, not one
 bound to their device's hardware: whoever holds it, through Buzz's key backup if the keeper turned it
 on for instance, approves as that keeper, and approving asks for no fingerprint or face. An approval
-cannot be taken back once it is sent; it lapses at its time. A host that is forwarded a channel cannot see who is in
+cannot be taken back once it is sent; it lapses at its time, and a decline stops the hive's desk
+without undoing approvals two keepers have already sent. A host that is forwarded a channel cannot see who is in
 it, so it keeps strangers' events apart from the hive's own instead of refusing them. The buyer
 signs for the usage a provider reports only as far as the request itself could have gone, and
 within that it still takes the provider's count. The services run from a git checkout, and on a
 host every hive's agent node runs as the same user as the service. Mainnet sits behind an explicit
-opt-in, with the Operator and Emulator pinned in the code and hard ceilings on escrows, chip-ins and
-treasury size. [SECURITY.md](SECURITY.md) says what each part is trusted with.
+opt-in, with the Operator and Emulator pinned in the code and hard ceilings: on an escrow, which the desk and
+every keeper's plugin apply, and on chip-ins and the treasury's size where a hive takes them through
+its own page. [SECURITY.md](SECURITY.md) says what each part is trusted with.
 
 ## The Buzz plugin
 
@@ -163,33 +169,45 @@ holds anything.
 
 The treasury is a covenant on Arkade that checks the keepers' approvals itself
 ([`contracts/v5`](contracts/v5/README.md)). A keeper approves a payment by sending a message in the
-hive's channel, `I approve Hive payment <code>`, whose code names the treasury, the payment's
-number, its amount, its recipient and the time the approval lapses. Buzz signs that message as it
-signs any other. The covenant rebuilds it from the keeper's key, the code and the two parts Buzz
-chooses itself, its time and its tags, and verifies the keeper's signature over it, so a payment
+hive's channel, `I approve Hive payment of <amount> sats to <recipient> <code>`: the amount and the
+first eight characters of the recipient in words a keeper can read, and a code that names the
+treasury, the payment's number, its amount, its whole recipient and the time the approval lapses. Buzz signs that message as it
+signs any other. The covenant rebuilds it from the keeper's key, the payment's amount, recipient and code, and the
+two parts Buzz chooses itself, its time and its tags, and verifies the keeper's signature over it, so a payment
 spends the treasury only with two such messages, sent from any device at any time and in any order.
 No keeper waits on another, and nothing passes between them. The payment's number is the hive's
 counter, an asset the host issues once and sends whole to the treasury, of which each payment burns
 one unit. An approval therefore pays once, and a member's chip-in or an escrow's remainder, which the
 desk folds into the treasury coin, leaves every pending approval valid. So does the delegatee's
 renewal of the treasury into a new batch, which the treasury pays for itself, up to a cap, and which
-no one but the host's delegatee may cosign.
+no one but the host's delegatee may cosign. A merge keeps the treasury coin's own count: the
+covenant folds in no coin that holds units of the counter, so nothing sent to the treasury can set
+its payment number. What the covenant cannot do is count the units that exist, so that the host
+issued no more than it sent is a thing to check, not to assume: `pnpm ops counter` asks the
+Operator's indexer.
 
 Keepers never type a code. When the agent asks for a job to be funded, the hive's approvals desk on
-the host makes it a payment, and each keeper's Hive plugin shows it above the message box in the
-hive's channel, with Approve and Decline. Before it offers either, the plugin rebuilds the job's
-escrow from its terms with the hive's own code, bundled into the plugin, checks that the escrow pays
-back to this treasury and that the amount is the job's cap, and rebuilds the exact message the
-covenant will check; on mainnet it also holds the host to the Arkade Operator's and Emulator's keys
-it was built with. Approve writes that message into the message box for the keeper to send, and
-Decline writes the one that stops the payment. In the channel, each approval draws as a card naming
+the host makes it a payment. One payment is open at a time, under the treasury's current number, and
+the others wait their turn, jobs before withdrawals: an approval names its payment's number, so a
+payment approved under two numbers could pay under both, and the desk never asks for that. Each
+keeper's Hive plugin shows the open payment above the message box in the hive's channel, with
+Approve and Decline. Before it offers either, the plugin rebuilds the treasury from the keepers'
+keys and the terms the host states, with the hive's own code, bundled into the plugin, and checks
+that it is the address members chip in to. It rebuilds the job's escrow from its terms, checks that
+the escrow pays back to that treasury, that the amount is the job's cap and within what the
+channel's approved proposals have left, and that the agent whose receipts pay the job is the hive's,
+and it rebuilds the exact message the covenant will check; on mainnet it also holds the host to the
+Arkade Operator's and Emulator's keys it was built with, and the job to the ceiling on an escrow.
+Approve writes that message into the message box for the keeper to send. Decline writes the one
+that stops the desk from paying it, which does not undo approvals two keepers have already sent. In the channel, each approval draws as a card naming
 the payment it approves. Once two keepers have approved, the desk, which follows the channel as
 members' plugins forward it, submits the payment through the Emulator, and should its answer be
-lost, submitting again is safe: the covenant pays each approval once. A keeper asks for a withdrawal
+lost, submitting again is safe: the covenant pays each approval once, and the desk reads what became of a
+payment from the transaction that spent the treasury coin. A keeper asks for a withdrawal
 the same way, with the plugin's Withdraw form or a message `Hive withdrawal: <amount> sats to
-<Arkade address>`, and two keepers approve it like any payment. The whole of it runs on regtest with
-the plugin itself, from the keepers' Buzz keys to a funded escrow and a withdrawal
-(`test/buzz-approvals-e2e.ts`).
+<Arkade address>`, and two keepers approve it like any payment; each keeper has one request waiting at a time.
+`test/buzz-approvals-e2e.ts` runs the whole of it on regtest with the plugin itself, from the
+keepers' Buzz keys to a funded escrow and a withdrawal.
 
 ## How it fits together
 
@@ -300,8 +318,9 @@ the Hive service builds the v5 treasury, keeping none of them. Each payment
 then waits at the hive's approvals desk until two keepers have checked it in
 their plugin and approved it with a message in the channel, hours apart if they
 like. `pnpm ops init --keepers` builds the same treasury from three keepers'
-Buzz keys, npubs or hex; given three compressed keys instead, it builds the v4
-treasury of earlier hives, whose keepers sign with MuSig2 keys of their own. Without `--keepers`, `pnpm ops init` still
+Buzz keys, npubs or hex. Compressed keys, which once built a v4 treasury for keepers who signed in
+the keeper console, build nothing now that the console is gone: a hive built that way signs and
+withdraws with the console and desk of commit `ffb0839`. Without `--keepers`, `pnpm ops init` still
 makes all three keys in the operator's checkout, for the gates and for trying
 Hive alone.
 
@@ -338,6 +357,8 @@ under `.local/ops/<hive>/` and its keys under `.secrets/`, both ignored by git.
 | `pnpm ops buy <hive> <label>` | Gets the quote, arranges the refund and funds the escrow |
 | `pnpm ops serve <hive>` / `pnpm ops host <hive> …` | Serves one hive, or several under one directory, with the claim desk at `/api/claim` |
 | `pnpm ops desk <hive> --agent-log <log> --events <file> [--governance <file>] [--payments-file <file>]` | Runs a v5 hive's approvals desk, which follows the keepers' approvals in the channel's events |
+| `pnpm ops issuer --network <regtest\|bitcoin>` | Names the address of the host's issuer and what it holds: every new v5 treasury takes its counter and its 1,000-sat carrier from it |
+| `pnpm ops counter <hive>` or `--network <network> --asset <asset id>` | Asks the Operator's indexer for a counter's supply and whether anything can issue more |
 | `pnpm ops status <hive>` | Prints the hive's balance, jobs and warnings |
 | `pnpm ops halt [--hive <hive>] <reason>` / `pnpm ops resume …` | Stops or restarts new jobs and contributions, for one hive or all of them |
 
@@ -355,8 +376,9 @@ network needs.
 On mainnet the Operator's and the Emulator's keys are pinned in the code, and
 the delegate key is pinned by the server that runs the delegatee. Only a
 keepers' hive runs there: no keeper key for real funds is made or kept by the
-tools. Mainnet also keeps hard ceilings on escrows, contributions and
-treasury size.
+tools. Mainnet also keeps hard ceilings: 50,000 sats on an escrow, which the desk and
+every keeper's plugin apply, and on contributions and the treasury's size where a
+hive takes them through its own page.
 
 ## Repository
 

@@ -65,6 +65,17 @@ for v in HIVE_HOST DELEGATEE_EMULATOR_URL HIVE_BACKUP_RECIPIENT; do
   eval "[ -n \"\${$v:-}\" ]" || { echo "$v is empty in $ENV" >&2; exit 2; }
 done
 [ -f "${DELEGATEE_ADMIN_USERS_FILE:-/nonexistent}" ] || { echo "DELEGATEE_ADMIN_USERS_FILE names no file" >&2; exit 2; }
+# The service sends each v5 treasury's payments through the Emulator: the one the delegatee uses,
+# unless hive.env names another. Without it no hive's treasury could be built.
+if [ -z "${BUZZ_EMULATOR_URL:-}" ]; then
+  if grep -q '^BUZZ_EMULATOR_URL=' "$ENV"; then
+    sed -i "s|^BUZZ_EMULATOR_URL=.*|BUZZ_EMULATOR_URL=$DELEGATEE_EMULATOR_URL|" "$ENV"
+  else
+    printf 'BUZZ_EMULATOR_URL=%s\n' "$DELEGATEE_EMULATOR_URL" >> "$ENV"
+  fi
+  BUZZ_EMULATOR_URL=$DELEGATEE_EMULATOR_URL
+  export BUZZ_EMULATOR_URL
+fi
 
 echo "== packages"
 apt-get update -q
@@ -165,12 +176,25 @@ done
 sed -i "s/^BUZZ_DELEGATE_KEY=.*/BUZZ_DELEGATE_KEY=$KEY/" "$ENV"
 systemctl enable --now hive-service.service hive-backup.timer hive-check.timer
 systemctl restart hive-service.service caddy
-# A first backup now, with the delegate key in it, before any coin arrives.
+# The issuer: the service's own small wallet, which every new hive's counter and its 1,000-sat
+# carrier come from. The service makes its key on first use and says here where to fund it.
+ISSUER=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  ISSUER=$(curl -fsS -m 30 http://127.0.0.1:8080/statusz 2>/dev/null | sed -n 's/^issuer \([^ ]*\) \([0-9][0-9]*\)$/\1 (\2 sats now)/p')
+  [ -n "$ISSUER" ] && break
+  sleep 2
+done
+# A first backup now, with the delegate key and the issuer's key in it, before any coin arrives.
 systemctl start hive-backup.service
 
 echo
 echo "Service:  https://$HIVE_HOST/healthz"
 echo "Delegate key: $KEY"
+if [ -n "$ISSUER" ]; then
+  echo "Issuer:   send a few thousand sats to $ISSUER before the first hive"
+else
+  echo "Issuer:   cd $APP && sudo -u hive pnpm ops issuer --network ${HIVE_NETWORK:-bitcoin}   names the address to fund before the first hive"
+fi
 echo "Backups:  $BACKUPS, every six hours; copy them off this host"
 echo "Approve a hive once HiveBot asks for it, with HiveBot's key as its profile in the channel shows it:"
 echo "  cd $APP && sudo -u hive pnpm ops service-list --network ${HIVE_NETWORK:-bitcoin}"

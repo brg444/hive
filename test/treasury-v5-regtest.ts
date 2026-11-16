@@ -8,10 +8,12 @@
  *   3. Two keepers approve a payment, each with a channel message signed as Buzz signs one; anyone
  *      merges the chip-in; the approvals still pay.
  *   4. The same approvals pay nothing twice; one keeper alone, a message that says more than the
- *      approval, one carrying it in a tag, another recipient, or an approval past its lapse time
- *      pays nothing.
- *   5. A stranger cannot renew the treasury; the delegatee can, and the treasury pays its fee.
- *   6. A payment approved before the renewal pays after it.
+ *      approval, one carrying it in a tag, the code without the words a keeper reads, words naming
+ *      another amount, another recipient, or an approval past its lapse time pays nothing.
+ *   5. A coin that holds units of the counter merges into the treasury in neither position: nothing
+ *      sets the treasury's payment number but its own payments.
+ *   6. A stranger cannot renew the treasury; the delegatee can, and the treasury pays its fee.
+ *   7. A payment approved before the renewal pays after it.
  *
  * Needs the regtest stack (arkd on 7070, the Emulator on 7073):
  *
@@ -34,6 +36,7 @@ import {
   approvalText,
   type BuzzEvent,
   buzzApproval,
+  codeOf,
   counterOf,
   type Payment,
   payMessage,
@@ -72,7 +75,9 @@ const delegate = secp256k1.utils.randomSecretKey();
 const host = await newWallet(ARKD, EMULATOR);
 sendOffchain(await host.getAddress(), 20_000);
 await waitFor("the host's funds", async () => (await host.getBalance()).available >= 20_000);
-const { assetId } = await host.assetManager.issue({ amount: SUPPLY } as never);
+// The host issues a few units more than it sends, to show that a coin holding them cannot be merged in.
+const SPARE = 7n;
+const { assetId } = await host.assetManager.issue({ amount: SUPPLY + SPARE } as never);
 const counter = counterOf(assetId);
 step("counter issued by the host", { assetId });
 
@@ -111,8 +116,7 @@ step("funded", { treasury: coin.value, units: String(units(coin)), chipIn: chipI
 const member = await newWallet(ARKD, EMULATOR);
 const to = recipientOf(await member.getAddress());
 const one: Payment = { left: SUPPLY, amount: 20_000n, validUntil: now() + 3600, program: to.program };
-const oneMessage = payMessage(counter, one);
-const oneApprovals: (CovenantApproval | null)[] = [maya.approve(oneMessage), null, priya.approve(oneMessage)];
+const oneApprovals: (CovenantApproval | null)[] = [maya.approve(one), null, priya.approve(one)];
 await mergeIntoTreasury(treasury, coin, chipIn, assetId);
 coin = await waitFor("the merged coin", async () =>
   (await coins()).find((c) => c.value === 61_000 && units(c) === SUPPLY),
@@ -136,26 +140,56 @@ step("paid, with approvals made before the merge", { value: coin.value, units: S
 await assert.rejects(pay(coin, one, oneApprovals));
 step("the same approvals again: refused");
 const two: Payment = { left: SUPPLY - 1n, amount: 5_000n, validUntil: now() + 3600, program: to.program };
-const twoMessage = payMessage(counter, two);
-const twoApprovals: (CovenantApproval | null)[] = [maya.approve(twoMessage), jonas.approve(twoMessage), null];
+const twoApprovals: (CovenantApproval | null)[] = [maya.approve(two), jonas.approve(two), null];
 await assert.rejects(pay(coin, two, [twoApprovals[0]!, null, null]));
 step("one keeper alone: refused");
-const saysMore = jonas.event(`${approvalText(twoMessage)} 👍`);
+const saysMore = jonas.event(`${approvalText(counter, two)} 👍`);
 await assert.rejects(pay(coin, two, [twoApprovals[0]!, jonas.parts(saysMore), null]));
 step("a message that says more than the approval: refused");
-const smuggled = jonas.event("hello", [["t", `","${approvalText(twoMessage)}"]`]]);
+const smuggled = jonas.event("hello", [["t", `","${approvalText(counter, two)}"]`]]);
 await assert.rejects(pay(coin, two, [twoApprovals[0]!, jonas.parts(smuggled), null]));
 step("a message carrying the approval in a tag: refused");
+const bare = jonas.event(`I approve Hive payment ${codeOf(payMessage(counter, two))}`);
+await assert.rejects(pay(coin, two, [twoApprovals[0]!, jonas.parts(bare), null]));
+step("the code without the words a keeper reads: refused");
+const otherWords = jonas.event(approvalText(counter, two).replace("of 5000 sats", "of 50 sats"));
+await assert.rejects(pay(coin, two, [twoApprovals[0]!, jonas.parts(otherWords), null]));
+step("words naming another amount than the code's: refused");
 
 const elsewhere = recipientOf(await (await newWallet(ARKD, EMULATOR)).getAddress()).program;
 await assert.rejects(pay(coin, { ...two, program: elsewhere }, twoApprovals));
 step("another recipient: refused");
 const lapsed: Payment = { ...two, validUntil: now() - 60 };
-const lapsedMessage = payMessage(counter, lapsed);
-await assert.rejects(pay(coin, lapsed, [maya.approve(lapsedMessage), jonas.approve(lapsedMessage), null]));
+await assert.rejects(pay(coin, lapsed, [maya.approve(lapsed), jonas.approve(lapsed), null]));
 step("an approval past its lapse time: refused");
 
-// 5. Only the delegatee renews; the treasury pays the operator's fee.
+// 5. A coin holding units of the counter, sent to the treasury's script, merges in neither position.
+await host.send({
+  recipients: [{ address: treasury.address, amount: 1_000, assets: [{ assetId, amount: SPARE }] }],
+} as never);
+const stray = await waitFor("the coin with spare units", async () =>
+  (await coins()).find((c) => units(c) === SPARE),
+);
+// biome-ignore lint/suspicious/noExplicitAny: the SDK types each function's arguments from the artifact at runtime
+const functions = treasury.functions as any;
+const merge = (inputs: [TreasuryCoin, TreasuryCoin], kept: bigint) =>
+  functions
+    .merge()
+    .from(inputs)
+    .to(treasury.pkScript, BigInt(inputs[0].value + inputs[1].value))
+    .withAsset({
+      assetId,
+      inputs: inputs.map((c, vin) => ({ vin, amount: units(c) })),
+      outputs: [{ vout: 0, amount: kept }],
+    })
+    .send();
+await assert.rejects(merge([stray, coin], SPARE));
+step("a coin with units in front of the treasury coin, to set its number: refused");
+await assert.rejects(merge([coin, stray], units(coin)));
+step("the same coin folded in behind the treasury coin: refused");
+assert.equal(units((await coins()).find((c) => c.txid === coin.txid)!), SUPPLY - 1n);
+
+// 6. Only the delegatee renews; the treasury pays the operator's fee.
 await assert.rejects(
   renewAsDelegatee(client, treasury, coin, { delegate: secp256k1.utils.randomSecretKey(), maxFee: MAX_FEE }),
 );
@@ -170,7 +204,7 @@ coin = await waitFor(
 assert.equal(coin.value, before.value - renewed.fee);
 step("renewed by the delegatee", { fee: renewed.fee, value: coin.value });
 
-// 6. The payment approved before the renewal pays after it.
+// 7. The payment approved before the renewal pays after it.
 await pay(coin, two, twoApprovals);
 coin = await waitFor("the second change", async () => (await coins()).find((c) => units(c) === SUPPLY - 2n));
 assert.equal(coin.value, before.value - renewed.fee - 5_000);
@@ -207,7 +241,7 @@ function buzzKeeper() {
       time: utf8(String(e.created_at)),
       tags: utf8(JSON.stringify(e.tags)),
     }),
-    approve: (message: Uint8Array): CovenantApproval =>
-      buzzApproval(key, message, event(approvalText(message))),
+    approve: (payment: Payment): CovenantApproval =>
+      buzzApproval(key, counter, payment, event(approvalText(counter, payment))),
   };
 }
