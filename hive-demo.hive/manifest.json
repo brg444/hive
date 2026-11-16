@@ -1,0 +1,20 @@
+{
+  "id": "hive-demo.hive",
+  "name": "Hive demo",
+  "apiVersion": 1,
+  "description": "Hive demo inside its community: proposals as cards, a Propose button, your allowances, the treasury, chip-ins, jobs and what waits for keepers.",
+  "discovery": {
+    "category": "people-and-communities",
+    "tags": [
+      "Bitcoin",
+      "Arkade",
+      "Hive",
+      "AI"
+    ]
+  },
+  "host": {
+    "networkOrigins": [
+      "https://brg444.github.io"
+    ]
+  }
+}
